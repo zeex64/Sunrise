@@ -3,6 +3,7 @@
 #include "../../content/content_catalog.h"
 #include "../abilities/ability_bucket_catalog.h"
 #include "../constants/investment_constant_catalog.h"
+#include "../custom_ornaments/custom_ornament_catalog.h"
 #include "../hash_names/hash_name_catalog.h"
 #include "../inventory/buckets/inventory_bucket_catalog.h"
 #include "../items/details/item_detail_catalog.h"
@@ -267,6 +268,7 @@ void clear_catalogs() noexcept {
     content::clear();
     named::clear();
     items::clear();
+    custom_ornaments::clear();
     items::details::clear();
     details::clear();
     inventory::buckets::clear();

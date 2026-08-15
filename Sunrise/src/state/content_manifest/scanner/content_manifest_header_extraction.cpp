@@ -52,6 +52,7 @@ bool extract(std::wstring_view directory,
              std::span<Candidate> candidates,
              std::span<Row> rows,
              std::size_t& count,
+             const Fingerprint& directoryFingerprint,
              Fingerprint& buildFingerprint,
              Guid& guidValue) noexcept {
     count = 0;
@@ -92,7 +93,8 @@ bool extract(std::wstring_view directory,
         return std::string_view(first.name.data(), first.nameLength)
                < std::string_view(second.name.data(), second.nameLength);
     });
-    if (!valid(std::span<const Row>(occupied)) || !fingerprint::rows(occupied, buildFingerprint)) {
+    if (!valid(std::span<const Row>(occupied))
+        || !fingerprint::manifest(occupied, directoryFingerprint, buildFingerprint)) {
         count = 0;
         return false;
     }

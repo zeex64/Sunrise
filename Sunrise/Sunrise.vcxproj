@@ -153,6 +153,8 @@
     <ClCompile Include="src\client\runtime\client_platform_hook_activation.cpp" />
     <ClCompile Include="src\client\runtime\host\game_host_classification.cpp" />
     <ClCompile Include="src\client\runtime\client_runtime_lifecycle.cpp" />
+    <ClCompile Include="src\client\hooks\packages\package_signature_bypass_lifecycle.cpp" />
+    <ClCompile Include="src\client\hooks\investment\investment_definition_overlay_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\graphics\discovery\graphics_target_discovery.cpp" />
     <ClCompile Include="src\client\hooks\graphics\graphics_hook_lifecycle.cpp" />
     <ClCompile Include="src\client\hooks\graphics\graphics_hook_replacements.cpp" />
@@ -403,6 +405,7 @@
     <ClCompile Include="src\state\build_data\cache\write\validation\cache_file_comparison.cpp" />
     <ClCompile Include="src\state\build_data\cache\write\cache_payload_writer.cpp" />
     <ClCompile Include="src\state\build_data\items\item_catalog.cpp" />
+    <ClCompile Include="src\state\build_data\custom_ornaments\custom_ornament_catalog.cpp" />
     <ClCompile Include="src\state\build_data\items\item_build_data_runtime.cpp" />
     <ClCompile Include="src\state\build_data\items\details\item_detail_catalog.cpp" />
     <ClCompile Include="src\state\build_data\constants\investment_constant_catalog.cpp" />
@@ -539,6 +542,7 @@
     <ClCompile Include="src\middleware\datagen\family4\instance\instance_encoder.cpp" />
     <ClCompile Include="src\middleware\datagen\roster\queuez_roster.cpp" />
     <ClCompile Include="src\middleware\content\packages\named_tags\named_tag_parser.cpp" />
+    <ClCompile Include="src\middleware\content\custom_ornaments\format.cpp" />
     <ClCompile Include="src\middleware\content\packages\named_tags\named_tag_file.cpp" />
     <ClCompile Include="src\middleware\content\packages\named_tags\named_tag_patch.cpp" />
     <ClCompile Include="src\middleware\content\packages\package_catalog.cpp" />
@@ -559,6 +563,7 @@
     <ClCompile Include="src\middleware\content\packages\tables\item_appearance_reader.cpp" />
     <ClCompile Include="src\middleware\content\packages\tables\ability_pool_reader.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_item_build.cpp" />
+    <ClCompile Include="src\client\content\items\packages\package_custom_ornament_build.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_detail_build.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_ability_build.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_subclass_build.cpp" />
@@ -602,7 +607,9 @@
     <ClCompile Include="src\client\content\items\packages\package_build_report.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_root_tables.cpp" />
     <ClCompile Include="src\client\content\items\packages\package_item_rows.cpp" />
+    <ClCompile Include="src\client\content\items\packages\package_ornament_extract.cpp" />
     <ClCompile Include="src\client\diagnostics\module_range.cpp" />
+    <ClCompile Include="src\client\diagnostics\investment_lookup_probe.cpp" />
     <ClCompile Include="src\client\process\freeze\client_process_freeze.cpp" />
   </ItemGroup>
   <ItemGroup Condition="'$(SunriseRunClangTidy)'=='true'">
@@ -716,6 +723,8 @@
     <ClInclude Include="src\client\hooks\network\coordinator\network_call_coordinator.h" />
     <ClInclude Include="src\client\hooks\network\content_config\coordinator\content_config_call_coordinator.h" />
     <ClInclude Include="src\client\hooks\network\content_config\gate\content_config_signature_gate.h" />
+    <ClInclude Include="src\client\hooks\packages\package_signature_bypass_lifecycle.h" />
+    <ClInclude Include="src\client\hooks\investment\investment_definition_overlay_lifecycle.h" />
     <ClInclude Include="src\client\hooks\network\content_config\internal.h" />
     <ClInclude Include="src\client\hooks\network\content_config\lifecycle\content_config_hook_storage.h" />
     <ClInclude Include="src\client\hooks\network\content_config\protocol.h" />
@@ -1008,6 +1017,7 @@
     <ClInclude Include="src\client\targets\game\packages\game_package_targets.h" />
     <ClInclude Include="src\client\targets\game\packages.h" />
     <ClInclude Include="src\middleware\content\packages\reader\internal.h" />
+    <ClInclude Include="src\middleware\content\custom_ornaments\format.h" />
     <ClInclude Include="src\middleware\content\packages\reader\layout.h" />
     <ClInclude Include="src\middleware\content\packages\reader\reader.h" />
     <ClInclude Include="src\middleware\content\packages\reader\parallel.h" />
@@ -1033,6 +1043,8 @@
     <ClInclude Include="src\middleware\signon\internal.h" />
     <ClInclude Include="src\middleware\signon\ownership\signon_ownership_encoder.h" />
     <ClInclude Include="src\state\build_data\abilities\ability_bucket_catalog.h" />
+    <ClInclude Include="src\state\build_data\custom_ornaments\custom_ornament_catalog.h" />
+    <ClInclude Include="src\state\build_data\custom_ornaments\definition.h" />
     <ClInclude Include="src\state\build_data\abilities\definition.h" />
     <ClInclude Include="src\state\build_data\constants\investment_constant_catalog.h" />
     <ClInclude Include="src\state\build_data\constants\definition.h" />

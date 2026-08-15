@@ -27,6 +27,26 @@ void report_detail_failure(std::size_t slot, std::uint16_t definitionIndex) noex
     }
 }
 
+/** Reports the dense native item-table shape before custom definitions are merged. */
+void report_item_row_shape(std::uint64_t expected,
+                           std::size_t published,
+                           std::size_t unresolved) noexcept {
+    std::array<char, 128> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=build_data stage=item_rows expected=%llu rows=%zu unresolved=%zu result=%s",
+                                      static_cast<unsigned long long>(expected),
+                                      published,
+                                      unresolved,
+                                      published == expected ? "ok" : "fail");
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         published == expected ? core::log::Level::info
+                                               : core::log::Level::warn,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 /** @param count Ability bucket rows the pass built, one per subclass and ability selection. */
 void report_ability_count(std::size_t count) noexcept {
     std::array<char, 96> line{};

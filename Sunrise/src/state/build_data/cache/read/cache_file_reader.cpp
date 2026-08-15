@@ -1,9 +1,11 @@
 #include <Windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 
 #include "../internal.h"
+#include "../../../content_manifest/content_manifest_state_runtime.h"
 #include "cache_payload_reader.h"
 
 namespace sunrise::state::build_data::cache {
@@ -92,6 +94,17 @@ bool current_build_identity(std::uint64_t configuredEquipmentHash,
     identity.imageTimestamp = nt.FileHeader.TimeDateStamp;
     identity.imageSize = nt.OptionalHeader.SizeOfImage;
     identity.configuredEquipmentHash = configuredEquipmentHash;
+    const auto copy_fingerprint = [](void* context,
+                                     const content_manifest::View& view) noexcept {
+        auto* output = static_cast<BuildIdentity*>(context);
+        std::copy(view.buildFingerprint.begin(),
+                  view.buildFingerprint.end(),
+                  output->contentFingerprint.begin());
+        return true;
+    };
+    // Non-game hosts have no content manifest and retain the all-zero identity. In the game,
+    // Core publishes the manifest before State initializes this cache.
+    (void)content_manifest::visit_snapshot(copy_fingerprint, &identity);
     return true;
 }
 
@@ -142,6 +155,7 @@ LoadStatus load(const wchar_t* path,
         header.imageTimestamp,
         header.imageSize,
         header.configuredEquipmentHash,
+        header.contentFingerprint,
     };
     if (!(cachedBuild == expectedBuild)) {
         return close_with(file, LoadStatus::stale);

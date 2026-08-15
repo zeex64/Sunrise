@@ -9,6 +9,7 @@
 #include "../../../../middleware/content/packages/tables/items.h"
 #include "../../../../state/account/account_state.h"
 #include "../../../../state/build_data/abilities/definition.h"
+#include "../../../../state/build_data/custom_ornaments/custom_ornament_catalog.h"
 #include "../../../../state/build_data/inventory/buckets/definition.h"
 #include "../../../../state/build_data/items/details/definition.h"
 #include "../../../../state/build_data/progressions/definition.h"
@@ -37,7 +38,8 @@ namespace {
            && state::build_data::progression_definitions_ready()
            && state::build_data::scenario_layouts_ready() && state::build_data::spawn_sets_ready()
            && state::build_data::hash_names_ready()
-           && state::build_data::investment_constants_ready();
+           && state::build_data::investment_constants_ready()
+           && state::build_data::custom_ornaments::ready();
 }
 
 /** @return True when every item and investment-root domain is published. */
@@ -48,7 +50,8 @@ namespace {
            && state::build_data::socket_entry_lists_ready()
            && state::build_data::ability_buckets_ready()
            && state::build_data::progression_definitions_ready()
-           && state::build_data::investment_constants_ready();
+           && state::build_data::investment_constants_ready()
+           && state::build_data::custom_ornaments::ready();
 }
 
 } // namespace

@@ -43,8 +43,10 @@ constexpr std::array<std::pair<std::uint8_t, std::int8_t>, 16> kEquipmentSlotOfB
     return std::nullopt;
 }
 
+} // namespace
+
 /** @param row Package row. @return Its cached detail form. */
-[[nodiscard]] domain::Definition to_detail(const tables::items::Row& row) noexcept {
+domain::Definition detail_of(const tables::items::Row& row) noexcept {
     domain::Definition detail{};
     detail.definitionIndex = row.definitionIndex;
     detail.definitionHash = row.definitionHash;
@@ -88,6 +90,8 @@ constexpr std::array<std::pair<std::uint8_t, std::int8_t>, 16> kEquipmentSlotOfB
     detail.renderOverrideCount = static_cast<std::uint8_t>(overrides);
     return detail;
 }
+
+namespace {
 
 /** The constants blob's own 8-byte prefix comes before every offset the client quotes. */
 constexpr std::size_t kConstantsPrefix = 8;
@@ -183,7 +187,7 @@ bool build_detail(const DetailSource& source,
         return false;
     }
     item.definitionHash = indexRow.definitionHash;
-    detail = to_detail(item);
+    detail = detail_of(item);
     return true;
 }
 

@@ -1,4 +1,5 @@
 #include "../../../../state/build_data/runtime.h"
+#include "../../../../state/build_data/custom_ornaments/custom_ornament_catalog.h"
 #include "internal.h"
 
 namespace sunrise::middleware::datagen::character_record::appearance {
@@ -96,6 +97,38 @@ void apply_material_pairs(const details::Definition& detail,
     }
 }
 
+/**
+ * Appends every plug art arrangement the client should layer over the equipped base item.
+ * Native plugs use their extracted definition data directly. Package-authored ornaments add the
+ * descriptor's target, lane and socket-type checks so unrelated equipment cannot consume them.
+ */
+void apply_art_overlays(const details::Definition& base,
+                        const Equipped& equipped,
+                        layout::RenderEntry& entry) noexcept {
+    std::size_t overlayCount = 0;
+    for (std::size_t lane = 0;
+         lane < equipped.laneCount && overlayCount < entry.overlays.size();
+         ++lane) {
+        const std::uint16_t plugIndex = equipped.plugs[lane];
+        details::Definition plug{};
+        if (plugIndex == details::kUnavailableItemIndex
+            || !state::build_data::find_configured_item_detail(plugIndex, plug)
+            || plug.artArrangementIndex == details::kUnavailableArtIndex) {
+            continue;
+        }
+
+        state::build_data::custom_ornaments::Definition ornament{};
+        if (state::build_data::custom_ornaments::find_index(plugIndex, ornament)) {
+            if (ornament.targetItemHash != base.definitionHash || ornament.socketLane != lane
+                || lane >= base.socketTypes.size()
+                || base.socketTypes[lane] != ornament.socketType) {
+                continue;
+            }
+        }
+        entry.overlays[overlayCount++] = plug.artArrangementIndex;
+    }
+}
+
 } // namespace
 
 /** Resolves one equipped instance to its detail and the plugs its sockets hold. */
@@ -142,6 +175,7 @@ bool apply_render(const family4::loadout::ResolvedInstances& instances,
         // rather than taking art row 0.
         entry.art[layout::kGearArtSlot] = detail.gearArtIndex;
         entry.art[layout::kArtArrangementSlot] = detail.artArrangementIndex;
+        apply_art_overlays(detail, equipped, entry);
         apply_material_pairs(detail, equipped, entry);
     }
     return true;

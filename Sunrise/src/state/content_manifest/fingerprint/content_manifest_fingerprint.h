@@ -65,6 +65,15 @@ private:
 [[nodiscard]] bool rows(std::span<const Row> rows, Fingerprint& output) noexcept;
 
 /**
+ * Builds the served manifest identity from its public rows and current package inventory.
+ * The directory identity changes when an installed package is replaced even if its public
+ * package id and build-signature fields stay unchanged.
+ */
+[[nodiscard]] bool manifest(std::span<const Row> rows,
+                            const Fingerprint& directoryFingerprint,
+                            Fingerprint& output) noexcept;
+
+/**
  * Formats an application-defined UUID from a public row fingerprint.
  * @param buildFingerprint SHA-256 identity for the complete row set.
  * @param output Cleared lowercase canonical UUID text.

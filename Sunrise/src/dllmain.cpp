@@ -1,6 +1,9 @@
 #include <Windows.h>
 
+#include <fstream>
 #include <intrin.h>
+#include <mutex>
+#include <string>
 
 #include "client/hooks/egress/runtime.h"
 #include "core/runtime/core_runtime.h"
@@ -11,6 +14,20 @@ namespace {
 
 HMODULE g_module{};
 
+}
+
+void LogSunrise(const std::string& message) {
+    static std::mutex mutex;
+    const std::lock_guard lock(mutex);
+    std::ofstream output("sunrise_debug.txt", std::ios::app);
+    output << "[Sunrise] " << message << "\n";
+}
+
+void InitializeWineDisplay() {
+    const HDC display = GetDC(nullptr);
+    if (display != nullptr) {
+        ReleaseDC(nullptr, display);
+    }
 }
 
 /** @return True when the egress guard and Core initialize from this DLL module. */
@@ -36,7 +53,11 @@ extern "C" __declspec(dllexport) bool SunriseShutdown() noexcept {
 
 /** @return True when the Steam-compatible runtime initializes. */
 extern "C" __declspec(dllexport) bool SteamAPI_Init() noexcept {
-    return sunrise::steam::initialize(g_module);
+    InitializeWineDisplay();
+    LogSunrise("-> SteamAPI_Init called");
+    const bool result = sunrise::steam::initialize(g_module);
+    LogSunrise(std::string("<- SteamAPI_Init returned: ") + (result ? "TRUE" : "FALSE"));
+    return result;
 }
 
 /** Stops the Steam-compatible runtime. */
@@ -54,6 +75,8 @@ extern "C" __declspec(dllexport) void SteamAPI_RunCallbacks() noexcept {
  * @return False because the in-process shim never asks for a restart.
  */
 extern "C" __declspec(dllexport) bool SteamAPI_RestartAppIfNecessary(DWORD appId) noexcept {
+    LogSunrise("-> SteamAPI_RestartAppIfNecessary called with AppID: " +
+               std::to_string(appId));
     sunrise::steam::set_app_id(appId);
     return false;
 }
@@ -110,12 +133,22 @@ SteamAPI_UnregisterCallResult(void* callback, sunrise::steam::ApiCall call) noex
 
 /** @param data Steam-owned context table. @return Address of the interface field, after init. */
 extern "C" __declspec(dllexport) void* SteamInternal_ContextInit(void* data) noexcept {
-    return sunrise::steam::context_init(data);
+    LogSunrise("-> SteamInternal_ContextInit called");
+    void* const result = sunrise::steam::context_init(data);
+    LogSunrise(std::string("<- SteamInternal_ContextInit returned: ") +
+               (result != nullptr ? "VALID POINTER" : "NULL"));
+    return result;
 }
 
 /** @param version Interface version. @return Supported client interface or null. */
 extern "C" __declspec(dllexport) void* SteamInternal_CreateInterface(const char* version) noexcept {
-    return sunrise::steam::create_interface(version, _ReturnAddress());
+    const std::string versionString = version != nullptr ? version : "NULL";
+    LogSunrise("-> SteamInternal_CreateInterface requested: " + versionString);
+    void* const result = sunrise::steam::create_interface(version, _ReturnAddress());
+    LogSunrise(std::string("<- SteamInternal_CreateInterface ") +
+               (result != nullptr ? "SUCCEEDED for: " : "FAILED (returned nullptr) for: ") +
+               versionString);
+    return result;
 }
 
 /**
@@ -127,7 +160,13 @@ extern "C" __declspec(dllexport) void* SteamInternal_CreateInterface(const char*
 extern "C" __declspec(dllexport) void*
 SteamInternal_FindOrCreateUserInterface(sunrise::steam::UserHandle user,
                                         const char* version) noexcept {
-    return sunrise::steam::find_or_create_user_interface(user, version);
+    const std::string versionString = version != nullptr ? version : "NULL";
+    LogSunrise("-> SteamInternal_FindOrCreateUserInterface requested: " + versionString);
+    void* const result = sunrise::steam::find_or_create_user_interface(user, version);
+    LogSunrise(std::string("<- SteamInternal_FindOrCreateUserInterface ") +
+               (result != nullptr ? "SUCCEEDED for: " : "FAILED (returned nullptr) for: ") +
+               versionString);
+    return result;
 }
 
 /**

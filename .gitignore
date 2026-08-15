@@ -2,9 +2,17 @@
 /.vs/
 /.idea/
 /.vscode/
+/.xwin-cache/
 *.user
 *.suo
 *.userosscache
 *.sln.docstates
 *.aps
 *.log
+/Documentation
+/.direnv/
+/build-release
+/.zed
+/ghidra-projects
+/tools/Scylla
+/tools/GhidraMCP

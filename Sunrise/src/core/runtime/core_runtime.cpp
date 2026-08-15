@@ -103,12 +103,12 @@ bool initialize(void* module) noexcept {
         stage = "ui_logs";
     } else if (!state::entitlements::publish(settings::get().server.entitlements)) {
         stage = "entitlements";
+    } else if (!initialize_content_manifest(module)) {
+        stage = "content_manifest";
     } else if (!state::initialize(module,
                                   settings::get().initialAccount,
                                   settings::get().initialActivityDefaults)) {
         stage = "state";
-    } else if (!initialize_content_manifest(module)) {
-        stage = "content_manifest";
     } else if (!middleware::initialize()) {
         stage = "middleware";
     } else if (!server::initialize()) {
@@ -122,8 +122,8 @@ bool initialize(void* module) noexcept {
         (void)client::shutdown();
         server::shutdown();
         middleware::shutdown();
-        state::content_manifest::shutdown();
         state::shutdown();
+        state::content_manifest::shutdown();
         state::entitlements::clear();
         ui::modules::logs::shutdown();
         ui::modules::registry::shutdown();
@@ -155,8 +155,8 @@ bool shutdown() noexcept {
     g_initialized.store(false, std::memory_order_release);
     server::shutdown();
     middleware::shutdown();
-    state::content_manifest::shutdown();
     state::shutdown();
+    state::content_manifest::shutdown();
     state::entitlements::clear();
     ui::modules::logs::shutdown();
     ui::modules::registry::shutdown();

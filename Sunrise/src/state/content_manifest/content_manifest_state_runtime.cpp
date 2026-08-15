@@ -125,6 +125,7 @@ bool initialize(void* module, std::wstring_view packagesDirectory) noexcept {
                                     std::span(g_candidates).first(candidateCount),
                                     g_stagedRows,
                                     rowCount,
+                                    directoryFingerprint,
                                     buildFingerprint,
                                     guid);
         if (complete && module != nullptr) {

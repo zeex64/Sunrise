@@ -10,6 +10,7 @@
 #include "../../core/ui/notice/ui_notice_overlay.h"
 #include "../content/bootstrap/bootstrap_token_publish.h"
 #include "../content/investment/worker.h"
+#include "../diagnostics/investment_lookup_probe.h"
 #include "../executable/image.h"
 #include "../hooks/assert_handler/assert_handler_lifecycle.h"
 #include "../hooks/banner/banner_hook_lifecycle.h"
@@ -19,6 +20,7 @@
 #include "../hooks/cursor/runtime.h"
 #include "../hooks/graphics/graphics_hook_lifecycle.h"
 #include "../hooks/network/runtime.h"
+#include "../hooks/packages/package_signature_bypass_lifecycle.h"
 #include "../hooks/polled_input/runtime.h"
 #include "../hooks/queuez/queuez_hook_lifecycle.h"
 #include "../hooks/retail_log/retail_log_lifecycle.h"
@@ -54,6 +56,7 @@ struct GameImageRanges {
     if (!executable::inspect_main_module(output.executable)) {
         return false;
     }
+    diagnostics::capture_investment_lookup_candidates(output.executable);
     for (std::size_t index = 0; index < output.executable.count; ++index) {
         output.ranges[index] = patterns::ImageRange{output.executable.sections[index]};
     }
@@ -123,6 +126,10 @@ void clear_game_targets() noexcept {
     const std::span<patterns::ImageRange> imageRanges = ranges(gameImage);
     if (!targets::game::resolution::resolve(imageRanges)) {
         report_resolve_failure();
+        return false;
+    }
+    if (!hooks::packages::install()) {
+        clear_game_targets();
         return false;
     }
     // The SignOn config blob carries this token. It must reach State before any hook owns the

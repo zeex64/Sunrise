@@ -12,6 +12,7 @@
 #include "../../../../middleware/content/packages/tables/items.h"
 #include "../../../../state/build_data/abilities/definition.h"
 #include "../../../../state/build_data/constants/definition.h"
+#include "../../../../state/build_data/custom_ornaments/definition.h"
 #include "../../../../state/build_data/items/details/definition.h"
 #include "../../../../state/build_data/items/item_catalog.h"
 #include "../../../../state/build_data/progressions/definition.h"
@@ -29,6 +30,14 @@ inline constexpr std::size_t kDetailCapacity =
 struct AuthoredHashes {
     std::array<std::uint32_t, kDetailCapacity> values{};
     std::size_t count{};
+};
+
+/** Optional module-relative request for exporting one native ornament's package graph. */
+struct OrnamentExtractionRequest {
+    core::path::Buffer outputDirectory{};
+    std::array<std::uint32_t, 16> definitionHashes{};
+    std::size_t definitionHashCount{};
+    bool enabled{};
 };
 
 /** Everything the detail pass needs to read one requested definition from the packages. */
@@ -64,7 +73,62 @@ struct Storage {
         progressionRows{};
     std::array<state::build_data::items::Definition, state::build_data::items::kDefinitionCapacity>
         rows{};
+    std::array<tables::items::Row,
+               state::build_data::custom_ornaments::kDefinitionCapacity>
+        customItemRows{};
+    std::array<state::build_data::custom_ornaments::Definition,
+               state::build_data::custom_ornaments::kDefinitionCapacity>
+        customOrnaments{};
+    std::array<state::build_data::custom_ornaments::NativeDefinition,
+               state::build_data::custom_ornaments::kDefinitionCapacity * 2>
+        nativeDefinitions{};
+    std::size_t nativeDefinitionCount{};
+    std::vector<std::byte> nativeItemIndexTable{};
 };
+
+/** Converts one already parsed item row to the cached detail representation. */
+[[nodiscard]] state::build_data::items::details::Definition
+detail_of(const tables::items::Row& row) noexcept;
+
+/**
+ * Discovers and validates every package-authored ornament descriptor.
+ * New definitions are appended only while the native item catalog is being rebuilt.
+ */
+[[nodiscard]] bool build_custom_ornaments(const reader::Source& source,
+                                          Storage& storage,
+                                          bool appendDefinitions,
+                                          std::size_t& rowCount,
+                                          std::size_t& ornamentCount) noexcept;
+
+/** Loads `Sunrise/ornament_extract_request.txt` when one native hash was requested. */
+[[nodiscard]] bool load_ornament_extraction_request(OrnamentExtractionRequest& request) noexcept;
+
+/** @return True when the optional request names this item hash. */
+[[nodiscard]] bool ornament_extraction_requested(const OrnamentExtractionRequest& request,
+                                                 std::uint32_t definitionHash) noexcept;
+
+/**
+ * Exports one matched definition and the two investment table trees used to resolve its art.
+ * Extraction is diagnostic and never changes whether the item catalogue publishes.
+ */
+void extract_ornament_graph(const OrnamentExtractionRequest& request,
+                            const reader::Source& source,
+                            reader::Scratch& scratch,
+                            const tables::IndexRow& indexRow,
+                            const tables::items::Row& item,
+                            std::span<const std::byte> definition,
+                            std::span<const std::byte> globals,
+                            std::span<const std::byte> root,
+                            std::span<const std::byte> itemTable) noexcept;
+
+/** Resolves and exports every hash in one request directly from the native item index table. */
+void extract_requested_ornament_graphs(const OrnamentExtractionRequest& request,
+                                       const reader::Source& source,
+                                       reader::Scratch& scratch,
+                                       const tables::Array& itemArray,
+                                       std::span<const std::byte> globals,
+                                       std::span<const std::byte> root,
+                                       std::span<const std::byte> itemTable) noexcept;
 
 /**
  * Collects the authored equipment and plug hashes every configured character names.
@@ -213,6 +277,11 @@ investment_globals_tags(std::array<std::uint32_t, kContainerCandidates>& candida
 
 /** @param slot Requested-set position. @param definitionIndex Native item index that failed. */
 void report_detail_failure(std::size_t slot, std::uint16_t definitionIndex) noexcept;
+
+/** Reports whether the native index table was preserved densely. */
+void report_item_row_shape(std::uint64_t expected,
+                           std::size_t published,
+                           std::size_t unresolved) noexcept;
 
 /** @param count Ability bucket rows the pass built, one per subclass and ability selection. */
 void report_ability_count(std::size_t count) noexcept;

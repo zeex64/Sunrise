@@ -19,7 +19,6 @@ constexpr std::size_t kLineCapacity = 1152;
 constexpr std::uint32_t kReportLimit = 200;
 /** Used when the game's own format string cannot be printed. */
 constexpr char kUnformattable[] = "<unformattable>";
-
 std::atomic<std::uint32_t> g_reports{};
 
 /**

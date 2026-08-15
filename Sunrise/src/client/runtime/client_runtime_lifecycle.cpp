@@ -7,7 +7,9 @@
 #include "../hooks/config_getter/config_getter_lifecycle.h"
 #include "../hooks/cursor/runtime.h"
 #include "../hooks/graphics/graphics_hook_lifecycle.h"
+#include "../hooks/investment/investment_definition_overlay_lifecycle.h"
 #include "../hooks/network/runtime.h"
+#include "../hooks/packages/package_signature_bypass_lifecycle.h"
 #include "../hooks/polled_input/runtime.h"
 #include "../hooks/queuez/queuez_hook_lifecycle.h"
 #include "../hooks/retail_log/retail_log_lifecycle.h"
@@ -70,6 +72,8 @@ bool shutdown() noexcept {
         ReleaseSRWLockExclusive(&runtime::g_lock);
         return false;
     }
+    hooks::packages::uninstall();
+    hooks::investment::uninstall();
     content::investment::worker::reset();
     targets::steam::clear();
     if (runtime::g_platformModule != nullptr) {

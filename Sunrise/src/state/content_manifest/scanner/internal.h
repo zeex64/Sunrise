@@ -37,7 +37,8 @@ struct Candidate final {
  * @param candidates Mutable inventory scratch, reordered during grouping.
  * @param rows Fixed output storage for canonical manifest rows.
  * @param count Receives the emitted row count.
- * @param buildFingerprint Receives the SHA-256 fingerprint of the emitted public rows.
+ * @param directoryFingerprint Current recognized-file identity from inventory.
+ * @param buildFingerprint Receives the SHA-256 identity of the rows and package inventory.
  * @param guid Receives fixed UUID text built from the row fingerprint.
  * @return True when every file passes and each package id has one identity.
  */
@@ -45,6 +46,7 @@ struct Candidate final {
                            std::span<Candidate> candidates,
                            std::span<Row> rows,
                            std::size_t& count,
+                           const Fingerprint& directoryFingerprint,
                            Fingerprint& buildFingerprint,
                            Guid& guid) noexcept;
 

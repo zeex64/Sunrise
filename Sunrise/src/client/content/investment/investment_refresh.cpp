@@ -7,8 +7,10 @@
 #include "../../../core/logging/log.h"
 #include "../../../core/ui/busy/busy.h"
 #include "../../../middleware/content/packages/reader/reader.h"
+#include "../../../state/build_data/custom_ornaments/custom_ornament_catalog.h"
 #include "../../../state/build_data/runtime.h"
 #include "../../../state/runtime/runtime.h"
+#include "../../hooks/investment/investment_definition_overlay_lifecycle.h"
 #include "../../process/freeze/client_process_freeze.h"
 #include "../items/packages/build.h"
 #include "internal.h"
@@ -37,7 +39,8 @@ constexpr std::size_t kLineLimit = 96;
            && state::build_data::progression_definitions_ready()
            && state::build_data::scenario_layouts_ready() && state::build_data::spawn_sets_ready()
            && state::build_data::hash_names_ready()
-           && state::build_data::investment_constants_ready();
+           && state::build_data::investment_constants_ready()
+           && state::build_data::custom_ornaments::ready();
 }
 
 /**
@@ -77,7 +80,10 @@ bool refresh() noexcept {
         // The same lock as the extraction path. A cache write holds its own lock across file
         // calls, so a held thread stopped inside one would deadlock the freeze below.
         AcquireSRWLockExclusive(&g_refreshLock);
-        const bool persisted = state::build_data::persist();
+        // The catalog can become ready before bootflow constructs the native investment registry.
+        // A previous failed overlay attempt must keep this worker pending until that registry
+        // exists; otherwise this fast path would persist the cache and permanently stop retries.
+        const bool persisted = hooks::investment::install() && state::build_data::persist();
         // Nothing reads a package again until the next boot, so the open files and the held
         // tables go back now rather than at process exit.
         middleware::content::packages::reader::release_caches();
@@ -106,7 +112,8 @@ bool refresh() noexcept {
     }
     // The package pass owns the item table and must not wait on runtime content lookups.
     (void)items::packages::build();
-    const bool complete = ready() && state::build_data::persist();
+    const bool complete = ready() && hooks::investment::install()
+                          && state::build_data::persist();
     process::freeze::release(held);
     // The overlay ends with the work, not with the slice, so it spans every retry the pass needs.
     if (complete) {

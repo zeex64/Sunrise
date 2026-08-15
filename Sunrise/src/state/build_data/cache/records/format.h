@@ -24,7 +24,7 @@ inline constexpr std::array<char, 8> kCacheMagic{'S', 'U', 'N', 'R', 'I', 'S', '
  * Current build-data cache format. An older cache is rebuilt rather than read, so a bump needs
  * no other edit. Bump it whenever a domain's stored shape changes.
  */
-inline constexpr std::uint32_t kCacheFormatVersion = 23;
+inline constexpr std::uint32_t kCacheFormatVersion = 24;
 /** Signed -1 on disk means there is no equipment slot. */
 inline constexpr std::int8_t kAbsentEquipmentSlot = -1;
 /** The standard 64-bit FNV-1a offset basis starts the payload checksum. */
@@ -60,6 +60,7 @@ struct Header {
     std::uint32_t imageTimestamp{};
     std::uint32_t imageSize{};
     std::uint64_t configuredEquipmentHash{};
+    std::array<std::byte, content_manifest::kFingerprintSize> contentFingerprint{};
     std::uint32_t namedCount{};
     std::uint32_t itemCount{};
     std::uint32_t itemDetailCount{};
@@ -264,7 +265,7 @@ static_assert(sizeof(InvestmentConstants)
               == constants::kCharacterStatRowCount + 2 * sizeof(std::uint8_t));
 static_assert(sizeof(Header)
               == kCacheMagic.size() + 16 * sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t)
-                     + sizeof(InvestmentConstants));
+                     + content_manifest::kFingerprintSize + sizeof(InvestmentConstants));
 static_assert(sizeof(HashNameRecord)
               == hash_names::kNameLength + sizeof(std::uint32_t) + 4 * sizeof(std::uint8_t));
 static_assert(sizeof(ScenarioRecord)

@@ -19,6 +19,14 @@ constexpr std::array<std::byte, 20> kRowDomain{
     std::byte{'t'}, std::byte{'e'}, std::byte{'n'}, std::byte{'t'},    std::byte{'R'},
     std::byte{'o'}, std::byte{'w'}, std::byte{'s'}, kDomainTerminator, kRowDomainVersion,
 };
+/** Manifest identity version 1 binds public rows to the recognized-file inventory identity. */
+constexpr std::array<std::byte, 24> kManifestDomain{
+    std::byte{'S'}, std::byte{'u'}, std::byte{'n'}, std::byte{'r'}, std::byte{'i'},
+    std::byte{'s'}, std::byte{'e'}, std::byte{'C'}, std::byte{'o'}, std::byte{'n'},
+    std::byte{'t'}, std::byte{'e'}, std::byte{'n'}, std::byte{'t'}, std::byte{'M'},
+    std::byte{'a'}, std::byte{'n'}, std::byte{'i'}, std::byte{'f'}, std::byte{'e'},
+    std::byte{'s'}, std::byte{'t'}, kDomainTerminator, std::byte{1},
+};
 /** UUID version 8 reserves the payload bits for this deterministic public hash. */
 constexpr std::uint8_t kUuidVersionBits = 0x80;
 /** RFC UUID variants set the high 2 bits of byte 8 to binary 10. */
@@ -166,6 +174,20 @@ bool rows(std::span<const Row> manifestRows, Fingerprint& output) noexcept {
         }
     }
     return hasher.finish(output);
+}
+
+/** Builds the served manifest identity from rows plus the current package inventory identity. */
+bool manifest(std::span<const Row> manifestRows,
+              const Fingerprint& directoryFingerprint,
+              Fingerprint& output) noexcept {
+    output = {};
+    Fingerprint rowFingerprint{};
+    if (!rows(manifestRows, rowFingerprint)) {
+        return false;
+    }
+    Hasher hasher;
+    return hasher.update(kManifestDomain) && hasher.update(rowFingerprint)
+           && hasher.update(directoryFingerprint) && hasher.finish(output);
 }
 
 /** Formats an application-defined UUID from a public row fingerprint. */
