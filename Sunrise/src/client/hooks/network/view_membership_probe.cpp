@@ -32,6 +32,11 @@ constexpr std::size_t kPeerIdentityOffset = 8;
 constexpr std::size_t kPeerKindOffset = 0x10;
 constexpr std::size_t kPeerGateByteOffset = 0x38;
 constexpr std::uint8_t kPeerGateBit = 0x10;
+/** First local NetAddr entry expected for the embedded gameplay endpoint. */
+constexpr std::array<std::uint8_t, 6> kGameplayAddressPrefix{
+    0x7F, 0x00, 0x00, 0x01, 0x00, 0x79};
+/** Address passed to the creator is member pointer +0x142, or membership lane +0x14A. */
+constexpr std::size_t kPeerCreatorAddressOffset = 0x14A;
 /** Distinct snapshots are retained so a per-tick sync cannot flood the log. */
 constexpr std::size_t kSeenCapacity = 64;
 
@@ -81,6 +86,8 @@ struct DecodedSnapshot {
     std::uint32_t peer1BlockNonzeroCount{};
     std::array<std::uint8_t, 8> peer1BlockOffsets{};
     std::array<std::uint8_t, 8> peer1BlockValues{};
+    std::int32_t peer1AddressPatternOffset{-1};
+    std::array<std::uint8_t, 16> peer1CreatorAddressWindow{};
 };
 
 /** Reads the activity-membership image immediately after the type-12 wire decoder. */
@@ -123,6 +130,27 @@ struct DecodedSnapshot {
                 output.peer1BlockValues[retained] = value;
                 ++retained;
             }
+        }
+        const auto* const peer1 = bytes + kPeerStride;
+        for (std::size_t index = 0;
+             index + kGameplayAddressPrefix.size() <= kPeerStride;
+             ++index) {
+            bool matches = true;
+            for (std::size_t byte = 0; byte < kGameplayAddressPrefix.size(); ++byte) {
+                if (*reinterpret_cast<const std::uint8_t*>(peer1 + index + byte)
+                    != kGameplayAddressPrefix[byte]) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) {
+                output.peer1AddressPatternOffset = static_cast<std::int32_t>(index);
+                break;
+            }
+        }
+        for (std::size_t index = 0; index < output.peer1CreatorAddressWindow.size(); ++index) {
+            output.peer1CreatorAddressWindow[index] = *reinterpret_cast<const std::uint8_t*>(
+                peer1 + kPeerCreatorAddressOffset + index);
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -260,6 +288,10 @@ void mix(std::uint64_t& hash, std::uint64_t value) noexcept {
     for (std::size_t index = 0; index < snapshot.peer1BlockOffsets.size(); ++index) {
         mix(hash, snapshot.peer1BlockOffsets[index]);
         mix(hash, snapshot.peer1BlockValues[index]);
+    }
+    mix(hash, static_cast<std::uint32_t>(snapshot.peer1AddressPatternOffset));
+    for (const std::uint8_t value : snapshot.peer1CreatorAddressWindow) {
+        mix(hash, value);
     }
     if (hash == 0) {
         hash = 1;
@@ -423,7 +455,7 @@ __declspec(noinline) void __fastcall decoded_body(void* owner, const void* membe
         }
         if (lease.accepting && readable && snapshot.occupiedMask != 0
             && record_decoded_once(snapshot)) {
-            std::array<char, 384> line{};
+            std::array<char, 512> line{};
             const int written = std::snprintf(
                 line.data(),
                 line.size(),
@@ -431,7 +463,8 @@ __declspec(noinline) void __fastcall decoded_body(void* owner, const void* membe
                 "eligible=0x%08X occupied=0x%08X tail2=0x%08X tail3=0x%08X "
                 "tail4=0x%08X p0=0x%llX p1=0x%llX p1_gate=0x%02X "
                 "p1_30=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X "
-                "block_nz=%u first=%u:%02X,%u:%02X,%u:%02X,%u:%02X,%u:%02X,%u:%02X,%u:%02X,%u:%02X",
+                "block_nz=%u first=%u:%02X,%u:%02X,%u:%02X,%u:%02X,%u:%02X,%u:%02X,%u:%02X,%u:%02X "
+                "addr_hit=%d creator_addr=%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
                 snapshot.revision,
                 snapshot.epoch,
                 snapshot.eligibleMask,
@@ -474,7 +507,24 @@ __declspec(noinline) void __fastcall decoded_body(void* owner, const void* membe
                 static_cast<unsigned>(snapshot.peer1BlockOffsets[6]),
                 static_cast<unsigned>(snapshot.peer1BlockValues[6]),
                 static_cast<unsigned>(snapshot.peer1BlockOffsets[7]),
-                static_cast<unsigned>(snapshot.peer1BlockValues[7]));
+                static_cast<unsigned>(snapshot.peer1BlockValues[7]),
+                snapshot.peer1AddressPatternOffset,
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[0]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[1]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[2]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[3]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[4]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[5]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[6]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[7]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[8]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[9]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[10]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[11]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[12]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[13]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[14]),
+                static_cast<unsigned>(snapshot.peer1CreatorAddressWindow[15]));
             if (written > 0) {
                 core::log::write(core::log::Channel::client,
                                  core::log::Level::info,

@@ -49,7 +49,7 @@ struct MembershipSnapshot final {
     client_identity::ClientIdentity identity{};
     /** Distinct activity host for a client that joined somebody else's activity. */
     client_identity::ClientIdentity reflectedHost{};
-    /** Method-0 gameplay address decoded into reflected-host identity field 10. */
+    /** Method-0 gameplay address decoded into reflected-host identity field 11. */
     std::array<std::byte, gameplay::descriptor::kNetAddrSize> reflectedHostAddress{};
     client_authoritative_data::SpawnState spawn{};
     client_authoritative_data::TeleportState teleport{};

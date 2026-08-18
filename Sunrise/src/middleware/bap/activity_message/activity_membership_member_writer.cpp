@@ -28,8 +28,8 @@ constexpr std::size_t kIdentityPresenceFieldCount = 15;
 /** Identity field zero is a six-bit scalar stored at member byte 0x38. */
 constexpr std::uint8_t kViewGateBitWidth = 6;
 constexpr std::uint8_t kViewGateMask = 0x10;
-/** Identity field 10 is the first 0x56-byte network address consumed by native view creation. */
-constexpr std::size_t kViewAddressField = 10;
+/** Identity field 11 starts at member +0x142, the address consumed by native view creation. */
+constexpr std::size_t kViewAddressField = 11;
 /** The minimal nested player blob is 18 bytes, including one zero pad bit. */
 constexpr std::uint16_t kPlayerBlobByteCount = 18;
 
@@ -61,7 +61,7 @@ constexpr std::uint16_t kPlayerBlobByteCount = 18;
            && writer.write(0, 1);
 }
 
-/** Writes the fixed byte-array body of identity field 10 in element order. */
+/** Writes the fixed byte-array body of identity field 11 in element order. */
 [[nodiscard]] bool write_network_address(
     encoding::bits::Writer& writer,
     const std::array<std::byte, gameplay::descriptor::kNetAddrSize>& address) noexcept {

@@ -23,7 +23,7 @@ serialization cannot work until this view exists and message 40 can resolve it.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 7e476d5ecaa4a80c2678bb2473d18a7985bd999d9a1aef7d72425e99bddb03f2
+SHA-256 4cf30ae42e8678d6b981c9cd4e87755e90b6bf6aa38a4c6fb43d735c9084a973
 ```
 
 ## Confirmed high-level path
@@ -92,14 +92,15 @@ The relevant nested identity schema is referred to here as B2.
 - Writing field 0 as `0x10` produces `p1_gate=0x10` at the exact native predicate.
 - B2 field 1 is type `0x80809EE1`, which wraps a 128-byte block. It is not the gate.
 - B2 fields 10, 11, and 12 are type `0x80807C82` and are each `0x56` bytes.
-- Their schema storage offsets appear as `0x112`, `0x168`, and `0x1BE`.
+- Their schema storage offsets are `0xBC`, `0x112`, and `0x168`.
 - Type `0x80807C82` schema data is at `0x143924878`.
 
-Field 10 was encoded as an 86-byte raw NetAddr and the native decoder consumed the packet cleanly,
-but the exact `member + 0x142` address passed to the creator remained zero. Therefore the current
-mapping between the B2 schema storage offsets and the creator's member-relative address is still
-incomplete. The field-10 payload is structurally valid, but it does not populate the creator's
-requested address.
+Field 10 was initially encoded as an 86-byte raw NetAddr and the native decoder consumed the packet
+cleanly, but the exact `member + 0x142` address passed to the creator remained zero. Parsing the B2
+records from their true `0x80` table start resolved the mismatch: field 10 starts at B2 `+0xBC`,
+while field 11 starts at B2 `+0x112`. B2 itself starts at member `+0x30` (membership-lane `+0x38`),
+so field 11 lands exactly at member `+0x142` (membership-lane `+0x14A`). The writer now places the
+NetAddr in field 11.
 
 ## Type-12 encoding milestones
 
@@ -165,7 +166,7 @@ root membership with descriptor     32359 bits
 The increase is exactly 688 bits (`86 * 8`), and the native decoder reports success. This proves
 the raw fixed-array wire grammar is correct.
 
-## Current blocker
+## Current blocker at the last runtime test
 
 The view creator now runs, but resolves the reflected host to channel slot 1:
 
@@ -254,21 +255,16 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Scan the decoded reflected-member record for the known slot-0 byte sequence
-   `7F0000010079` after the field-10 experiment.
-2. Determine where the 86-byte payload actually landed and reconcile that offset with the B2
-   storage metadata.
-3. Probe the neighborhood around `member + 0x142` to identify the schema field or wrapper that
-   owns the creator's requested address.
-4. Encode the slot-0 NetAddr into that exact field.
-5. Verify that the public-session family bits attach to slot 0, producing:
+1. Run the field-11 build and confirm `membership-decode addr_hit=330` (`0x14A`) with a nonzero
+   `creator_addr` prefix.
+2. Verify that the public-session family bits attach to slot 0, producing:
 
    ```text
    view-create channel=0 valid=1 lifecycle=4 state=5 established=1
    ```
 
-6. Confirm `view-create result=ok`, a nonzero view count, and successful message-40 lookup.
-7. Continue through the five message-40 stages and then validate server-authored entity output.
+3. Confirm `view-create result=ok`, a nonzero view count, and successful message-40 lookup.
+4. Continue through the five message-40 stages and then validate server-authored entity output.
 
 ## Build and verification
 
