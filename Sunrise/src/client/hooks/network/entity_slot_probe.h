@@ -23,11 +23,16 @@ struct ViewCapture {
     std::uint8_t reservedGeneration{};
     std::uint8_t objectGeneration{};
     std::uint8_t schedulerViewCount{};
+    std::uint8_t schedulerRemoteViewCount{};
     std::array<std::byte, 16> schedulerSignature{};
+    std::array<std::byte, 16> schedulerRemoteSignature{};
     std::array<std::uint64_t, kSchedulerViewCapacity> schedulerViewKeys{};
     std::array<std::uint8_t, kSchedulerViewCapacity> schedulerViewTags{};
+    std::array<std::uint64_t, kSchedulerViewCapacity> schedulerRemoteViewKeys{};
+    std::array<std::uint8_t, kSchedulerViewCapacity> schedulerRemoteViewTags{};
     bool candidatePresent{};
     bool schedulerSignatureValid{};
+    bool schedulerRemoteSignatureValid{};
 
     [[nodiscard]] bool operator==(const ViewCapture&) const noexcept = default;
 };

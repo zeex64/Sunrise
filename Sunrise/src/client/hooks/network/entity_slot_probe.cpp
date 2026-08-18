@@ -25,6 +25,16 @@ constexpr std::size_t kEntryBaseOffset = 0x114;
 constexpr std::size_t kEntryStride = 6;
 constexpr std::size_t kFreeBitsetOffset = 0xC118;
 constexpr std::size_t kOccupiedBitsetOffset = 0xC520;
+constexpr std::size_t kDecodedRecordEntityOffset = 0x08;
+constexpr std::size_t kDecodedRecordMaskOffset = 0x18;
+constexpr std::size_t kDecodedRecordCreateSizeOffset = 0x2C;
+constexpr std::size_t kDecodedRecordUpdateSizeOffset = 0x2E;
+constexpr std::size_t kDecodedRecordCreateOffset = 0x30;
+constexpr std::size_t kDecodedRecordUpdateOffset = 0x38;
+constexpr std::size_t kDecodedRecordFlagsOffset = 0x40;
+constexpr std::size_t kDecodedRecordMaskBytes = 16;
+constexpr std::size_t kDecodedRecordCreateBytes = 16;
+constexpr std::size_t kDecodedRecordUpdateBytes = 192;
 
 std::array<std::atomic_uint64_t, kSeenSnapshotCapacity> g_seenSnapshots{};
 std::atomic_uint32_t g_decodeTraceBudget{};
@@ -61,6 +71,108 @@ struct ReaderSnapshot {
     std::uint32_t pendingBits{};
     const std::byte* cursor{};
 };
+
+/** Bounded copy of one decoded entity record while its codec buffers are still owned by the call.
+ */
+struct DecodedRecordSnapshot {
+    std::array<std::byte, kDecodedRecordMaskBytes> mask{};
+    std::array<std::byte, kDecodedRecordCreateBytes> create{};
+    std::array<std::byte, kDecodedRecordUpdateBytes> update{};
+    std::uint32_t entity{};
+    std::uint16_t flags{};
+    std::int16_t createSize{};
+    std::int16_t updateSize{};
+    std::size_t createCopied{};
+    std::size_t updateCopied{};
+};
+
+/** Copies one record and its bounded codec scratch without retaining native pointers. */
+[[nodiscard]] bool inspect_decoded_record(const void* recordsAddress,
+                                          int count,
+                                          DecodedRecordSnapshot& output) noexcept {
+    output = {};
+    if (recordsAddress == nullptr || count <= 0) {
+        return false;
+    }
+    __try {
+        const auto* const record = static_cast<const std::byte*>(recordsAddress);
+        std::memcpy(&output.entity, record + kDecodedRecordEntityOffset, sizeof output.entity);
+        std::memcpy(output.mask.data(), record + kDecodedRecordMaskOffset, output.mask.size());
+        std::memcpy(
+            &output.createSize, record + kDecodedRecordCreateSizeOffset, sizeof output.createSize);
+        std::memcpy(
+            &output.updateSize, record + kDecodedRecordUpdateSizeOffset, sizeof output.updateSize);
+        std::memcpy(&output.flags, record + kDecodedRecordFlagsOffset, sizeof output.flags);
+        const std::byte* create = nullptr;
+        const std::byte* update = nullptr;
+        std::memcpy(&create, record + kDecodedRecordCreateOffset, sizeof create);
+        std::memcpy(&update, record + kDecodedRecordUpdateOffset, sizeof update);
+        if (output.createSize > 0 && create != nullptr) {
+            output.createCopied = static_cast<std::size_t>(output.createSize);
+            if (output.createCopied > output.create.size()) {
+                output.createCopied = output.create.size();
+            }
+            std::memcpy(output.create.data(), create, output.createCopied);
+        }
+        if (output.updateSize > 0 && update != nullptr) {
+            output.updateCopied = static_cast<std::size_t>(output.updateSize);
+            if (output.updateCopied > output.update.size()) {
+                output.updateCopied = output.update.size();
+            }
+            std::memcpy(output.update.data(), update, output.updateCopied);
+        }
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        output = {};
+        return false;
+    }
+}
+
+/** Converts a bounded byte range to uppercase hexadecimal. */
+void record_hex(const std::byte* input, std::size_t count, char* output) noexcept {
+    constexpr char kDigits[] = "0123456789ABCDEF";
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto value = std::to_integer<std::uint8_t>(input[index]);
+        output[index * 2] = kDigits[value >> 4];
+        output[index * 2 + 1] = kDigits[value & 0x0F];
+    }
+    output[count * 2] = '\0';
+}
+
+/** Reports the baseline/update scratch produced by one successful native entity decode. */
+void report_decoded_record(const void* recordsAddress, int count) noexcept {
+    DecodedRecordSnapshot snapshot{};
+    if (!inspect_decoded_record(recordsAddress, count, snapshot)) {
+        return;
+    }
+    std::array<char, kDecodedRecordMaskBytes * 2 + 1> maskHex{};
+    std::array<char, kDecodedRecordCreateBytes * 2 + 1> createHex{};
+    std::array<char, kDecodedRecordUpdateBytes * 2 + 1> updateHex{};
+    record_hex(snapshot.mask.data(), snapshot.mask.size(), maskHex.data());
+    record_hex(snapshot.create.data(), snapshot.createCopied, createHex.data());
+    record_hex(snapshot.update.data(), snapshot.updateCopied, updateHex.data());
+    std::array<char, 1024> line{};
+    const int written =
+        std::snprintf(line.data(),
+                      line.size(),
+                      "ev=gameplay stage=entity-record entity=0x%08X flags=0x%04X "
+                      "create_size=%d create_copied=%zu create=%s update_size=%d update_copied=%zu "
+                      "mask=%s update=%s",
+                      snapshot.entity,
+                      static_cast<unsigned>(snapshot.flags),
+                      static_cast<int>(snapshot.createSize),
+                      snapshot.createCopied,
+                      createHex.data(),
+                      static_cast<int>(snapshot.updateSize),
+                      snapshot.updateCopied,
+                      maskHex.data(),
+                      updateHex.data());
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
 
 /** Reads the native reader without changing its cursor or accumulator. */
 [[nodiscard]] bool inspect_reader(const void* readerAddress, ReaderSnapshot& output) noexcept {
@@ -358,6 +470,9 @@ __declspec(noinline) int __fastcall decode_list(void* context,
                                  core::log::Level::info,
                                  {line.data(), static_cast<std::size_t>(written)});
             }
+            if (result == 0 && decodedCount > 0) {
+                report_decoded_record(records, decodedCount);
+            }
         }
         if (lease.accepting && manager != nullptr) {
             observe_manager(manager, result);
@@ -393,9 +508,13 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
     std::uint64_t schedulerKey = 0;
     std::uint8_t schedulerTag = 0;
     std::int32_t schedulerViewCount = -1;
+    std::int32_t schedulerRemoteViewCount = -1;
     std::array<std::byte, 16> schedulerSignature{};
+    std::array<std::byte, 16> schedulerRemoteSignature{};
     std::array<std::uint64_t, ViewCapture::kSchedulerViewCapacity> schedulerViewKeys{};
     std::array<std::uint8_t, ViewCapture::kSchedulerViewCapacity> schedulerViewTags{};
+    std::array<std::uint64_t, ViewCapture::kSchedulerViewCapacity> schedulerRemoteViewKeys{};
+    std::array<std::uint8_t, ViewCapture::kSchedulerViewCapacity> schedulerRemoteViewTags{};
     __try {
         const auto* const bytes = static_cast<const std::byte*>(view);
         std::memcpy(&manager, bytes + 0xB8, sizeof manager);
@@ -414,6 +533,10 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
             const auto* const scheduler = schedulerOwner + 0x38;
             std::memcpy(schedulerSignature.data(), scheduler + 0x10, schedulerSignature.size());
             std::memcpy(&schedulerViewCount, scheduler + 0x20, sizeof schedulerViewCount);
+            std::memcpy(
+                schedulerRemoteSignature.data(), scheduler + 0x58, schedulerRemoteSignature.size());
+            std::memcpy(
+                &schedulerRemoteViewCount, scheduler + 0x68, sizeof schedulerRemoteViewCount);
             if (schedulerViewCount >= 0
                 && schedulerViewCount
                        <= static_cast<std::int32_t>(ViewCapture::kSchedulerViewCapacity)) {
@@ -422,6 +545,19 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
                     std::memcpy(&schedulerViewKeys[index], entry, sizeof schedulerViewKeys[index]);
                     std::memcpy(
                         &schedulerViewTags[index], entry + 8, sizeof schedulerViewTags[index]);
+                }
+            }
+            if (schedulerRemoteViewCount >= 0
+                && schedulerRemoteViewCount
+                       <= static_cast<std::int32_t>(ViewCapture::kSchedulerViewCapacity)) {
+                for (std::size_t index = 0; index < ViewCapture::kSchedulerViewCapacity; ++index) {
+                    const auto* const entry = scheduler + 0x70 + index * 0x10;
+                    std::memcpy(&schedulerRemoteViewKeys[index],
+                                entry,
+                                sizeof schedulerRemoteViewKeys[index]);
+                    std::memcpy(&schedulerRemoteViewTags[index],
+                                entry + 8,
+                                sizeof schedulerRemoteViewTags[index]);
                 }
             }
         }
@@ -464,6 +600,15 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
         capture.schedulerViewTags = schedulerViewTags;
         capture.schedulerSignatureValid = true;
     }
+    if (schedulerRemoteViewCount >= 0
+        && schedulerRemoteViewCount
+               <= static_cast<std::int32_t>(capture.schedulerRemoteViewKeys.size())) {
+        capture.schedulerRemoteViewCount = static_cast<std::uint8_t>(schedulerRemoteViewCount);
+        capture.schedulerRemoteSignature = schedulerRemoteSignature;
+        capture.schedulerRemoteViewKeys = schedulerRemoteViewKeys;
+        capture.schedulerRemoteViewTags = schedulerRemoteViewTags;
+        capture.schedulerRemoteSignatureValid = true;
+    }
     const bool changed = publish(capture);
     if (record_once(snapshot)) {
         report(snapshot, 0, token, schedulerKey, schedulerTag);
@@ -471,17 +616,27 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
     if (changed) {
         std::uint64_t signatureFirst = 0;
         std::uint64_t signatureSecond = 0;
+        std::uint64_t remoteSignatureFirst = 0;
+        std::uint64_t remoteSignatureSecond = 0;
         std::memcpy(&signatureFirst, capture.schedulerSignature.data(), sizeof signatureFirst);
         std::memcpy(&signatureSecond,
                     capture.schedulerSignature.data() + sizeof signatureFirst,
                     sizeof signatureSecond);
-        std::array<char, 512> line{};
+        std::memcpy(&remoteSignatureFirst,
+                    capture.schedulerRemoteSignature.data(),
+                    sizeof remoteSignatureFirst);
+        std::memcpy(&remoteSignatureSecond,
+                    capture.schedulerRemoteSignature.data() + sizeof remoteSignatureFirst,
+                    sizeof remoteSignatureSecond);
+        std::array<char, 768> line{};
         const int written = std::snprintf(
             line.data(),
             line.size(),
             "ev=gameplay stage=entity-view token=0x%llX key=0x%llX tag=%u namespace=%d "
             "signature=%u value=%016llX%016llX count=%u "
             "e0=0x%llX/%u e1=0x%llX/%u e2=0x%llX/%u "
+            "remote=%u value=%016llX%016llX count=%u "
+            "r0=0x%llX/%u r1=0x%llX/%u r2=0x%llX/%u "
             "candidate=%u slot=%u hgen=%u rgen=%u ogen=%u",
             static_cast<unsigned long long>(capture.token),
             static_cast<unsigned long long>(capture.schedulerKey),
@@ -497,6 +652,16 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
             static_cast<unsigned>(capture.schedulerViewTags[1]),
             static_cast<unsigned long long>(capture.schedulerViewKeys[2]),
             static_cast<unsigned>(capture.schedulerViewTags[2]),
+            capture.schedulerRemoteSignatureValid ? 1U : 0U,
+            static_cast<unsigned long long>(remoteSignatureFirst),
+            static_cast<unsigned long long>(remoteSignatureSecond),
+            static_cast<unsigned>(capture.schedulerRemoteViewCount),
+            static_cast<unsigned long long>(capture.schedulerRemoteViewKeys[0]),
+            static_cast<unsigned>(capture.schedulerRemoteViewTags[0]),
+            static_cast<unsigned long long>(capture.schedulerRemoteViewKeys[1]),
+            static_cast<unsigned>(capture.schedulerRemoteViewTags[1]),
+            static_cast<unsigned long long>(capture.schedulerRemoteViewKeys[2]),
+            static_cast<unsigned>(capture.schedulerRemoteViewTags[2]),
             capture.candidatePresent ? 1U : 0U,
             static_cast<unsigned>(capture.slot),
             static_cast<unsigned>(capture.handleGeneration),

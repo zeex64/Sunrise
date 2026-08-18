@@ -78,8 +78,6 @@ constexpr std::int32_t kFirstEntityNamespace = 2;
 constexpr std::uint32_t kFirstEntityRsat = 0x80C4FEAD;
 /** EDZ namespace 2 owns thirteen native objects before a server-authored slot is safe. */
 constexpr std::uint32_t kFirstEntityBaselineOccupied = 13;
-/** Only the first scheduler body's native boundary is proven for the guarded create probe. */
-constexpr std::size_t kFirstEntitySchedulerView = 0;
 /** A pristine slot's first native allocation advances object generation zero to two. */
 constexpr std::uint8_t kFirstObjectGeneration = 2;
 /** Package-backed tag discriminator used by schema 0x80800014. */
@@ -259,6 +257,23 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
+/** @return True when the client has accepted the exact local logical scheduler order. */
+[[nodiscard]] bool scheduler_layouts_agree(
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture) noexcept {
+    if (!capture.schedulerRemoteSignatureValid
+        || capture.schedulerRemoteSignature != capture.schedulerSignature
+        || capture.schedulerRemoteViewCount != capture.schedulerViewCount) {
+        return false;
+    }
+    for (std::size_t index = 0; index < capture.schedulerViewCount; ++index) {
+        if (capture.schedulerRemoteViewKeys[index] != capture.schedulerViewKeys[index]
+            || capture.schedulerRemoteViewTags[index] != capture.schedulerViewTags[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Builds a create only when the bound token, scheduler entry, and pristine slot all agree. */
 [[nodiscard]] bool prepare_entity_create(const state::gameplay::PeerLink& peer,
                                          EntityCreatePlan& output) noexcept {
@@ -285,6 +300,12 @@ write_scheduler_signature(bits::Writer& writer,
         || capture.schedulerKey != capture.token || peer.schedulerSignature.wireBits == 0) {
         return false;
     }
+    // The local list drives outbound ordering, while the remote list is what the client currently
+    // uses to decode this host. A transition can leave them temporarily different even when their
+    // 128-bit values already match; do not count an empty decode as a create attempt.
+    if (!scheduler_layouts_agree(capture)) {
+        return false;
+    }
     std::size_t match = capture.schedulerViewKeys.size();
     for (std::size_t index = 0; index < capture.schedulerViewCount; ++index) {
         if (capture.schedulerViewKeys[index] != capture.schedulerKey
@@ -299,13 +320,6 @@ write_scheduler_signature(bits::Writer& writer,
     if (match == capture.schedulerViewKeys.size()) {
         return false;
     }
-    // Handler bodies are serialized in scheduler order. A direct create in entry zero has reached
-    // the native sobject decoder, while attempts after a guessed empty preceding body have not.
-    // Keep the loader retry experiment on the one boundary established by runtime evidence.
-    if (match != kFirstEntitySchedulerView) {
-        return false;
-    }
-
     output.token = capture.token;
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;

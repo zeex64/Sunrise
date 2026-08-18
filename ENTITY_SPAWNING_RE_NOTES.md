@@ -940,6 +940,21 @@ now waits until namespace 2 is scheduler entry zero before starting its bounded 
 ensures every counted attempt can actually enter the native sobject decoder and give the RSAT loader
 time to service the queued dependency.
 
+The next run converted that provisional entry-zero result into a successful native object. Attempt
+one for token `0x9EAA30010020000F` was emitted while the local scheduler list was `[00F]` but the
+remote list still held `[00C,00F]`; namespace 2 therefore decoded one empty-list bit. Attempt two
+arrived after both sides converged and completed the full 78-bit record with `result=0 count=1`.
+The client invoked the kind-0 sobject create codec for `0x80C4FEAD`, and the namespace-2 manager
+advanced from 13 to 14 occupied objects with slot 14 becoming the next candidate. Attempts three
+and four correctly did not fire because slot 13 had been accepted rather than remaining pristine.
+
+This proves that movement was only exposing transient scheduler arrangements, not a spawning
+requirement. It also weakens the earlier entry-zero-only inference: even entry zero decoded empty
+while the remote logical list lagged. The create gate now requires the native local and remote
+signature values, counts, keys, and tags to agree before any view index may emit. The decoder probe
+also captures the successful record's bounded create and baseline-update scratch so the next step can
+construct a transform update for the accepted but currently invisible sobject.
+
 The later freeze has a narrower boundary. A PUB448-to-PUB96 move preempted the previous transition,
 force-disconnected its still-leaving group, and successfully established the reused PUB96 session.
 The last native line at `t=215700` says it is queuing join-complete. Every successful join immediately
@@ -1021,18 +1036,15 @@ The current checkpoint includes work in:
    must no longer be required.
 5. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
-6. Confirm namespace 2 is logical scheduler entry zero for every `entity-create-out`, then confirm
-   all retry attempts retain the exact same token, slot, and handle generation and each produces a
-   77-bit `entity-list-decode` while the queued RSAT dependency has time to load.
-7. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
-   unread, over-read, generation, or occupied-slot conflict before attempting an update.
-8. If `0x80C4FEAD` remains unloaded on all four settled-slot attempts, trace its package request
-   after `FUN_140A020E0`; do not substitute a native RSAT until its gameplay meaning is known.
-9. Read `sobject-update` captures to identify which named components are present in an initial
+6. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
+   and that its `entity-view` local and remote layouts are identical immediately beforehand.
+7. Capture `stage=entity-record` from the successful 78-bit create and identify the baseline update
+   buffer's transform, parent, stream-source, and RSAT-defined regions.
+8. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-10. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+9. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-11. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+10. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
 
 ## Build and verification
