@@ -20,6 +20,7 @@ inline constexpr std::array kGameSlots{
     HookSlot::viewSignatureRefresh,
     HookSlot::viewMessageLookup,
     HookSlot::viewSlotPump,
+    HookSlot::sobjectCreateEncoder,
     HookSlot::viewMembershipSync,
     HookSlot::activityMembershipDecoder,
     HookSlot::activityMembershipQueue,

@@ -1,10 +1,11 @@
 #include "../../external_server/route.h"
+#include "../activity_host_probe.h"
 #include "../content_config/runtime.h"
 #include "../coordinator/network_call_coordinator.h"
-#include "../activity_host_probe.h"
 #include "../investment/investment_derived_rebuild.h"
 #include "../platform.h"
 #include "../runtime.h"
+#include "../sobject_create_probe.h"
 #include "../view_creation_probe.h"
 #include "../view_membership_probe.h"
 #include "../view_message_probe.h"
@@ -133,6 +134,7 @@ bool uninstall() noexcept {
     const auto gameProtectedEntries = lifecycle::game_protected_entries();
     const bool removed = lifecycle::uninstall_group(lifecycle::kGameSlots, gameProtectedEntries);
     if (removed) {
+        sobject_create_probe::reset();
         view_creation_probe::reset();
         activity_host_probe::reset();
         view_membership_probe::reset();

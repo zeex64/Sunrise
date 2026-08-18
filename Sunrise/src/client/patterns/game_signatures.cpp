@@ -87,11 +87,18 @@ constexpr auto kViewMessageLookup =
 
 // Matches the manager pump that walks all three fixed replication slots. The fixed prologue
 // includes its leading REX prefix so the detour begins at the function entry, not byte +1.
-constexpr std::string_view kViewSlotPumpText =
-    "40 55 56 48 83 EC 38 83 79 08 01 48 8B E9";
+constexpr std::string_view kViewSlotPumpText = "40 55 56 48 83 EC 38 83 79 08 01 48 8B E9";
 /** Compiled pattern bytes of the signature text above. */
-constexpr auto kViewSlotPump =
-    signature<signature_length(kViewSlotPumpText)>(kViewSlotPumpText);
+constexpr auto kViewSlotPump = signature<signature_length(kViewSlotPumpText)>(kViewSlotPumpText);
+
+// Matches kind 0's sobject creation encoder. The fixed tail is the trailing create boolean's
+// bit-writer fast path; together with the schema call and saved arguments it is unique.
+constexpr std::string_view kSobjectCreateEncoderText =
+    "48 89 5C 24 08 57 48 83 EC 20 48 8B 05 ? ? ? ? 41 B9 01 00 00 00 49 8B F8 48 8B DA "
+    "8B 08 E8 ? ? ? ? 8B 47 30 0F B6 4B 04 83 F8 40 73 27 FF 47 24 FF C0";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kSobjectCreateEncoder =
+    signature<signature_length(kSobjectCreateEncoderText)>(kSobjectCreateEncoderText);
 
 // Matches the membership-to-view synchronization pass. The fixed prologue is unique in the
 // current image and ends before the first position-dependent branch displacement.
@@ -107,8 +114,7 @@ constexpr std::string_view kActivityMembershipDecoderText =
     "48 89 5C 24 20 55 56 57 41 54 41 55 41 56 41 57 48 81 EC 60 01 00 00";
 /** Compiled pattern bytes of the signature text above. */
 constexpr auto kActivityMembershipDecoder =
-    signature<signature_length(kActivityMembershipDecoderText)>(
-        kActivityMembershipDecoderText);
+    signature<signature_length(kActivityMembershipDecoderText)>(kActivityMembershipDecoderText);
 
 // Matches the simulation-queue insertion that receives a fully decoded activity membership.
 // The allocation size and payload label load distinguish it from the adjacent queue insertions.
@@ -165,8 +171,7 @@ constexpr std::string_view kActivityHostConnectionStateText =
     "41 8B F8";
 /** Compiled pattern bytes of the signature text above. */
 constexpr auto kActivityHostConnectionState =
-    signature<signature_length(kActivityHostConnectionStateText)>(
-        kActivityHostConnectionStateText);
+    signature<signature_length(kActivityHostConnectionStateText)>(kActivityHostConnectionStateText);
 
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
@@ -220,6 +225,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"view_signature_refresh", kViewSignatureRefresh},
     patterns::Pattern{"view_message_lookup", kViewMessageLookup},
     patterns::Pattern{"view_slot_pump", kViewSlotPump},
+    patterns::Pattern{"sobject_create_encoder", kSobjectCreateEncoder},
     patterns::Pattern{"view_membership_sync", kViewMembershipSync},
     patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},

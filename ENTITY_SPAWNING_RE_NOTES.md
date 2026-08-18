@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 8700c45a9ab820f940655649f939abdae7fc211e2b2861cb65c10e888e1acf62
+SHA-256 758c225a15812b418596d2e6287395892442eda542ea735702ee5a3bc97f9104
 ```
 
 ## Confirmed high-level path
@@ -415,6 +415,23 @@ The sobject creation path narrows the server payload substantially:
   not an arbitrary entity or activity hash.
 - `FUN_141723FD0` derives the remaining local creation data from the resolved RSAT definition.
   The id must already name valid loadable sobject data on the client.
+- `FUN_1417269D0` is the matching native outbound create-buffer constructor. It zeroes all 16
+  bytes, resolves the replicated entity to its runtime sobject through `FUN_1417042E0`, copies the
+  sobject record's RSAT id from offset `+0x88` through `FUN_1409FED40`, computes the byte-4 flag,
+  and then calls `FUN_141723FD0`.
+
+The resulting local create-buffer layout is:
+
+```text
++0x00  uint32 sobject RSAT id       (wire schema 0x80800014)
++0x04  uint8 trailing identity flag (separate one-bit wire field)
++0x08  uint32 derived byte offset/size
++0x0C  uint32 derived bit offset/size
+```
+
+The last two fields are derived from the resolved RSAT on both sender and receiver. They are local
+codec bookkeeping, not values Sunrise should choose. The new `sobject-create` boundary probe will
+confirm the exact schema bit width and representation from a native outbound exemplar.
 
 The sobject update path also identifies the baseline state an enemy needs. `FUN_141725140` encodes
 the named `transform`, `parent`, and `stream-source` components before its remaining sobject update
@@ -422,10 +439,23 @@ body; `FUN_141724FD0` decodes the same components. Squad updates use a named `sq
 player-broadcast updates use a named `player` component. A squad relationship for AI is plausible
 but not yet proven as a mandatory creation prerequisite.
 
+The three named sobject component schema ids are now resolved from their descriptor tables:
+
+```text
+transform      0x80809F75
+parent         0x8080949B
+stream-source  0x8080949A
+```
+
 The next diagnostic build follows `view + 0xB8 -> entity manager +0x10 -> global registry` without
 calling native code. It logs the live count plus Ghidra-relative vtable/create/update RVAs as
 `stage=view-codecs` and `stage=view-codec`. A correct runtime capture should report `count=4` and
 match the four static registrations above.
+
+The same build hooks only the kind-0 outbound create encoder and reports each distinct native
+16-byte create input once as `stage=sobject-create`. It records the RSAT id, trailing flag, exact
+bit-count delta, accumulator state, and any bytes flushed by the call. It does not change the
+payload or enable scheduler injection.
 
 ## Instrumentation added
 
@@ -434,6 +464,7 @@ Client hooks now cover:
 - View-message lookup and message-40 routing.
 - Native message-40 error, local/remote stage, index, signature, compatibility, and open state.
 - Live replicated-object codec count, vtable, create, and update entry points.
+- Bounded, read-only native sobject creation inputs and their exact encoded bit deltas.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
 - Membership-to-view synchronization predicates.
@@ -476,11 +507,13 @@ The current checkpoint includes work in:
    entity-index/generation prelude bits.
 4. Confirm `view-codecs count=4` and that the four runtime RVAs match the static `sobject`, `squad`,
    `player_broadcast`, and `test_entity` registrations.
-5. Resolve one valid enemy sobject RSAT id, then decode schema `0x80800014` and the
+5. Read `sobject-create` captures to confirm schema `0x80800014`'s exact RSAT-id bit representation
+   and collect known-valid native sobject exemplars.
+6. Resolve one captured or package-derived RSAT id to an enemy definition, then decode the
    `transform`/`parent`/`stream-source` update body closely enough to reproduce a baseline.
-6. Determine whether an enemy additionally requires a kind-1 squad object or merely references an
+7. Determine whether an enemy additionally requires a kind-1 squad object or merely references an
    existing squad through its sobject update.
-7. Add a scheduler writer only after an empty frame and one create record can be encoded without
+8. Add a scheduler writer only after an empty frame and one create record can be encoded without
    leaving unread or over-read bits on the native client.
 
 ## Build and verification
@@ -507,5 +540,8 @@ view-create
 view-address
 view-slots
 view-lookup
+view-state
+view-codecs
+sobject-create
 activity-host-decode
 ```
