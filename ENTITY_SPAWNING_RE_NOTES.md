@@ -1049,6 +1049,36 @@ Server-side diagnostics cover:
 - Message-40 routing and staged responses.
 - Type-12 membership publication and bit-count-sensitive bodies.
 
+## Zone-transition reliable packet fragmentation
+
+The run that eventually disconnected from EDZ isolated the transition failure below the group and
+entity layers. The inbound large reliable queue advanced normally through sequence `1360`. At
+`t=103269`, three established payloads were rejected as `reason=grammar`. The next decoded packet
+began at reliable sequence `1628`, while Sunrise still waited for `1361`; all 14 of its records and
+every later reliable record were consequently outside the 32-slot receive window. The server still
+acknowledged the newer packet sequence, so the missing transition packet aged out and the reliable
+stream could never recover. Later citizen joins reached `sending initial join-complete` but their
+messages were refused against the same stale `next=1361`, ultimately producing the EDZ disconnect.
+
+Ghidra resolves the three grammar failures as native fragmented established packets:
+
+- `FUN_1416D4A30` consumes the established marker and selects the fragmented path with the second
+  bit.
+- `FUN_1416D4B00` reads a 6-bit fragment-set id, 2-bit connection guard, 3-bit
+  fragment-count-minus-one, and 3-bit fragment index. Together with the first two bits this is an
+  exact two-byte header.
+- That function keeps eight overlapping sets, strips the two-byte header, copies each body at a
+  1,238-byte stride, and passes the completed original packet back through `FUN_1416D56C0`.
+
+Sunrise previously required the fragmented bit to be zero and therefore discarded every piece.
+The server now reconstructs the native eight-piece format before ordinary established decoding.
+The decoded-record and reliable receive capacities are 512, covering the observed 267-record
+transition burst, and reliable message assembly is bounded by the complete reconstructed packet.
+All messages drained from the burst are retained for group dispatch; the former eight-message
+report buffer no longer silently discards the remainder. The next runtime proof should show
+`stage=fragment result=held` followed by `result=complete`, then a packet whose reliable `next`
+advances beyond `1361` with `drop=0`.
+
 ## Source areas changed
 
 The current checkpoint includes work in:
@@ -1064,26 +1094,28 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
+1. Cross one EDZ public-zone boundary and confirm the transition burst reports fragment pieces,
+   one completed assembly, `drop=0`, and an inbound reliable `next` that continues advancing.
+2. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
    `restart=1`, followed by ordinary stages 1 through 5. If local and remote both pause at stage 4,
    confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
-2. If `network_update` stalls again, read the one `stage=network-hitch` line. `observer=0 native=0`
+3. If `network_update` stalls again, read the one `stage=network-hitch` line. `observer=0 native=0`
    excludes both log paths; nonzero `native` means the reported entered site never returned.
-3. Reproduce the PUB448-to-PUB96 or equivalent preempted handoff and confirm the join advances from
+4. Reproduce the PUB448-to-PUB96 or equivalent preempted handoff and confirm the join advances from
    `Queuing join-complete` to `sending initial join-complete` and then `received`.
-4. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
+5. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
    must no longer be required.
-5. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
+6. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
-6. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
+7. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
    and that its `entity-view` local and remote layouts are identical immediately beforehand.
-7. Capture `stage=entity-record` from the successful 78-bit create and identify the baseline update
+8. Capture `stage=entity-record` from the successful 78-bit create and identify the baseline update
    buffer's transform, parent, stream-source, and RSAT-defined regions.
-8. Read `sobject-update` captures to identify which named components are present in an initial
+9. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-9. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+10. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-10. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+11. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
 
 ## Build and verification

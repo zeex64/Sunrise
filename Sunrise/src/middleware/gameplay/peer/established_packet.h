@@ -19,8 +19,15 @@ inline constexpr std::size_t kPacketRingSize = 128;
 inline constexpr std::size_t kLargeFragmentBytes = 32;
 /** The smaller reliable queue uses 6-byte fragments. */
 inline constexpr std::size_t kSmallFragmentBytes = 6;
-/** One packet carries at most this many queue records before it is refused. */
-inline constexpr std::size_t kMaximumRecords = 64;
+/** A fragmented transition packet has been observed carrying 267 queue records. */
+inline constexpr std::size_t kMaximumRecords = 512;
+/** Native established-packet fragmentation uses at most eight pieces. */
+inline constexpr std::size_t kMaximumPacketFragments = 8;
+/** Native IPv4 fragment payload stride after the exact two-byte fragment header. */
+inline constexpr std::size_t kPacketFragmentStride = 1238;
+/** Largest established packet reconstructed from native fragments. */
+inline constexpr std::size_t kFragmentedPacketCapacity =
+    kMaximumPacketFragments * kPacketFragmentStride;
 
 /** Acknowledgement state this side publishes and the other side reads. */
 struct AckState {
@@ -58,6 +65,15 @@ struct QueueRecords {
     std::size_t count{};
 };
 
+/** Header and aligned body of one native established-packet fragment. */
+struct PacketFragment {
+    std::span<const std::byte> body{};
+    std::uint8_t setId{};
+    std::uint8_t connectionSequenceLow2{};
+    std::uint8_t count{};
+    std::uint8_t index{};
+};
+
 /** One decoded established packet. */
 struct EstablishedPacket {
     std::uint8_t connectionSequenceLow2{};
@@ -90,6 +106,16 @@ struct ExternalStatus {
 [[nodiscard]] bool decode_established(std::span<const std::byte> payload,
                                       bool expectExternal,
                                       EstablishedPacket& output) noexcept;
+
+/**
+ * Decodes the exact two-byte header used by a fragmented established packet.
+ * The body is byte-aligned because marker, selector, id, guard, count, and index total 16 bits.
+ * @param payload Whole decrypted fragment.
+ * @param output Receives its fragment-set identity and aligned body.
+ * @return True when the header and native fragment bounds are valid.
+ */
+[[nodiscard]] bool decode_packet_fragment(std::span<const std::byte> payload,
+                                          PacketFragment& output) noexcept;
 
 /**
  * Writes the packet head and the acknowledgement handler payload.

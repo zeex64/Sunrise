@@ -69,6 +69,12 @@ constexpr std::uint16_t kByteBits = 8;
 constexpr std::uint8_t kMessageIdWidth = 6;
 /** The declared decoded size after it is 18 bits. */
 constexpr std::uint8_t kMessageSizeWidth = 18;
+/** Fragment-set identifiers are six bits. */
+constexpr std::uint8_t kFragmentSetWidth = 6;
+/** Fragment count-minus-one and fragment index are each three bits. */
+constexpr std::uint8_t kFragmentIndexWidth = 3;
+/** The native fragment header is exactly two aligned bytes. */
+constexpr std::size_t kFragmentHeaderBytes = 2;
 
 /**
  * Reads one ternary packet status.
@@ -303,6 +309,41 @@ bool decode_established(std::span<const std::byte> payload,
     // The sentinel handler writes no bits, so the external body starts here when one exists.
     output.hasExternal = expectExternal;
     output.externalBitOffset = payload.size() * kByteBits - reader.remaining_bits();
+    return true;
+}
+
+/** Decodes one byte-aligned native established-packet fragment. */
+bool decode_packet_fragment(std::span<const std::byte> payload,
+                            PacketFragment& output) noexcept {
+    bits::Reader reader(payload);
+    std::uint64_t marker = 0;
+    std::uint64_t fragmented = 0;
+    std::uint64_t setId = 0;
+    std::uint64_t guard = 0;
+    std::uint64_t countMinusOne = 0;
+    std::uint64_t index = 0;
+    if (!reader.read(kFlagWidth, marker) || marker != kEstablishedMarker
+        || !reader.read(kFlagWidth, fragmented) || fragmented == 0
+        || !reader.read(kFragmentSetWidth, setId)
+        || !reader.read(kSequenceGuardWidth, guard)
+        || !reader.read(kFragmentIndexWidth, countMinusOne)
+        || !reader.read(kFragmentIndexWidth, index) || payload.size() <= kFragmentHeaderBytes) {
+        return false;
+    }
+    const auto count = static_cast<std::uint8_t>(countMinusOne + 1);
+    if (count == 0 || count > kMaximumPacketFragments || index >= count) {
+        return false;
+    }
+    const std::span<const std::byte> body = payload.subspan(kFragmentHeaderBytes);
+    if (body.empty() || body.size() > kPacketFragmentStride
+        || (index + 1 < count && body.size() != kPacketFragmentStride)) {
+        return false;
+    }
+    output.body = body;
+    output.setId = static_cast<std::uint8_t>(setId);
+    output.connectionSequenceLow2 = static_cast<std::uint8_t>(guard);
+    output.count = count;
+    output.index = static_cast<std::uint8_t>(index);
     return true;
 }
 

@@ -131,12 +131,12 @@ enum class PeerStage : std::uint8_t {
 
 /** Reliable message sequences unwrap modulo 8,192. */
 inline constexpr std::uint16_t kMessageSequenceModulus = 8192;
-/** One queue buffers this many out-of-order fragments before it drops the newest. */
-inline constexpr std::size_t kReliableSlots = 32;
+/** One queue buffers a complete observed zone-transition burst before it drops the newest. */
+inline constexpr std::size_t kReliableSlots = 512;
 /** The larger reliable queue carries 32-byte fragments, which bounds one slot. */
 inline constexpr std::size_t kReliableFragmentBytes = 32;
-/** Reassembly is capped well below the engine's own limit because no message here is large. */
-inline constexpr std::size_t kReassemblyCapacity = 1024;
+/** One reliable message cannot exceed the reconstructed established-packet budget. */
+inline constexpr std::size_t kReassemblyCapacity = 12288;
 
 /** One buffered reliable fragment. */
 struct ReliableFragment {

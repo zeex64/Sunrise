@@ -4,6 +4,8 @@
 
 #include <array>
 #include <cstring>
+#include <memory>
+#include <new>
 
 #include "../../../client/hooks/network/entity_slot_probe.h"
 #include "../../../client/hooks/network/scheduler_signature_probe.h"
@@ -59,8 +61,6 @@ constexpr std::uint16_t kPacketSequenceModulus = state::gameplay::kPacketSequenc
 constexpr std::uint16_t kFirstPacketSequence = 1;
 /** Smallest head-minus-cursor the peer accepts. This host keeps at most one packet in flight. */
 constexpr std::uint8_t kMinimumHeadCursor = 1;
-/** One packet cannot report more delivered messages than this. */
-constexpr std::size_t kMessageReportCapacity = 8;
 /** Scheduler prefix retained by the external-body diagnostic probe. */
 constexpr std::size_t kExternalProbeWords = 4;
 /** Bits retained in each diagnostic scheduler-prefix word. */
@@ -91,6 +91,24 @@ SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
 std::uint32_t g_channelId{0};
+
+/** One in-flight native fragmented established packet. */
+struct FragmentAssembly {
+    std::array<std::byte, wire::kFragmentedPacketCapacity> bytes{};
+    std::array<std::size_t, wire::kMaximumPacketFragments> sizes{};
+    std::array<bool, wire::kMaximumPacketFragments> received{};
+    state::gameplay::Endpoint endpoint{};
+    std::uint64_t touched{};
+    std::uint8_t setId{};
+    std::uint8_t guard{};
+    std::uint8_t count{};
+    bool active{};
+};
+
+/** Native keeps eight fragment sets per channel so adjacent large packets may overlap. */
+constexpr std::size_t kFragmentAssemblyCapacity =
+    state::gameplay::kAssociationCapacity * wire::kMaximumPacketFragments;
+std::array<FragmentAssembly, kFragmentAssemblyCapacity> g_fragmentAssemblies{};
 
 /** Read-only summary of the native simulation gate and replication-scheduler prefix. */
 struct ExternalProbe {
@@ -439,6 +457,85 @@ void scheduler_hex(std::span<const std::byte> input, std::span<char> output) noe
 [[nodiscard]] bool same_endpoint(const state::gameplay::Endpoint& left,
                                  const state::gameplay::Endpoint& right) noexcept {
     return left.address == right.address && left.port == right.port;
+}
+
+/** Result of adding one native fragment to its bounded packet assembly. */
+enum class FragmentResult : std::uint8_t { invalid, held, complete };
+
+/**
+ * Adds one established-packet fragment and returns the original packet once every piece arrived.
+ * Ghidra `FUN_1416D4B00` proves the six-bit set id, eight-set overlap, 1,238-byte stride, and the
+ * count/index pair. The reassembled body includes its original marker and unfragmented selector.
+ */
+[[nodiscard]] FragmentResult
+assemble_fragment(const state::gameplay::Endpoint& from,
+                  std::span<const std::byte> payload,
+                  std::uint64_t now,
+                  std::span<std::byte> output,
+                  std::size_t& outputSize,
+                  wire::PacketFragment& decoded) noexcept {
+    outputSize = 0;
+    if (!wire::decode_packet_fragment(payload, decoded)) {
+        return FragmentResult::invalid;
+    }
+
+    AcquireSRWLockExclusive(&g_lock);
+    FragmentAssembly* assembly = nullptr;
+    FragmentAssembly* free = nullptr;
+    FragmentAssembly* oldest = &g_fragmentAssemblies.front();
+    for (FragmentAssembly& candidate : g_fragmentAssemblies) {
+        if (candidate.active && same_endpoint(candidate.endpoint, from)
+            && candidate.setId == decoded.setId && candidate.guard == decoded.connectionSequenceLow2
+            && candidate.count == decoded.count) {
+            assembly = &candidate;
+            break;
+        }
+        if (!candidate.active && free == nullptr) {
+            free = &candidate;
+        }
+        if (candidate.touched < oldest->touched) {
+            oldest = &candidate;
+        }
+    }
+    if (assembly == nullptr) {
+        assembly = free == nullptr ? oldest : free;
+        *assembly = {};
+        assembly->endpoint = from;
+        assembly->setId = decoded.setId;
+        assembly->guard = decoded.connectionSequenceLow2;
+        assembly->count = decoded.count;
+        assembly->active = true;
+    }
+    assembly->touched = now;
+    const std::size_t index = decoded.index;
+    if (!assembly->received[index]) {
+        std::memcpy(assembly->bytes.data() + index * wire::kPacketFragmentStride,
+                    decoded.body.data(),
+                    decoded.body.size());
+        assembly->sizes[index] = decoded.body.size();
+        assembly->received[index] = true;
+    }
+
+    bool complete = true;
+    for (std::size_t piece = 0; piece < assembly->count; ++piece) {
+        complete = complete && assembly->received[piece];
+    }
+    if (!complete) {
+        ReleaseSRWLockExclusive(&g_lock);
+        return FragmentResult::held;
+    }
+    const std::size_t size = (assembly->count - 1U) * wire::kPacketFragmentStride
+                             + assembly->sizes[assembly->count - 1U];
+    if (size == 0 || size > output.size()) {
+        *assembly = {};
+        ReleaseSRWLockExclusive(&g_lock);
+        return FragmentResult::invalid;
+    }
+    std::memcpy(output.data(), assembly->bytes.data(), size);
+    outputSize = size;
+    *assembly = {};
+    ReleaseSRWLockExclusive(&g_lock);
+    return FragmentResult::complete;
 }
 
 /** @return Peer for one endpoint, or null. Callers already hold the lock. */
@@ -938,8 +1035,18 @@ void consume_established(const state::gameplay::Endpoint& from,
     }
     ExternalProbe external{};
     const bool externalReadable = probe_external(payload, packet.externalBitOffset, external);
-    std::array<std::uint8_t, kMessageReportCapacity> delivered{};
-    std::size_t deliveredCount = 0;
+    const std::size_t messageCapacity = packet.large.count + packet.small.count;
+    std::unique_ptr<wire::AssembledMessage[]> bodies;
+    if (messageCapacity != 0) {
+        bodies.reset(new (std::nothrow) wire::AssembledMessage[messageCapacity]);
+        if (bodies == nullptr) {
+            report(core::log::Level::warn,
+                   "ev=gameplay stage=packet result=drop reason=message-storage count=%zu",
+                   messageCapacity);
+            return;
+        }
+    }
+    std::size_t bodyCount = 0;
     unsigned stage = 0;
     bool queueCleared = false;
     std::uint16_t clearedPacket = 0;
@@ -953,7 +1060,6 @@ void consume_established(const state::gameplay::Endpoint& from,
     // One link per endpoint, so the packet's two-bit guard identifies nothing this host has to
     // resolve. Every session-scoped message names its own session instead.
     state::gameplay::PeerLink* peer = find_locked(from);
-    std::array<wire::AssembledMessage, kMessageReportCapacity> bodies{};
     if (peer != nullptr) {
         sessionId = sole_session_locked(*peer);
         if (packet.ack.outboundHeadPresent) {
@@ -968,26 +1074,22 @@ void consume_established(const state::gameplay::Endpoint& from,
             peer->schedulerSignature = external.schedulerSignature;
         }
         largeDropped = wire::accept_records(packet.large, peer->large);
-        largeNext = peer->large.nextSequence;
         largeFirst = packet.large.count == 0 ? 0 : packet.large.records[0].sequence;
         wire::accept_records(packet.small, peer->small);
         wire::AssembledMessage message{};
         while (wire::drain_message(peer->large, message)) {
             apply_message(*peer, message);
-            if (deliveredCount < delivered.size()) {
-                delivered[deliveredCount] = message.id;
-                bodies[deliveredCount] = message;
-                ++deliveredCount;
+            if (bodyCount < messageCapacity) {
+                bodies[bodyCount++] = message;
             }
         }
         while (wire::drain_message(peer->small, message)) {
             apply_message(*peer, message);
-            if (deliveredCount < delivered.size()) {
-                delivered[deliveredCount] = message.id;
-                bodies[deliveredCount] = message;
-                ++deliveredCount;
+            if (bodyCount < messageCapacity) {
+                bodies[bodyCount++] = message;
             }
         }
+        largeNext = peer->large.nextSequence;
         stage = static_cast<unsigned>(peer->stage);
     }
     ReleaseSRWLockExclusive(&g_lock);
@@ -1061,14 +1163,14 @@ void consume_established(const state::gameplay::Endpoint& from,
                    static_cast<unsigned>(external.schedulerSignature.views[2].tag));
         }
     }
-    for (std::size_t index = 0; index < deliveredCount; ++index) {
+    for (std::size_t index = 0; index < bodyCount; ++index) {
+        const wire::AssembledMessage& body = bodies[index];
         report(core::log::Level::info,
                "ev=gameplay stage=message result=ok id=%u peerstage=%u",
-               static_cast<unsigned>(delivered[index]),
+               static_cast<unsigned>(body.id),
                stage);
         // The connect establish belongs to this layer and apply_message already took it, so
         // handing it to the group layer would only report it as undecoded on every connection.
-        const wire::AssembledMessage& body = bodies[index];
         if (body.id == static_cast<std::uint8_t>(wire::ConnectId::establish)) {
             continue;
         }
@@ -1148,6 +1250,32 @@ void deliver(const state::gameplay::Endpoint& from,
     }
     if ((std::to_integer<unsigned>(payload[0]) >> kMarkerShift) != 0) {
         consume_container(from, payload, now);
+        return;
+    }
+    // The second bit selects the native fragment header. Each piece carries a byte-aligned slice
+    // of the original unfragmented packet, so only the completed body reaches the normal decoder.
+    if (((std::to_integer<unsigned>(payload[0]) >> (kMarkerShift - 1U)) & 1U) != 0) {
+        std::array<std::byte, wire::kFragmentedPacketCapacity> assembled{};
+        std::size_t assembledSize = 0;
+        wire::PacketFragment fragment{};
+        const FragmentResult result =
+            assemble_fragment(from, payload, now, assembled, assembledSize, fragment);
+        report(result == FragmentResult::invalid ? core::log::Level::warn
+                                                 : core::log::Level::debug,
+               "ev=gameplay stage=fragment result=%s set=%u guard=%u index=%u count=%u "
+               "bytes=%zu assembled=%zu",
+               result == FragmentResult::complete
+                   ? "complete"
+                   : (result == FragmentResult::held ? "held" : "invalid"),
+               static_cast<unsigned>(fragment.setId),
+               static_cast<unsigned>(fragment.connectionSequenceLow2),
+               static_cast<unsigned>(fragment.index),
+               static_cast<unsigned>(fragment.count),
+               fragment.body.size(),
+               assembledSize);
+        if (result == FragmentResult::complete) {
+            consume_established(from, {assembled.data(), assembledSize}, now);
+        }
         return;
     }
     consume_established(from, payload, now);
