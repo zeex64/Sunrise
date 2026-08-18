@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 5b92c2004519ab0910776dd8872c797f3030b03e839fb66726f18fdf206118f0
+SHA-256 f00642231c0c1f4ef5debef06e1a4573b87bafe615443d784a72f4fe5391639e
 ```
 
 ## Confirmed high-level path
@@ -434,6 +434,14 @@ The sobject creation path narrows the server payload substantially:
 - `FUN_140A020E0` is the sobject RSAT loader and contains the diagnostic
   `sobject rsat loader globals is full!`. The first create field is therefore an sobject RSAT id,
   not an arbitrary entity or activity hash.
+- `FUN_140A01030`, `FUN_140A01080`, and `FUN_140A00FE0` index that id with the normal package-tag
+  split: the low 13 bits select an entry and the higher bits select the package table. They return
+  the resolved native resource handle, baseline byte size, and baseline bit size respectively.
+  The RSAT field is therefore a `0x80800000`-based installed tag handle, not a Bungie API hash.
+- `FUN_140A020E0` only queues the RSAT in the loader's bounded 0x800-entry list. `FUN_140A02590`
+  and `FUN_140A02B50` later batch those ids into native resource-manager requests whose entries are
+  `{type=2, id=RSAT}`. A usable create therefore requires that exact installed resource tag to be
+  present in the client's package set; substituting an API hash cannot reach object construction.
 - `FUN_141723FD0` derives the remaining local creation data from the resolved RSAT definition.
   The id must already name valid loadable sobject data on the client.
 - `FUN_1417269D0` is the matching native outbound create-buffer constructor. It zeroes all 16
@@ -525,6 +533,13 @@ first 16 bytes of both native dirty/sent mask objects, the component scratch bas
 delta, accumulator state, and up to 64 flushed bytes. The hook calls the original encoder first
 and never edits its context, masks, or writer.
 
+The server's existing external-body probe now also records the scheduler body after its two
+presence bits as `stage=scheduler-body`. It retains up to 256 bytes, preserves a final partial byte
+as an MSB-aligned value, and reports the original/captured bit counts plus a truncation flag. This
+replaces the old need to reconstruct a potentially 1500-bit native scheduler frame from only four
+64-bit prefix words; it is read-only and is emitted only after the server considers the view
+accepted and the client declares a scheduler body.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -534,6 +549,7 @@ Client hooks now cover:
 - Live replicated-object codec count, vtable, create, and update entry points.
 - Bounded, read-only native sobject creation inputs and their exact encoded bit deltas.
 - Bounded, read-only native sobject update masks and their exact encoded bit deltas.
+- Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
 - Membership-to-view synchronization predicates.
@@ -617,5 +633,6 @@ view-state
 view-codecs
 sobject-create
 sobject-update
+scheduler-body
 activity-host-decode
 ```

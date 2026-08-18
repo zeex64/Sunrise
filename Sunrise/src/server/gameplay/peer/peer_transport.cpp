@@ -62,6 +62,8 @@ constexpr std::size_t kMessageReportCapacity = 8;
 constexpr std::size_t kExternalProbeWords = 4;
 /** Bits retained in each diagnostic scheduler-prefix word. */
 constexpr std::uint8_t kExternalProbeWordBits = 64;
+/** Complete scheduler-body bytes retained for one bounded diagnostic line. */
+constexpr std::size_t kExternalProbeByteCapacity = 256;
 /**
  * Milliseconds between two resends of the same queue. The peer discards a packet more than 128
  * sequences ahead of its window, so this host must not send faster than the peer does.
@@ -77,11 +79,31 @@ std::uint32_t g_channelId{0};
 struct ExternalProbe {
     std::array<std::uint64_t, kExternalProbeWords> words{};
     std::array<std::uint8_t, kExternalProbeWords> widths{};
+    std::array<std::byte, kExternalProbeByteCapacity> schedulerBytes{};
     std::size_t schedulerBitsBeforeProbe{};
     std::size_t schedulerBitsAfterProbe{};
+    std::size_t schedulerCapturedBits{};
+    std::size_t schedulerByteCount{};
     wire::ExternalStatus status{};
     std::uint8_t wordCount{};
+    std::uint8_t schedulerTailBits{};
 };
+
+/** Converts a bounded scheduler capture to uppercase hexadecimal. */
+void scheduler_hex(std::span<const std::byte> input, std::span<char> output) noexcept {
+    constexpr char kDigits[] = "0123456789ABCDEF";
+    if (output.empty()) {
+        return;
+    }
+    const std::size_t count =
+        input.size() < (output.size() - 1) / 2 ? input.size() : (output.size() - 1) / 2;
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto value = std::to_integer<std::uint8_t>(input[index]);
+        output[index * 2] = kDigits[value >> 4];
+        output[index * 2 + 1] = kDigits[value & 0x0F];
+    }
+    output[count * 2] = '\0';
+}
 
 /**
  * Reads the external trailer without accepting or mutating any replication state.
@@ -97,6 +119,27 @@ struct ExternalProbe {
         return false;
     }
     candidate.schedulerBitsBeforeProbe = reader.remaining_bits();
+    bits::Reader capture = reader;
+    while (candidate.schedulerByteCount < candidate.schedulerBytes.size()
+           && capture.remaining_bits() >= kByteBits) {
+        std::uint64_t value = 0;
+        if (!capture.read(kByteBits, value)) {
+            return false;
+        }
+        candidate.schedulerBytes[candidate.schedulerByteCount++] = static_cast<std::byte>(value);
+        candidate.schedulerCapturedBits += kByteBits;
+    }
+    if (candidate.schedulerByteCount < candidate.schedulerBytes.size()
+        && capture.remaining_bits() != 0) {
+        candidate.schedulerTailBits = static_cast<std::uint8_t>(capture.remaining_bits());
+        std::uint64_t value = 0;
+        if (!capture.read(candidate.schedulerTailBits, value)) {
+            return false;
+        }
+        candidate.schedulerBytes[candidate.schedulerByteCount++] =
+            static_cast<std::byte>(value << (kByteBits - candidate.schedulerTailBits));
+        candidate.schedulerCapturedBits += candidate.schedulerTailBits;
+    }
     while (candidate.wordCount < candidate.words.size() && reader.remaining_bits() != 0) {
         const std::size_t remaining = reader.remaining_bits();
         const auto width = static_cast<std::uint8_t>(
@@ -691,6 +734,21 @@ void consume_established(const state::gameplay::Endpoint& from,
                    static_cast<unsigned long long>(external.words[3]),
                    external.schedulerBitsAfterProbe);
         }
+        if (viewAccepted && external.status.schedulerPresent) {
+            std::array<char, kExternalProbeByteCapacity * 2 + 1> schedulerHex{};
+            scheduler_hex(std::span<const std::byte>{external.schedulerBytes}.first(
+                              external.schedulerByteCount),
+                          schedulerHex);
+            report(core::log::Level::info,
+                   "ev=gameplay stage=scheduler-body bits=%zu captured=%zu bytes=%zu "
+                   "tail=%u truncated=%u hex=%s",
+                   external.schedulerBitsBeforeProbe,
+                   external.schedulerCapturedBits,
+                   external.schedulerByteCount,
+                   static_cast<unsigned>(external.schedulerTailBits),
+                   external.schedulerCapturedBits < external.schedulerBitsBeforeProbe ? 1U : 0U,
+                   schedulerHex.data());
+        }
     }
     for (std::size_t index = 0; index < deliveredCount; ++index) {
         report(core::log::Level::info,
@@ -757,8 +815,7 @@ void consume_established(const state::gameplay::Endpoint& from,
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)
         || !wire::write_empty_queue(writer)
-        || !wire::write_external_status(writer, peer.view.bound, false)
-        || !writer.finish(size)) {
+        || !wire::write_external_status(writer, peer.view.bound, false) || !writer.finish(size)) {
         return false;
     }
     return send_transport(peer.endpoint, {buffer.data(), size});
