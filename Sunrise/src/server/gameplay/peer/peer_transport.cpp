@@ -64,8 +64,6 @@ constexpr std::size_t kExternalProbeWords = 4;
 constexpr std::uint8_t kExternalProbeWordBits = 64;
 /** Complete scheduler-body bytes retained for one bounded diagnostic line. */
 constexpr std::size_t kExternalProbeByteCapacity = 256;
-/** Schema 0x80806AEA owns at most three registered-view signature entries. */
-constexpr std::size_t kSchedulerSignatureViewCapacity = 3;
 /**
  * Milliseconds between two resends of the same queue. The peer discards a packet more than 128
  * sequences ahead of its window, so this host must not send faster than the peer does.
@@ -77,12 +75,6 @@ std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_p
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
 std::uint32_t g_channelId{0};
 
-/** One 72-bit registered-view entry in scheduler signature schema 0x80806AEA. */
-struct SchedulerSignatureView {
-    std::uint64_t key{};
-    std::uint8_t tag{};
-};
-
 /** Read-only summary of the native simulation gate and replication-scheduler prefix. */
 struct ExternalProbe {
     std::array<std::uint64_t, kExternalProbeWords> words{};
@@ -92,13 +84,11 @@ struct ExternalProbe {
     std::size_t schedulerBitsAfterProbe{};
     std::size_t schedulerCapturedBits{};
     std::size_t schedulerByteCount{};
-    std::array<std::uint64_t, 2> schedulerSignatureHeader{};
-    std::array<SchedulerSignatureView, kSchedulerSignatureViewCapacity> schedulerSignatureViews{};
+    state::gameplay::SchedulerSignature schedulerSignature{};
     std::size_t schedulerSignatureBits{};
     wire::ExternalStatus status{};
     std::uint8_t wordCount{};
     std::uint8_t schedulerTailBits{};
-    std::uint8_t schedulerSignatureViewCount{};
     bool schedulerSignatureUpdate{};
     bool schedulerSignatureValid{};
 };
@@ -122,21 +112,51 @@ void probe_scheduler_signature(bits::Reader reader, ExternalProbe& output) noexc
     }
 
     std::uint64_t count = 0;
-    if (!reader.read(64, output.schedulerSignatureHeader[0])
-        || !reader.read(64, output.schedulerSignatureHeader[1]) || !reader.read(2, count)
-        || count > output.schedulerSignatureViews.size()) {
+    if (!reader.read(64, output.schedulerSignature.header[0])
+        || !reader.read(64, output.schedulerSignature.header[1]) || !reader.read(2, count)
+        || count > output.schedulerSignature.views.size()) {
         return;
     }
-    output.schedulerSignatureViewCount = static_cast<std::uint8_t>(count);
+    output.schedulerSignature.viewCount = static_cast<std::uint8_t>(count);
     for (std::size_t index = 0; index < count; ++index) {
         std::uint64_t tag = 0;
-        if (!reader.read(64, output.schedulerSignatureViews[index].key) || !reader.read(8, tag)) {
+        if (!reader.read(64, output.schedulerSignature.views[index].key) || !reader.read(8, tag)) {
             return;
         }
-        output.schedulerSignatureViews[index].tag = static_cast<std::uint8_t>(tag);
+        output.schedulerSignature.views[index].tag = static_cast<std::uint8_t>(tag);
     }
     output.schedulerSignatureBits = before - reader.remaining_bits();
+    output.schedulerSignature.present = true;
     output.schedulerSignatureValid = true;
+}
+
+/**
+ * Writes one signature update followed by the proven empty terminators for each registered view.
+ */
+[[nodiscard]] bool
+write_empty_scheduler(bits::Writer& writer,
+                      const state::gameplay::SchedulerSignature& signature) noexcept {
+    if (!signature.present || signature.viewCount == 0
+        || signature.viewCount > signature.views.size() || !writer.write(1, 1)
+        || !writer.write(signature.header[0], 64) || !writer.write(signature.header[1], 64)
+        || !writer.write(signature.viewCount, 2)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < signature.viewCount; ++index) {
+        if (!writer.write(signature.views[index].key, 64)
+            || !writer.write(signature.views[index].tag, 8)) {
+            return false;
+        }
+    }
+    for (std::size_t index = 0; index < signature.viewCount; ++index) {
+        // Event end, mask/control end, entity auxiliary count, entity generation presence,
+        // entity end, and fixed-control absence, in scheduler handler order.
+        if (!writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1)
+            || !writer.write(1, 1) || !writer.write(0, 1)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /** Converts a bounded scheduler capture to uppercase hexadecimal. */
@@ -711,6 +731,8 @@ void consume_established(const state::gameplay::Endpoint& from,
         report(core::log::Level::debug, "ev=gameplay stage=packet result=drop reason=grammar");
         return;
     }
+    ExternalProbe external{};
+    const bool externalReadable = probe_external(payload, packet.externalBitOffset, external);
     std::array<std::uint8_t, kMessageReportCapacity> delivered{};
     std::size_t deliveredCount = 0;
     unsigned stage = 0;
@@ -736,6 +758,10 @@ void consume_established(const state::gameplay::Endpoint& from,
         queueCleared = apply_acknowledgement(*peer, packet.ack);
         peer->acknowledgementOwed = true;
         peer->lastTick = now;
+        if (externalReadable && external.schedulerSignatureUpdate
+            && external.schedulerSignatureValid && external.schedulerSignature.present) {
+            peer->schedulerSignature = external.schedulerSignature;
+        }
         largeDropped = wire::accept_records(packet.large, peer->large);
         largeNext = peer->large.nextSequence;
         largeFirst = packet.large.count == 0 ? 0 : packet.large.records[0].sequence;
@@ -763,8 +789,7 @@ void consume_established(const state::gameplay::Endpoint& from,
     if (peer == nullptr) {
         return;
     }
-    ExternalProbe external{};
-    if (probe_external(payload, packet.externalBitOffset, external)) {
+    if (externalReadable) {
         const bool viewAccepted = sessionId != 0 && group::view_accepted(sessionId);
         if (viewAccepted || external.status.gatekeeperEnabled || external.status.schedulerPresent) {
             report(core::log::Level::debug,
@@ -809,15 +834,15 @@ void consume_established(const state::gameplay::Endpoint& from,
                    "e0=0x%016llX/%u e1=0x%016llX/%u e2=0x%016llX/%u",
                    external.schedulerSignatureValid ? 1U : 0U,
                    external.schedulerSignatureBits,
-                   static_cast<unsigned long long>(external.schedulerSignatureHeader[0]),
-                   static_cast<unsigned long long>(external.schedulerSignatureHeader[1]),
-                   static_cast<unsigned>(external.schedulerSignatureViewCount),
-                   static_cast<unsigned long long>(external.schedulerSignatureViews[0].key),
-                   static_cast<unsigned>(external.schedulerSignatureViews[0].tag),
-                   static_cast<unsigned long long>(external.schedulerSignatureViews[1].key),
-                   static_cast<unsigned>(external.schedulerSignatureViews[1].tag),
-                   static_cast<unsigned long long>(external.schedulerSignatureViews[2].key),
-                   static_cast<unsigned>(external.schedulerSignatureViews[2].tag));
+                   static_cast<unsigned long long>(external.schedulerSignature.header[0]),
+                   static_cast<unsigned long long>(external.schedulerSignature.header[1]),
+                   static_cast<unsigned>(external.schedulerSignature.viewCount),
+                   static_cast<unsigned long long>(external.schedulerSignature.views[0].key),
+                   static_cast<unsigned>(external.schedulerSignature.views[0].tag),
+                   static_cast<unsigned long long>(external.schedulerSignature.views[1].key),
+                   static_cast<unsigned>(external.schedulerSignature.views[1].tag),
+                   static_cast<unsigned long long>(external.schedulerSignature.views[2].key),
+                   static_cast<unsigned>(external.schedulerSignature.views[2].tag));
         }
     }
     for (std::size_t index = 0; index < deliveredCount; ++index) {
@@ -881,11 +906,15 @@ void consume_established(const state::gameplay::Endpoint& from,
     std::array<std::byte, kReplyCapacity> buffer{};
     bits::Writer writer(buffer);
     const auto guard = static_cast<std::uint8_t>(peer.localConnectionSequence % kSequenceGuardBase);
+    const bool schedulerPresent = peer.view.bound && peer.schedulerSignature.present
+                                  && peer.schedulerSignature.viewCount != 0;
     std::size_t size = 0;
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)
         || !wire::write_empty_queue(writer)
-        || !wire::write_external_status(writer, peer.view.bound, false) || !writer.finish(size)) {
+        || !wire::write_external_status(writer, peer.view.bound, schedulerPresent)
+        || (schedulerPresent && !write_empty_scheduler(writer, peer.schedulerSignature))
+        || !writer.finish(size)) {
         return false;
     }
     return send_transport(peer.endpoint, {buffer.data(), size});

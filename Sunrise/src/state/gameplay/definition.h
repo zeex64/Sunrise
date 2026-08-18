@@ -94,6 +94,23 @@ struct ViewSignature {
     bool bound{};
 };
 
+/** A scheduler signature contains at most three registered native views. */
+inline constexpr std::size_t kSchedulerSignatureViewCapacity = 3;
+
+/** One 72-bit registered-view entry in scheduler signature schema 0x80806AEA. */
+struct SchedulerSignatureView {
+    std::uint64_t key{};
+    std::uint8_t tag{};
+};
+
+/** Exact client scheduler signature retained for a guarded empty-frame echo. */
+struct SchedulerSignature {
+    std::array<std::uint64_t, 2> header{};
+    std::array<SchedulerSignatureView, kSchedulerSignatureViewCapacity> views{};
+    std::uint8_t viewCount{};
+    bool present{};
+};
+
 /**
  * Peer connection stage.
  * The numbers are the engine's own. Do not renumber them.
@@ -205,6 +222,8 @@ struct PeerLink {
     OutboundQueue outbound{};
     /** View signature bound for this peer. Replication is refused until it is bound. */
     ViewSignature view{};
+    /** Client scheduler signature. Empty scheduler output is refused until this is present. */
+    SchedulerSignature schedulerSignature{};
     /** True while a received packet still has to be acknowledged. */
     bool acknowledgementOwed{};
     std::uint64_t lastTick{};

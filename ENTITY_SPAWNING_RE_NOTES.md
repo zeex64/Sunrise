@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 e0f5c5bb179c2b42e1a691b1e1fba080be70b669fe2ca494c31ad40c4f522441
+SHA-256 05953d6c1bcbc0a52916cb28fb8ffc3a5dbebf9902aafd4357683aadc4a4b876
 ```
 
 ## Confirmed high-level path
@@ -255,16 +255,17 @@ service-transport path and is expected.
   guess it or advance first.
 - `FUN_1416F6810` proves stages 3 through 5 are initiator-driven. Sunrise's receptor echoes each
   stage and marks the view bound only after both halves reach stage 5.
-- Once Sunrise marks the view bound, established packets already send the native simulation
-  gatekeeper bit as enabled. The following replication-scheduler presence bit remains deliberately
-  clear; encoding that scheduler frame and its entity-create body is the next protocol layer after
-  the view is proven.
+- Once Sunrise marks the view bound, established packets send the native simulation gatekeeper bit
+  as enabled. The guarded scheduler path now keeps its presence bit clear until this peer has also
+  supplied a valid nonzero registered-view signature; it then echoes that exact signature in an
+  empty scheduler frame. Entity records remain disabled.
 
 ## Replication scheduler and entity lane
 
-The scheduler is now mapped far enough to identify the exact entity record path, but not yet far
-enough to safely emit a fabricated enemy. Sending a malformed scheduler body would desynchronize
-the entire established packet bitstream, so Sunrise continues to publish `schedulerPresent=0`.
+The scheduler is now mapped far enough to exchange a self-gated empty frame and identify the exact
+entity record path, but not yet far enough to safely emit a fabricated enemy. Sunrise publishes
+`schedulerPresent=1` only after both view binding and a captured nonzero client scheduler signature;
+otherwise it keeps the bit clear.
 
 ### Scheduler ownership and framing
 
@@ -563,6 +564,11 @@ The same copied-reader path now decodes a present signature-update prefix as
 key/tag slots. It runs even before the view is accepted so an early one-shot client signature is
 not lost; it still does not consume the live packet reader or accept scheduler state.
 
+The decoded signature is also persisted on the sending peer. After that peer's native view is
+bound and its signature count is nonzero, outgoing acknowledgements echo the exact header and
+key/tag entries, followed only by the six proven empty-lane bits per registered view. This opens a
+runtime test of the 209-bit one-view frame without enabling any entity-create data.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -612,23 +618,25 @@ The current checkpoint includes work in:
    index `0`, and echoes stages 2 through 5.
 2. Confirm the server reports `stage=view result=bound` and the external probe reports
    `view=1 gate=1`.
-3. Read the new `view-slots ... scheduler[...]` fields, including `lcount`/`rcount` and their
-   key/tag entries, then separate the `1 + 6 * views` minimum frame from any auxiliary
-   entity-index/generation prelude bits.
-4. Confirm `view-codecs count=4` and that the four runtime RVAs match the static `sobject`, `squad`,
+3. Confirm `scheduler-signature valid=1 bits=203 count=1`, then verify the client's next
+   `view-slots` snapshot has identical local/remote header, count, key, and tag after Sunrise sends
+   the guarded 209-bit empty frame.
+4. Confirm that empty exchange leaves the native scheduler error-free and fully consumes the six
+   empty-lane bits before enabling any entity data.
+5. Confirm `view-codecs count=4` and that the four runtime RVAs match the static `sobject`, `squad`,
    `player_broadcast`, and `test_entity` registrations.
-5. Read `sobject-create` captures to confirm schema `0x80800014`'s exact RSAT-id bit representation
-   and collect known-valid native sobject exemplars.
-6. Resolve one captured or package-derived RSAT id to an enemy definition and send a minimal
+6. Read `sobject-native` and `sobject-create` captures to collect known-valid installed RSATs and
+   confirm schema `0x80800014`'s exact id representation.
+7. Resolve one captured or package-derived RSAT id to an enemy definition and send a minimal
    create-only kind-0 record, relying on the native codec `+0x80` baseline injection path.
-7. Read `sobject-update` captures to identify which named components are present in an initial
+8. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-8. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+9. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-9. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+10. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
    sobject is accepted; do not assume the squad codec can create the underlying native squad.
-10. Enable the scheduler writer only after an empty frame and one create-only record can be encoded
-    without leaving unread or over-read bits on the native client.
+11. Extend the scheduler writer from the proven empty frame to one create-only record only after
+    the client has accepted the exact signature and terminators without an unread/over-read error.
 
 ## Build and verification
 
