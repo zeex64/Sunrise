@@ -194,12 +194,11 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
-/** Writes the six proven empty handler terminators for one registered view. */
+/** Writes the five observed empty-handler bits for one registered view. */
 [[nodiscard]] bool write_empty_scheduler_view(bits::Writer& writer) noexcept {
-    // Event end, mask/control end, entity auxiliary count, entity generation presence,
-    // entity end, and fixed-control absence, in scheduler handler order.
-    return writer.write(0, 1) && writer.write(0, 1) && writer.write(0, 1) && writer.write(0, 1)
-           && writer.write(1, 1) && writer.write(0, 1);
+    // The native entity-list boundary begins after a combined three-zero handler prelude.
+    return writer.write(0, 1) && writer.write(0, 1) && writer.write(0, 1) && writer.write(1, 1)
+           && writer.write(0, 1);
 }
 
 /** Writes one direct, create-only kind-0 sobject record into the entity handler. */
@@ -208,8 +207,8 @@ write_scheduler_signature(bits::Writer& writer,
     // Trace only the bounded native decoder calls that follow this guarded server emission.
     client::hooks::network::entity_slot_probe::arm_decoder_trace();
 
-    // Empty event and mask/control handlers, then the empty auxiliary-entity prelude.
-    if (!writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1)
+    // The exact native boundary consumes three zero bits before entering the entity list.
+    if (!writer.write(0, 1) || !writer.write(0, 1)
         || !writer.write(0, 1)
         // Entity lane continues with a direct (non-anchor) 17-bit handle.
         || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(plan.slot, 13)

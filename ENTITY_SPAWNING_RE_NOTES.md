@@ -396,11 +396,12 @@ The observed totals therefore agree exactly with the schema:
 | 3 | 346 bits | 347 bits |
 
 For one registered view the signature object is therefore 202 bits. `FUN_14171EFE0` writes the
-entity lane's one-bit end marker as one, while `FUN_14171F020` writes the other three lanes' end
-markers as zero. The entity prelude contributes a zero one-bit auxiliary count and a zero one-bit
-generation-presence flag. A signature-update-only empty scheduler frame for one view is exactly
-`1 + 202 + 6 = 209` bits. In general, a signature-update-only empty frame is
-`131 + 78 * count` bits, so the three-entry EDZ form is 365 bits.
+entity lane's one-bit end marker as one, while `FUN_14171F020` writes the other lanes' zero
+terminators. Static inspection initially attributed four zero bits to the combined handlers before
+`FUN_141718510`; the armed native-reader trace below proves the actual wire boundary consumes
+three. A signature-update-only empty scheduler frame for one view is therefore exactly
+`1 + 202 + 5 = 208` bits. In general, a signature-update-only empty frame is
+`131 + 77 * count` bits, so the three-entry EDZ form is 362 bits.
 
 The empty-stream terminators are also recovered from the four inbound decoders:
 
@@ -411,9 +412,10 @@ The empty-stream terminators are also recovered from the four inbound decoders:
 - Fixed control lane (`FUN_141718CB0`): a zero presence bit means no object.
 
 Therefore the minimum known-signature, no-record scheduler body costs one signature-update bit plus
-six bits per registered view. A view can additionally publish one auxiliary entity index and an
-8-bit generation in the entity prelude even when it schedules no entity record. The remaining
-prerequisite is knowing the client's registered-view count and current scheduler signature. The
+five observed handler bits per registered view. A view can additionally publish one auxiliary
+entity index and an 8-bit generation in the entity prelude even when it schedules no entity record.
+The remaining prerequisite is knowing the client's registered-view count and current scheduler
+signature. The
 `view-slots` now follows `view + 0x68 -> owner + 0x38`, logging the scheduler view count,
 local/remote in-memory signature objects, and signature flags.
 
@@ -484,24 +486,23 @@ one it reads the eight-bit cell. A server-authored create can therefore force th
 cell independently of the client's current world with the robust two-bit sequence `1,0`. The
 one-bit native minimum `0` is valid only when the current cell is already known to be `0xFFFF`.
 
-For one registered view, a robust create-only kind-0 scheduler frame is therefore 286 bits:
+For one registered view, a robust create-only kind-0 scheduler frame is therefore 285 bits:
 
 ```text
 203 bits  signature-update flag plus one-view signature
-  4 bits  empty event, empty mask/control, zero entity auxiliary count,
-          and zero entity generation-presence flag
+  3 bits  combined empty-handler prelude before the entity-list decoder
  78 bits  direct create-only entity record, including the explicit default-cell prefix
   1 bit   fixed-control absence
 ```
 
 The 78-bit record consists of lane-continue `0`, direct selector `1`, the 17-bit entity handle,
 six explicit create-only flags, default-cell `1,0`, the 50-bit kind-0 core body, and lane-end `1`.
-If the current cell is independently proven to be `0xFFFF`, the unchanged-cell form is 285 bits.
+If the current cell is independently proven to be `0xFFFF`, the unchanged-cell form is 284 bits.
 The compact single-bit flag form is update-only and cannot represent this create.
 
-For a dynamic signature count, the target view replaces its six-bit empty body with the 83-bit
+For a dynamic signature count, the target view replaces its five-bit empty body with the 82-bit
 create body, adding 77 bits to the empty frame. The currently expected three-view form is therefore
-`365 + 77 = 442` bits.
+`362 + 77 = 439` bits.
 
 `FUN_14171E240` is the core outbound object-body encoder and `FUN_141718080` is its inbound mirror:
 
@@ -847,6 +848,14 @@ native reader's total/loaded/pending bit state and accumulator before and after
 `FUN_141718510`, plus its result and decoded-record count. This distinguishes an entity-lane
 alignment error, an early body rejection, and trailing unread bits without changing live reader
 state.
+
+The first armed trace resolved that ambiguity. At the server-authored create boundary,
+`FUN_141718510` returned result 2 with count 0 after consuming exactly 19 bits. That is its
+`0,0` anchor form followed by one 17-bit handle; it never entered `FUN_141717EB0`. The reader
+accumulator also began with `00`, while Sunrise intended `0,1` for a direct record. Therefore
+the combined handler prefix contained one extra zero immediately before the entity lane. Sunrise
+now emits three zero prefix bits instead of four for both empty and create views, moving the direct
+selector to the exact native boundary without changing the proven 78-bit entity record.
 
 ## Instrumentation added
 
