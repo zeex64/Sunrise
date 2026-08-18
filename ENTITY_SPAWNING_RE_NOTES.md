@@ -835,6 +835,19 @@ wire bits with the native logical count/key/tag list only when the retained 16-b
 the current scheduler value. This keeps variable-length encoding and logical lane identity
 separate and prevents stale signatures from selecting a recycled view.
 
+The first exact-signature emission reached the intended namespace-2 scheduler lane. The server
+reported `stage=entity-create-out result=sent`, and the client accepted the echoed remote
+signature and logical view entry. It then reported that the replication scheduler prematurely
+stopped reading the packet; slot 13 remained pristine and no entity/create codec boundary fired.
+This moves the fault past signature framing and lane selection into the four-handler body.
+
+The entity-list hook now arms only when the server writes a guarded create and records up to four
+subsequent namespace-2 decoder calls as `stage=entity-list-decode`. Each report includes the
+native reader's total/loaded/pending bit state and accumulator before and after
+`FUN_141718510`, plus its result and decoded-record count. This distinguishes an entity-lane
+alignment error, an early body rejection, and trailing unread bits without changing live reader
+state.
+
 ## Instrumentation added
 
 Client hooks now cover:

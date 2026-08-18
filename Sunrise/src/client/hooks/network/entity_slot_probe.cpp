@@ -27,6 +27,7 @@ constexpr std::size_t kFreeBitsetOffset = 0xC118;
 constexpr std::size_t kOccupiedBitsetOffset = 0xC520;
 
 std::array<std::atomic_uint64_t, kSeenSnapshotCapacity> g_seenSnapshots{};
+std::atomic_uint32_t g_decodeTraceBudget{};
 SRWLOCK g_captureLock{SRWLOCK_INIT};
 std::array<ViewCapture, kViewCaptureCapacity> g_viewCaptures{};
 std::size_t g_captureCursor{};
@@ -49,6 +50,78 @@ struct Snapshot {
     std::array<Candidate, kCandidateCapacity> candidates{};
     std::size_t candidateCount{};
 };
+
+/** Native bit-reader fields needed to isolate one entity-list decode. */
+struct ReaderSnapshot {
+    const std::byte* begin{};
+    const std::byte* end{};
+    std::int32_t loadedBits{};
+    std::int32_t totalBits{};
+    std::uint64_t accumulator{};
+    std::uint32_t pendingBits{};
+    const std::byte* cursor{};
+};
+
+/** Reads the native reader without changing its cursor or accumulator. */
+[[nodiscard]] bool inspect_reader(const void* readerAddress, ReaderSnapshot& output) noexcept {
+    output = {};
+    if (readerAddress == nullptr) {
+        return false;
+    }
+    __try {
+        const auto* const bytes = static_cast<const std::byte*>(readerAddress);
+        std::memcpy(&output.begin, bytes, sizeof output.begin);
+        std::memcpy(&output.end, bytes + 0x08, sizeof output.end);
+        std::memcpy(&output.loadedBits, bytes + 0x20, sizeof output.loadedBits);
+        std::memcpy(&output.totalBits, bytes + 0x24, sizeof output.totalBits);
+        std::memcpy(&output.accumulator, bytes + 0x28, sizeof output.accumulator);
+        std::memcpy(&output.pendingBits, bytes + 0x30, sizeof output.pendingBits);
+        std::memcpy(&output.cursor, bytes + 0x38, sizeof output.cursor);
+        return output.pendingBits <= 64 && output.begin != nullptr
+               && reinterpret_cast<std::uintptr_t>(output.end)
+                      >= reinterpret_cast<std::uintptr_t>(output.begin);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        output = {};
+        return false;
+    }
+}
+
+/** Resolves the authoritative manager and namespace from the decoder context. */
+[[nodiscard]] const void* manager_from_context(const void* context,
+                                               std::int32_t& namespaceId) noexcept {
+    namespaceId = -1;
+    if (context == nullptr) {
+        return nullptr;
+    }
+    const void* manager = nullptr;
+    __try {
+        const auto* const bytes = static_cast<const std::byte*>(context);
+        std::memcpy(&manager, bytes + 0x10, sizeof manager);
+        if (manager != nullptr) {
+            const std::byte* provider = nullptr;
+            std::memcpy(&provider, static_cast<const std::byte*>(manager) + 8, sizeof provider);
+            if (provider != nullptr) {
+                std::memcpy(&namespaceId, provider + 8, sizeof namespaceId);
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        manager = nullptr;
+        namespaceId = -1;
+    }
+    return manager;
+}
+
+/** Claims one armed decoder report without allowing concurrent calls to exceed the budget. */
+[[nodiscard]] bool claim_decode_trace() noexcept {
+    std::uint32_t budget = g_decodeTraceBudget.load(std::memory_order_relaxed);
+    while (budget != 0) {
+        if (g_decodeTraceBudget.compare_exchange_weak(
+                budget, budget - 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 /** @return Population count without depending on compiler-specific intrinsics. */
 [[nodiscard]] unsigned bit_count(std::uint32_t value) noexcept {
@@ -227,19 +300,66 @@ __declspec(noinline) int __fastcall decode_list(void* context,
     coordinator::CallLease lease{};
     coordinator::g_callIngress(lease, HookSlot::entitySlotDecoder, coordinator::ConsumerKind::none);
     const auto call = reinterpret_cast<Decoder>(lease.original);
+    ReaderSnapshot before{};
+    ReaderSnapshot after{};
+    std::int32_t namespaceId = -1;
+    const void* manager = nullptr;
+    bool trace = false;
     int result = 0;
     __try {
+        if (lease.accepting) {
+            manager = manager_from_context(context, namespaceId);
+            trace = namespaceId == 2 && g_decodeTraceBudget.load(std::memory_order_relaxed) != 0
+                    && inspect_reader(reader, before) && claim_decode_trace();
+        }
         if (call != nullptr) {
             result = call(context, view, control, reader, capacity, records, count);
         }
-        if (lease.accepting && context != nullptr) {
-            const void* manager = nullptr;
+        if (trace) {
+            const bool afterReadable = inspect_reader(reader, after);
+            int decodedCount = -1;
             __try {
-                const auto* const bytes = static_cast<const std::byte*>(context);
-                std::memcpy(&manager, bytes + 0x10, sizeof manager);
+                if (count != nullptr) {
+                    decodedCount = *count;
+                }
             } __except (EXCEPTION_EXECUTE_HANDLER) {
-                manager = nullptr;
+                decodedCount = -1;
             }
+            std::array<char, 768> line{};
+            const int written = std::snprintf(
+                line.data(),
+                line.size(),
+                "ev=gameplay stage=entity-list-decode namespace=%d result=%d count=%d "
+                "capacity=%d readable=%u consumed=%d "
+                "before[total=%d loaded=%d pending=%u accum=0x%016llX cursor=%p end=%p] "
+                "after[total=%d loaded=%d pending=%u accum=0x%016llX cursor=%p end=%p]",
+                namespaceId,
+                result,
+                decodedCount,
+                capacity,
+                afterReadable ? 1U : 0U,
+                afterReadable && after.totalBits >= before.totalBits
+                    ? after.totalBits - before.totalBits
+                    : -1,
+                before.totalBits,
+                before.loadedBits,
+                static_cast<unsigned>(before.pendingBits),
+                static_cast<unsigned long long>(before.accumulator),
+                static_cast<const void*>(before.cursor),
+                static_cast<const void*>(before.end),
+                after.totalBits,
+                after.loadedBits,
+                static_cast<unsigned>(after.pendingBits),
+                static_cast<unsigned long long>(after.accumulator),
+                static_cast<const void*>(after.cursor),
+                static_cast<const void*>(after.end));
+            if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+                core::log::write(core::log::Channel::client,
+                                 core::log::Level::info,
+                                 {line.data(), static_cast<std::size_t>(written)});
+            }
+        }
+        if (lease.accepting && manager != nullptr) {
             observe_manager(manager, result);
         }
     } __finally {
@@ -259,6 +379,10 @@ void observe_manager(const void* manager, int result) noexcept {
     if (inspect_manager(manager, snapshot) && record_once(snapshot)) {
         report(snapshot, result);
     }
+}
+
+void arm_decoder_trace() noexcept {
+    g_decodeTraceBudget.store(4, std::memory_order_relaxed);
 }
 
 void observe_view(std::uint64_t token, const void* view) noexcept {
@@ -406,6 +530,7 @@ void reset() noexcept {
     for (std::atomic_uint64_t& seen : g_seenSnapshots) {
         seen.store(0, std::memory_order_relaxed);
     }
+    g_decodeTraceBudget.store(0, std::memory_order_relaxed);
     AcquireSRWLockExclusive(&g_captureLock);
     g_viewCaptures = {};
     g_captureCursor = 0;

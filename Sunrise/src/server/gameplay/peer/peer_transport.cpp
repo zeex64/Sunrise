@@ -205,6 +205,9 @@ write_scheduler_signature(bits::Writer& writer,
 /** Writes one direct, create-only kind-0 sobject record into the entity handler. */
 [[nodiscard]] bool write_entity_create_view(bits::Writer& writer,
                                             const EntityCreatePlan& plan) noexcept {
+    // Trace only the bounded native decoder calls that follow this guarded server emission.
+    client::hooks::network::entity_slot_probe::arm_decoder_trace();
+
     // Empty event and mask/control handlers, then the empty auxiliary-entity prelude.
     if (!writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1)
         || !writer.write(0, 1)

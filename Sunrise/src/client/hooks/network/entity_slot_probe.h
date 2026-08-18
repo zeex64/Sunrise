@@ -42,6 +42,9 @@ struct ViewCapture {
  */
 void observe_manager(const void* manager, int result = 0) noexcept;
 
+/** Arms a bounded trace for the next namespace-2 entity-list decode after server emission. */
+void arm_decoder_trace() noexcept;
+
 /** Captures one view's scheduler key, logical signature entries, and entity-manager state. */
 void observe_view(std::uint64_t token, const void* view) noexcept;
 
