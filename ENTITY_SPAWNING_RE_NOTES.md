@@ -174,47 +174,39 @@ the raw fixed-array wire grammar is correct.
 
 ## Current blocker at the last runtime test
 
-The view creator now runs, but resolves the reflected host to channel slot 1:
+The field-11 address correction resolved native view creation. The latest run proves all of the
+following:
 
 ```text
-slot 0: lifecycle=4 state=5 family=0x0010 address_match=0
-slot 1: lifecycle=2 state=1 family=0x00C0 address_match=1
+membership-decode ... p1_gate=0x10 addr_hit=330
+creator_addr=7F000001007900000000000000000000
+view-create result=ok ... channel=0 valid=1 lifecycle=4 state=5 established=1
+s0[life=4 state=5 family=0x00D0 addr=1]
+view-slots ... views=1 first=00000000047462E0
+view-lookup result=found ... view=00000000047462E0
+view-signature result=captured ... bytes=15
 ```
 
-Interpretation:
-
-- Slot 0 is the healthy, established gameplay channel.
-- Slot 1 is a pending duplicate created for the reflected activity member.
-- Family bits `0x40` and `0x80` attach to slot 1, covering the active public-session families.
-- Because slot 1 never reaches lifecycle 4 / state 5, `FUN_141703910` rejects it.
-- The server's group-level peer-establish echo is not the missing transition; it operates on the
-  already-established gameplay link and does not promote this duplicate.
-
-Latest full native address dumps:
+The remaining blocker is message 40's stage-2 view index. The server reached local stage 2 while
+the client repeatedly reported stage 1:
 
 ```text
-requested/member + 0x142:
-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+server ... stage=view result=queued direction=out local=2 remote=1 index=0 ... list=15
+server ... stage=view result=accepted direction=in local=2 remote=1 got=1 index=0 ... list=0
+```
 
-slot 0:
+`FUN_1416ECF00` is the native local-stage/index selector called by `FUN_1416EB4D0`. On a receptor
+view, incoming stage 2 requires a nonnegative index that differs from `view + 0x80`. The creator
+`FUN_141703910` copies the client's local peer index from its manager into `view + 0x80`; that value
+is `0` in this topology. Sunrise also sent index `0`, so native code rejected the transition before
+the client could advance to stage 2. The server now uses remote host peer index `1`, matching the
+client's `p1[...] create=1` membership/view entry.
+
+The established slot-0 NetAddr remains:
+
+```text
 7F00000100790000000000000000000000000000000000000000000000007F00000100790000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
-
-slot 1:
-0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 ```
-
-The slot-0 blob decodes as expected:
-
-- Local IPv4 at offset 0: `127.0.0.1`
-- Local port at offset 4, little-endian: `0x7900` = `30976`
-- Public IPv4 at offset 30: `127.0.0.1`
-- Public port at offset 34: `30976`
-- NAT type at offset 40: `1` (open)
-- Direct method at the final byte: `0`
-
-The requested address and slot-1 address being all zero explains the duplicate: activity-family
-tracking associates the zero-address member with a separate pending slot, while the established
-method-0 address remains in slot 0.
 
 ## Endpoint clarification
 
@@ -234,7 +226,7 @@ service-transport path and is expected.
 - `FUN_1416F6CE0` exposes the two useful completion thresholds: both sides at stage 2 open the
   compatible-view gate, while both sides at stage 5 mark replication fully open.
 - This matches Sunrise's existing five-stage server state machine and its captured stage-2
-  signature. No handshake-format change is currently indicated.
+  signature. The stage-2 index is the remote host peer index, not the client's local peer index.
 - Once Sunrise marks the view bound, established packets already send the native simulation
   gatekeeper bit as enabled. The following replication-scheduler presence bit remains deliberately
   clear; encoding that scheduler frame and its entity-create body is the next protocol layer after
@@ -277,18 +269,11 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the field-11 build and confirm `membership-decode addr_hit=330` (`0x14A`) with a nonzero
-   `creator_addr` prefix.
-2. Verify that the public-session family bits attach to slot 0, producing:
-
-   ```text
-   s0 family=0x00D0 (existing 0x10 plus family bits 0x40 and 0x80)
-   view-create channel=0 valid=1 lifecycle=4 state=5 established=1
-   ```
-
-3. Confirm `view-create result=ok`, a nonzero view count, and successful message-40 lookup.
-4. Confirm stages 1 through 5 complete and the external probe reports `view=1 gate=1`.
-5. Use the first post-bind `external-probe` scheduler sample to map the replication frame before
+1. Run the index-1 build and confirm the client advances from stage 1 through stage 5 instead of
+   retransmitting stage 1 after the server's stage-2 body.
+2. Confirm the server reports `stage=view result=bound` and the external probe reports
+   `view=1 gate=1`.
+3. Use the first post-bind `external-probe` scheduler sample to map the replication frame before
    adding the first server-authored entity-create body.
 
 ## Build and verification

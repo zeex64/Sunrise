@@ -60,8 +60,8 @@ constexpr std::uint8_t kInitialViewStage = 1;
 constexpr std::uint8_t kSignatureViewStage = 2;
 /** Both sides reaching stage five opens the simulation gatekeeper. */
 constexpr std::uint8_t kFinalViewStage = 5;
-/** This host owns the first replication view on its one admitted channel. */
-constexpr std::int32_t kInitialViewIndex = 0;
+/** Remote host peer index in the client's native membership/view table. */
+constexpr std::int32_t kInitialViewIndex = static_cast<std::int32_t>(kPeerMemberIndex);
 
 /** Per-session host side of native message 40's five-stage handshake. */
 struct ViewHandshake {
