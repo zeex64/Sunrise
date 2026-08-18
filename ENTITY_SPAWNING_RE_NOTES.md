@@ -223,16 +223,19 @@ The established slot-0 NetAddr remains:
 7F00000100790000000000000000000000000000000000000000000000007F00000100790000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 ```
 
-The final available log was captured with the pre-fix DLL. It repeatedly shows the exact receptor
-failure the new state machine removes:
+The earlier pre-fix log repeatedly showed the exact receptor failure the new state machine removes:
 
 ```text
 client ... local=2 local_index=0 remote=1
 server ... result=invalid-stage local=1 remote=0 got=2 index=-1 token=...002
 ```
 
-It does not contain `view-codecs` or the expanded scheduler fields, so it is diagnostic evidence
-for the fix rather than a runtime test of the new build.
+The newest available log file was last written at `2026-08-18 08:56:41`. It proves native
+`view-create result=ok` for families 0 and 1, and both live scheduler slots report one registered
+view. It still contains no `scheduler-signature`, `scheduler-body`, `view-codecs`,
+`sobject-create`, `sobject-update`, `sobject-native`, or `entity-create` capture. It therefore
+predates the newest probes and cannot validate the current diagnostic DLL. No newer runtime log is
+expected while the game is not running.
 
 ## Endpoint clarification
 
@@ -377,9 +380,51 @@ A create-only record's explicit flag prefix is:
 
 With no anchor, `FUN_14171E5A0` next writes the generation-change decision. The create sub-body in
 `FUN_14171E240` then writes an 8-bit object generation, the 2-bit codec kind (`0` for sobject), and
-the codec's creation payload. The entity-handle slot/generation and the correct generation value
-for a server-created object still need a native exemplar; Sunrise must not substitute an arbitrary
-10-bit table index.
+the codec's creation payload.
+
+The first-use generations are now exact. The per-slot manager entry is
+`manager + 0x114 + slot * 6`. `FUN_14171B1C0` initializes all 0x2000 slots with descriptor index
+`0xFFFF`, handle-generation byte `0x10`, reserved-generation byte `0x10`, and object generation
+zero. `FUN_141711D10` allocates a free 13-bit slot without changing its handle generation; it
+changes object generation zero to two, otherwise incrementing while skipping a wrap to zero.
+`FUN_14170FC90` increments the handle generation when the slot is freed. Consequently a pristine
+slot's first wire handle is its 13-bit slot plus four-bit handle generation zero, and its first
+create core carries object generation two. This proves the generation fields, but does not make an
+arbitrary slot safe: Sunrise still needs authoritative vacant-slot tracking before it can choose
+one.
+
+The spatial-cell prefix between the explicit flags and the core body is also exact. The native
+record descriptor stores a 16-bit cell at descriptor offset `+2`, initialized to `0xFFFF`.
+`FUN_14171F200` passes the current world cell as stack argument eight to `FUN_14171E5A0`; it
+defaults to `0xFFFF`, or comes from the current local-world entry at `+0x3C` when one is valid. The
+encoder writes:
+
+```text
+1 bit  record cell differs from current world cell
+1 bit  record cell is less than 0x100              (only when different)
+8 bits record cell                                 (only when different and small)
+```
+
+The receiver in `FUN_141717EB0` mirrors that grammar. When the first bit is zero it copies the
+caller's current cell. When it is one and the second bit is zero it uses `0xFFFF`; when both are
+one it reads the eight-bit cell. A server-authored create can therefore force the global/default
+cell independently of the client's current world with the robust two-bit sequence `1,0`. The
+one-bit native minimum `0` is valid only when the current cell is already known to be `0xFFFF`.
+
+For one registered view, a robust create-only kind-0 scheduler frame is therefore 286 bits:
+
+```text
+203 bits  signature-update flag plus one-view signature
+  4 bits  empty event, empty mask/control, zero entity auxiliary count,
+          and zero entity generation-presence flag
+ 78 bits  direct create-only entity record, including the explicit default-cell prefix
+  1 bit   fixed-control absence
+```
+
+The 78-bit record consists of lane-continue `0`, direct selector `1`, the 17-bit entity handle,
+six explicit create-only flags, default-cell `1,0`, the 50-bit kind-0 core body, and lane-end `1`.
+If the current cell is independently proven to be `0xFFFF`, the unchanged-cell form is 285 bits.
+The compact single-bit flag form is update-only and cannot represent this create.
 
 `FUN_14171E240` is the core outbound object-body encoder and `FUN_141718080` is its inbound mirror:
 
@@ -517,6 +562,70 @@ The resulting local create-buffer layout is:
 The last two fields are derived from the resolved RSAT on both sender and receiver. They are local
 codec bookkeeping, not values Sunrise should choose. The `sobject-create` boundary probe can
 confirm whether a native outbound exemplar uses an identity or runtime-remapped tag.
+
+### Installed-package RSAT investigation
+
+The installed package set contains 528 current package families and roughly 2.9 million entry
+records. A complete metadata scan found zero entries whose package class is `0x80800014`. That id
+is the sobject creation wire schema, not the resource class of an sobject RSAT, so class-scanning
+for it cannot produce spawn definitions.
+
+A concrete combat activity was then traced locally without running the game:
+
+```text
+scenario       0x80F363C6  gambit_badlands_cabal:scenario_client
+scenario class 0x80809994
+slice          0x80F363C5
+registry       0x80F366CD
+objects        0x80FA262B, 0x80F366D7, 0x80F366CC
+```
+
+The large object `0x80F366CC` has registry key `0x2A97039E` and hundreds of placed handles across
+its global and bubble-0 groups. Representative handles follow the existing Sunrise package-reader
+chain exactly:
+
+```text
+0x80809468 indirect handle
+  -> 0x80809B14 redirect
+    -> 0x80809C36 descriptor blob
+```
+
+For example, handle `0x80F366D5` reaches descriptor blob `0x80F366CB`, which declares component
+class `0x80809A3B`, sense schema `0x80807ECC`, and auth schema `0x80807EC9` for registry key
+`0x2A97039E`. Environment handle `0x80FD3CE2` reaches `0x80FD3CE0`, which declares component class
+`0x80806382` with sense/auth schemas `0x8080626A` and `0x8080626B` for the same key.
+
+The full sweep reduced 732 placed handles to 22 distinct component/schema layouts. One layout is
+NPC-specific and crosses the final static RSAT boundary:
+
+| Placed handle | Component descriptor | Object definition (`+0x60`) | Object class | Definition `+0x88` | RSAT class |
+| --- | --- | --- | --- | --- | --- |
+| `0x80FD3CE2` | `0x80FD3CE0` | `0x80EC0835` | `0x80809C0F` | `0x80FCC6C6` | `0x80809BB6` |
+| `0x80FD3CE5` | `0x80FD3CE3` | `0x80EC0839` | `0x80809C0F` | `0x80FCC6C7` | `0x80809BB6` |
+| `0x80FD3CE8` | `0x80FD3CE6` | `0x80EC083D` | `0x80809C0F` | `0x80FCC6C8` | `0x80809BB6` |
+
+All three placed descriptors use component class `0x80806382`, sense schema `0x8080626A`, auth
+schema `0x8080626B`, and slot type 43. Their three `0x80809C0F` definitions are equal-sized
+1,284-byte entries in `w64_npcs_0360_5.pkg`. At exact serialized offset `+0x88`, they carry the
+three sequential 160-byte `0x80809BB6` resources above from `w64_npcs_03e6_5.pkg`. Each RSAT
+resource points back to its corresponding object definition at its own offset `+0x08`.
+
+This matches the native path instruction-for-instruction: `FUN_1417269D0` resolves the replicated
+entity to its native object, and `FUN_1409FED40` copies the tag at the resolved object definition's
+runtime offset `+0x88` into the sobject create buffer. The Ghidra class registry gives
+`0x80809C0F` a decoded runtime size of `0xA0`; `FUN_14055AA30` registers its loader callback and the
+adjacent `0x80809BB6` resource callback. `FUN_140556EC0` then prepares the `0x80809C0F` object's
+RSAT-derived byte-size/alignment layout at runtime offsets `+0x90` and `+0x94`. The package offset
+and runtime access therefore agree: `0x80FCC6C6`, `0x80FCC6C7`, and `0x80FCC6C8` are the first
+statically derived, loadable sobject RSAT candidates for this Cabal activity.
+
+The activity's handles, redirects, descriptor blobs, component classes, schemas, and
+`0x80809C0F` definitions are upstream metadata and must not be substituted into the 40-bit create
+payload. The three `0x80809BB6` candidates still need one native `sobject-native` or
+`sobject-create` capture to identify the exact combatant represented by each and to confirm whether
+the runtime remap table preserves the installed tag on wire. Static derivation is strong enough to
+focus the next run, but entity emission remains disabled until that confirmation and safe slot
+ownership exist.
 
 The generic schema dispatcher now makes that width exact. Schema `0x80800014`'s only field uses
 dispatcher type `0x18`; `FUN_1409F9350` first writes `FUN_1409FEC90`'s six-bit value. An installed
@@ -662,30 +771,30 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the receptor-state-machine build and confirm Sunrise accepts the client's stage 2, adopts
-   index `0`, and echoes stages 2 through 5.
-2. Confirm the server reports `stage=view result=bound` and the external probe reports
-   `view=1 gate=1`.
-3. Confirm `scheduler-signature valid=1 bits=203 count=1`, then verify the client's next
-   `view-slots` snapshot has identical local/remote header, count, key, and tag after Sunrise sends
-   the guarded 209-bit empty frame.
-4. Confirm that empty exchange leaves the native scheduler error-free and fully consumes the six
+1. On the next game run, confirm `scheduler-signature valid=1 bits=203 count=1`, then verify the
+   client's next `view-slots` snapshot has identical local/remote header, count, key, and tag after
+   Sunrise sends the guarded 209-bit empty frame.
+2. Confirm that empty exchange leaves the native scheduler error-free and fully consumes the six
    empty-lane bits before enabling any entity data.
-5. Confirm `view-codecs count=4` and that the four runtime RVAs match the static `sobject`, `squad`,
+3. Confirm `view-codecs count=4` and that the four runtime RVAs match the static `sobject`, `squad`,
    `player_broadcast`, and `test_entity` registrations.
-6. Read `sobject-native`, `entity-create`, and `sobject-create` captures to collect known-valid
+4. Read `sobject-native`, `entity-create`, and `sobject-create` captures to collect known-valid
    installed RSATs, confirm a 50-bit create-only core body, and determine whether schema
    `0x80800014` uses the native tag unchanged or remaps it at runtime.
-7. Resolve one captured or package-derived RSAT id to an enemy definition and send a minimal
-   create-only kind-0 record, relying on the native codec `+0x80` baseline injection path.
-8. Read `sobject-update` captures to identify which named components are present in an initial
+5. Check whether a captured RSAT is `0x80FCC6C6`, `0x80FCC6C7`, or `0x80FCC6C8`, and correlate it
+   with the three known Gambit Badlands NPC object definitions. Confirm which combatant each tag
+   represents and whether the wire remap preserves the installed id.
+6. Add authoritative vacant-slot tracking, then resolve one captured RSAT to an enemy definition
+   and send one guarded 286-bit create-only kind-0 frame using handle generation zero, object
+   generation two, and explicit default cell `1,0`.
+7. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-9. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+8. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-10. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
-   sobject is accepted; do not assume the squad codec can create the underlying native squad.
-11. Extend the scheduler writer from the proven empty frame to one create-only record only after
-    the client has accepted the exact signature and terminators without an unread/over-read error.
+9. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+    sobject is accepted; do not assume the squad codec can create the underlying native squad.
+10. Enable the create writer only after the client has accepted the exact signature and empty
+    terminators without an unread/over-read error.
 
 ## Build and verification
 
