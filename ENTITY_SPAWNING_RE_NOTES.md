@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 93842f833f84ee19f9e97366efbe12f2e84b2ff009a43cf1ec0aa4c45e4617ae
+SHA-256 8d43fe8feb13813625319a74c4dc4c69ecf335c3d08340999d2189d9c7be595a
 ```
 
 ## Confirmed high-level path
@@ -281,6 +281,19 @@ has observed bodies from 105 to more than 1500 bits, commonly beginning with val
 `01C8`, `026C`, and `1830`. These are useful captures, but they are pre-bind scheduling traffic and
 not yet evidence of an accepted server-authored entity.
 
+The empty-stream terminators are also recovered from the four inbound decoders:
+
+- Event lane (`FUN_141718AE0`): a zero presence bit ends the stream.
+- Mask/control lane (`FUN_1417183C0`): a zero presence bit ends the stream.
+- Entity lane: `FUN_141718D90` first reads a one-bit auxiliary-entity count plus an optional 8-bit
+  generation; `FUN_141718510` then uses a one bit as its no-more-records sentinel.
+- Fixed control lane (`FUN_141718CB0`): a zero presence bit means no object.
+
+Therefore a known-signature, no-record scheduler body costs one signature-update bit plus six bits
+per registered view. The remaining prerequisite is knowing the client's registered-view count and
+current scheduler signature. The `view-slots` probe now reads those directly from manager
+`+0x5498`, logging the scheduler view count, local/remote 128-bit signatures, and signature flags.
+
 ### Entity record grammar
 
 `FUN_14171F200` writes scheduled entity records. It chooses either `anchor-index` or
@@ -312,13 +325,33 @@ generation/variant value, and, for one lifecycle form, a signed 16-bit nested-bo
 The remaining static question is the concrete 2-bit codec kind and creation schema used by an AI
 enemy. That must be recovered before Sunrise can construct a valid first create record.
 
+The codec registry layout is now confirmed by `FUN_1416F6590` and `FUN_1416EE180`:
+
+```text
++0x00  signed codec count
++0x08  codec pointer 0
++0x10  codec pointer 1
++0x18  per-family entity-handler registrations begin
+```
+
+Although the wire reserves two bits, the runtime validates a kind against the registry count before
+using `registry + 0x08 + kind * 8`. The observed build appears to register two concrete object
+codecs; values 2 and 3 are not ordinary codec slots. Each codec vtable's slot `+0x08` also returns
+its diagnostic name.
+
+The next diagnostic build reads this table through `view + 0xB8` without calling it. It logs the
+live count plus Ghidra-relative vtable/create/update RVAs as `stage=view-codecs` and
+`stage=view-codec`. This should turn the next runtime session into exact static entry points for
+both concrete object classes without adding another detour.
+
 ## Instrumentation added
 
 Client hooks now cover:
 
 - View-message lookup and message-40 routing.
 - Native message-40 error, local/remote stage, index, signature, compatibility, and open state.
-- View-slot manager state.
+- Live replicated-object codec count, vtable, create, and update entry points.
+- View-slot manager state plus scheduler view count/signatures/flags.
 - Membership-to-view synchronization predicates.
 - Type-12 native wire decoder bit consumption.
 - Fully decoded type-12 membership snapshots.
@@ -354,8 +387,10 @@ The current checkpoint includes work in:
    index `0`, and echoes stages 2 through 5.
 2. Confirm the server reports `stage=view result=bound` and the external probe reports
    `view=1 gate=1`.
-3. Capture the first post-bind scheduler signature/body and map its four handler terminators.
-4. Resolve the AI enemy's 2-bit object codec and its vtable `+0x58` creation schema.
+3. Read the new `view-slots ... scheduler[...]` fields and confirm the no-record frame is exactly
+   `1 + 6 * views` bits when the signature-update flag is clear.
+4. Use `view-codecs`/`view-codec` to resolve the two registered object classes, then identify the
+   AI enemy class and its vtable `+0x58` creation schema.
 5. Add a scheduler writer only after an empty frame and one create record can be encoded without
    leaving unread or over-read bits on the native client.
 
