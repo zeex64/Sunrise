@@ -64,6 +64,8 @@ constexpr std::size_t kExternalProbeWords = 4;
 constexpr std::uint8_t kExternalProbeWordBits = 64;
 /** Complete scheduler-body bytes retained for one bounded diagnostic line. */
 constexpr std::size_t kExternalProbeByteCapacity = 256;
+/** Schema 0x80806AEA owns at most three registered-view signature entries. */
+constexpr std::size_t kSchedulerSignatureViewCapacity = 3;
 /**
  * Milliseconds between two resends of the same queue. The peer discards a packet more than 128
  * sequences ahead of its window, so this host must not send faster than the peer does.
@@ -75,6 +77,12 @@ std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_p
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
 std::uint32_t g_channelId{0};
 
+/** One 72-bit registered-view entry in scheduler signature schema 0x80806AEA. */
+struct SchedulerSignatureView {
+    std::uint64_t key{};
+    std::uint8_t tag{};
+};
+
 /** Read-only summary of the native simulation gate and replication-scheduler prefix. */
 struct ExternalProbe {
     std::array<std::uint64_t, kExternalProbeWords> words{};
@@ -84,10 +92,52 @@ struct ExternalProbe {
     std::size_t schedulerBitsAfterProbe{};
     std::size_t schedulerCapturedBits{};
     std::size_t schedulerByteCount{};
+    std::array<std::uint64_t, 2> schedulerSignatureHeader{};
+    std::array<SchedulerSignatureView, kSchedulerSignatureViewCapacity> schedulerSignatureViews{};
+    std::size_t schedulerSignatureBits{};
     wire::ExternalStatus status{};
     std::uint8_t wordCount{};
     std::uint8_t schedulerTailBits{};
+    std::uint8_t schedulerSignatureViewCount{};
+    bool schedulerSignatureUpdate{};
+    bool schedulerSignatureValid{};
 };
+
+/**
+ * Decodes only schema 0x80806AEA's fixed scheduler-signature prefix from a copied reader.
+ * The schema is two raw 64-bit header fields, a two-bit count, and count 64-bit-key/8-bit-tag
+ * entries. No live reader or replication state is advanced.
+ */
+void probe_scheduler_signature(bits::Reader reader, ExternalProbe& output) noexcept {
+    const std::size_t before = reader.remaining_bits();
+    std::uint64_t update = 0;
+    if (!reader.read(1, update)) {
+        return;
+    }
+    output.schedulerSignatureUpdate = update != 0;
+    if (!output.schedulerSignatureUpdate) {
+        output.schedulerSignatureBits = before - reader.remaining_bits();
+        output.schedulerSignatureValid = true;
+        return;
+    }
+
+    std::uint64_t count = 0;
+    if (!reader.read(64, output.schedulerSignatureHeader[0])
+        || !reader.read(64, output.schedulerSignatureHeader[1]) || !reader.read(2, count)
+        || count > output.schedulerSignatureViews.size()) {
+        return;
+    }
+    output.schedulerSignatureViewCount = static_cast<std::uint8_t>(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        std::uint64_t tag = 0;
+        if (!reader.read(64, output.schedulerSignatureViews[index].key) || !reader.read(8, tag)) {
+            return;
+        }
+        output.schedulerSignatureViews[index].tag = static_cast<std::uint8_t>(tag);
+    }
+    output.schedulerSignatureBits = before - reader.remaining_bits();
+    output.schedulerSignatureValid = true;
+}
 
 /** Converts a bounded scheduler capture to uppercase hexadecimal. */
 void scheduler_hex(std::span<const std::byte> input, std::span<char> output) noexcept {
@@ -119,6 +169,9 @@ void scheduler_hex(std::span<const std::byte> input, std::span<char> output) noe
         return false;
     }
     candidate.schedulerBitsBeforeProbe = reader.remaining_bits();
+    if (candidate.status.schedulerPresent) {
+        probe_scheduler_signature(reader, candidate);
+    }
     bits::Reader capture = reader;
     while (candidate.schedulerByteCount < candidate.schedulerBytes.size()
            && capture.remaining_bits() >= kByteBits) {
@@ -748,6 +801,23 @@ void consume_established(const state::gameplay::Endpoint& from,
                    static_cast<unsigned>(external.schedulerTailBits),
                    external.schedulerCapturedBits < external.schedulerBitsBeforeProbe ? 1U : 0U,
                    schedulerHex.data());
+        }
+        if (external.status.schedulerPresent && external.schedulerSignatureUpdate) {
+            report(core::log::Level::info,
+                   "ev=gameplay stage=scheduler-signature valid=%u bits=%zu "
+                   "header=%016llX%016llX count=%u "
+                   "e0=0x%016llX/%u e1=0x%016llX/%u e2=0x%016llX/%u",
+                   external.schedulerSignatureValid ? 1U : 0U,
+                   external.schedulerSignatureBits,
+                   static_cast<unsigned long long>(external.schedulerSignatureHeader[0]),
+                   static_cast<unsigned long long>(external.schedulerSignatureHeader[1]),
+                   static_cast<unsigned>(external.schedulerSignatureViewCount),
+                   static_cast<unsigned long long>(external.schedulerSignatureViews[0].key),
+                   static_cast<unsigned>(external.schedulerSignatureViews[0].tag),
+                   static_cast<unsigned long long>(external.schedulerSignatureViews[1].key),
+                   static_cast<unsigned>(external.schedulerSignatureViews[1].tag),
+                   static_cast<unsigned long long>(external.schedulerSignatureViews[2].key),
+                   static_cast<unsigned>(external.schedulerSignatureViews[2].tag));
         }
     }
     for (std::size_t index = 0; index < deliveredCount; ++index) {

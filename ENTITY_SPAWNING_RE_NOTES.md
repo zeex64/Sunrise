@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 3561ae183de59da44fde31f366e94985dff3b8eb5b6b7584b307b1a032126959
+SHA-256 e0f5c5bb179c2b42e1a691b1e1fba080be70b669fe2ca494c31ad40c4f522441
 ```
 
 ## Confirmed high-level path
@@ -311,6 +311,20 @@ into the remote object and then compares the complete header, count, entry key, 
 server cannot establish compatibility by echoing only the 128-bit header. The `view-slots` probe
 now logs both counts and all three local/remote entries in addition to the headers.
 
+The schema metadata makes the signature wire grammar exact:
+
+```text
+128 bits  two raw 64-bit signature-header fields
+  2 bits  registered-view count (0 through 3)
+ 72 bits  per active entry: 64-bit key followed by 8-bit tag
+```
+
+For one registered view the signature object is therefore 202 bits. `FUN_14171EFE0` writes the
+entity lane's one-bit end marker as one, while `FUN_14171F020` writes the other three lanes' end
+markers as zero. The entity prelude contributes a zero one-bit auxiliary count and a zero one-bit
+generation-presence flag. A signature-update-only empty scheduler frame for one view is exactly
+`1 + 202 + 6 = 209` bits.
+
 The empty-stream terminators are also recovered from the four inbound decoders:
 
 - Event lane (`FUN_141718AE0`): a zero presence bit ends the stream.
@@ -544,6 +558,11 @@ replaces the old need to reconstruct a potentially 1500-bit native scheduler fra
 64-bit prefix words; it is read-only and is emitted only after the server considers the view
 accepted and the client declares a scheduler body.
 
+The same copied-reader path now decodes a present signature-update prefix as
+`stage=scheduler-signature`, including both header words, the two-bit count, and all three bounded
+key/tag slots. It runs even before the view is accepted so an early one-shot client signature is
+not lost; it still does not consume the live packet reader or accept scheduler state.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -641,5 +660,6 @@ sobject-create
 sobject-update
 sobject-native
 scheduler-body
+scheduler-signature
 activity-host-decode
 ```
