@@ -7,13 +7,11 @@
 #include <string_view>
 
 #include "../../../core/logging/log.h"
-#include "../../targets/game.h"
 
 namespace sunrise::client::hooks::retail_log {
 namespace {
 
 using Enqueue = void(__fastcall*)(std::int32_t, const char*) noexcept;
-using SetCategoryVerbosity = void(__fastcall*)(std::int32_t, std::uint32_t) noexcept;
 
 /** The game copies exactly this many bytes out of the caller's text buffer. */
 constexpr std::size_t kNativeTextSize = 320;
@@ -21,20 +19,11 @@ constexpr std::size_t kNativeTextSize = 320;
 constexpr std::int32_t kUnregisteredSite = -1;
 /** Line storage holds the cleaned text plus its fixed key prefix. */
 constexpr std::size_t kEventCapacity = kNativeTextSize + 64;
-/** A late config load resets the thresholds, so set them again on this period. A count will not
- *  do: a closed category emits fewer lines, so it advances slower and stays closed. */
-constexpr std::uint64_t kReassertIntervalMs = 2'000;
-/** How many categories the game's own verbosity table holds. */
-constexpr std::uint32_t kCategoryCount = 26;
-/** 0 is the game's loosest category threshold. A higher value logs less. */
-constexpr std::uint32_t kMostVerbose = 0;
 /** Native zone churn can toggle this cosmetic channel name hundreds of times per second. */
 constexpr std::string_view kChannelNameChangePrefix =
     "networking:channel: Channel name change from";
 
 thread_local bool g_inObserver{};
-/** Tick at which the next re-assert is due. Zero makes the first call assert. */
-volatile LONG64 g_nextAssertTick{};
 
 /**
  * Copies the native text into fixed storage as one printable line.
@@ -95,7 +84,7 @@ void capture_line(std::int32_t siteId, const char* text) noexcept {
  * @param text Native buffer holding the already-formatted line.
  */
 __declspec(noinline) void __fastcall enqueue_body(std::int32_t siteId, const char* text) noexcept {
-    // The verbosity setter logs through this same funnel; without this it would recurse.
+    // Native enqueue can itself emit a nested line, so only the outer call is captured.
     const bool outer = !g_inObserver;
     g_inObserver = true;
     const auto call = reinterpret_cast<Enqueue>(g_handle.original);
@@ -115,37 +104,6 @@ __declspec(noinline) void __fastcall enqueue_body(std::int32_t siteId, const cha
 /** @return The enqueue observer body itself, with internal linkage. */
 void* enqueue_entry_point() noexcept {
     return reinterpret_cast<void*>(&enqueue_body);
-}
-
-/**
- * Opens every category in the game's own log table from Sunrise's callback service. This must not
- * run inside the native enqueue funnel: the caller may already hold a subsystem lock while logging,
- * and the verbosity setter can enter native logging again.
- */
-void assert_verbosity() noexcept {
-    // How much the game logs follows the client threshold, so debug is what opens its table.
-    if (!core::log::accepts(core::log::Channel::client, core::log::Level::debug)) {
-        return;
-    }
-    const auto now = static_cast<LONG64>(GetTickCount64());
-    const LONG64 due = g_nextAssertTick;
-    if (now < due) {
-        return;
-    }
-    // One claim per period, so concurrent funnel threads do not all reopen the table.
-    if (InterlockedCompareExchange64(
-            &g_nextAssertTick, now + static_cast<LONG64>(kReassertIntervalMs), due)
-        != due) {
-        return;
-    }
-    const auto setter = reinterpret_cast<SetCategoryVerbosity>(
-        targets::game::retail_log::get().setCategoryVerbosity);
-    if (setter == nullptr) {
-        return;
-    }
-    for (std::uint32_t category = 0; category < kCategoryCount; ++category) {
-        setter(static_cast<std::int32_t>(category), kMostVerbose);
-    }
 }
 
 } // namespace sunrise::client::hooks::retail_log

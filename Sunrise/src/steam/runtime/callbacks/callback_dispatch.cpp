@@ -3,7 +3,6 @@
 #include <cstring>
 
 #include "../../../client/content/investment/worker.h"
-#include "../../../client/hooks/retail_log/retail_log_enqueue_observer.h"
 #include "../../../core/logging/log.h"
 #include "../../../core/ui/busy/busy.h"
 #include "../../../server/runtime/server_runtime.h"
@@ -117,9 +116,6 @@ void run_callbacks() noexcept {
     }
     if (mainActive) {
         const auto now = GetTickCount64();
-        // Native category setters may log. Run them only after callback dispatch, never from the
-        // retail-log detour while a native subsystem lock can still be held by its caller.
-        client::hooks::retail_log::assert_verbosity();
         server::service(now);
         client::content::investment::worker::service(now);
     }

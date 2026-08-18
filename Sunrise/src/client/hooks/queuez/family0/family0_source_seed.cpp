@@ -45,6 +45,8 @@ struct SourceListLayout {
  * subscription is already synced. That synced state is what the subscribe must reach.
  */
 constexpr std::uint16_t kEntryMask = 1;
+/** Bit Destiny's producer adds when it has upserted the entry itself. */
+constexpr std::uint16_t kProducerOwnedMask = 4;
 /** One seeded entry: one record per source key, and one is all the account needs. */
 constexpr std::uint64_t kSeededCount = 1;
 /** Bytes of the source list the producer owns, rebuilt whole so no stale entry survives. */
@@ -54,6 +56,8 @@ constexpr std::size_t kSourceListBytes = 0x210;
 constexpr std::uint64_t kReportIntervalMs = 1'000;
 /** One line carries the replaced key and the rewrite count. */
 constexpr std::size_t kReportLimit = 128;
+/** One line records the point where the bootstrap permanently yields to the native producer. */
+constexpr std::size_t kOwnershipReportLimit = 160;
 /** One line carries both counters and the first two entries. */
 constexpr std::size_t kListReportLimit = 192;
 
@@ -80,6 +84,8 @@ std::atomic<std::uint64_t> g_accountKey{0};
 /** Total rewrites. A rewrite means something else put its own list back. */
 std::atomic<std::uint64_t> g_rewrites{0};
 std::atomic<std::uint64_t> g_reportDueTick{0};
+/** Once Destiny has upserted this entry, Sunrise must never overwrite the producer buffer again. */
+std::atomic_bool g_nativeOwned{false};
 /** The last head reported, so the producer's output is logged on change rather than per frame. */
 ListHead g_lastHead{};
 bool g_hasLastHead{false};
@@ -154,6 +160,24 @@ void report_seed(std::uint64_t replaced) noexcept {
     }
 }
 
+/** Reports the one-way handoff from Sunrise's bootstrap to Destiny's producer. */
+void report_native_owned(const ListHead& head) noexcept {
+    std::array<char, kOwnershipReportLimit> line{};
+    const int written = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=queuez stage=family0 result=native-owned countA=%llu countB=%llu mask=%u rewrites=%llu",
+        static_cast<unsigned long long>(head.countA),
+        static_cast<unsigned long long>(head.countB),
+        static_cast<unsigned>(head.firstMask),
+        static_cast<unsigned long long>(g_rewrites.load(std::memory_order_relaxed)));
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 } // namespace
 
 /** @param getter The source-list getter we found, or null to withdraw it. */
@@ -187,6 +211,18 @@ void seed_source_list() noexcept {
     // Read before the early return, so the producer's own output is visible once it starts working.
     const ListHead head = read_head(list);
     report_list(head);
+    // The seed's mask is only bit 0. Bit 4 proves Destiny's own producer has upserted this entry;
+    // from that point onward, even a later count mismatch belongs to the native transition and
+    // must not be repaired by replacing the entire 0x210-byte buffer.
+    if (head.firstKey == key && head.countB != 0 && (head.firstMask & kProducerOwnedMask) != 0) {
+        if (!g_nativeOwned.exchange(true, std::memory_order_acq_rel)) {
+            report_native_owned(head);
+        }
+        return;
+    }
+    if (g_nativeOwned.load(std::memory_order_acquire)) {
+        return;
+    }
     // Both counters have to agree, not just the first key. A counter mismatch arms a boot
     // deadline in the sweep, and rewriting the whole buffer clears it.
     if (head.firstKey == key && head.countA == kSeededCount && head.countB == kSeededCount
@@ -211,6 +247,7 @@ void reset() noexcept {
     g_accountKey.store(0, std::memory_order_release);
     g_rewrites.store(0, std::memory_order_release);
     g_reportDueTick.store(0, std::memory_order_release);
+    g_nativeOwned.store(false, std::memory_order_release);
     g_lastHead = {};
     g_hasLastHead = false;
 }

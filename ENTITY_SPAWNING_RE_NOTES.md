@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 4312e87f320ba6019f0a6eca15a95aaffdb96a794832664dd0dc1c93266eda57
+SHA-256 30c3956f4deacf730801c3066c6b047c58a0e1dc0016fb62041e2bcc8b0852e3
 ```
 
 ## Confirmed high-level path
@@ -899,8 +899,25 @@ identifier changed. No namespace-2 create or entity-list decode had occurred. Bo
 on the first retail line emitted by that session reset. The retail-log detour used to call all 26
 native category-verbosity setters after capturing every outer log line; when its two-second refresh
 became due inside this critical transition, a setter could re-enter native logging while
-`network_update` still held its subsystem state. The periodic refresh now runs from Sunrise's normal
-Steam callback service after callback dispatch, never from inside the native enqueue funnel.
+`network_update` still held its subsystem state. Moving that refresh to Sunrise's Steam callback
+service removed the direct retail-log re-entry, but the next run still froze because the callback
+service itself runs inside `network_update`. Sunrise no longer calls the native verbosity setter at
+all; the retail observer now captures only the categories Destiny emits under its own configuration.
+
+The same run exposed a second unsafe transition-time mutation. Destiny's family-zero producer had
+already upserted the account entry at `t=33150` (`countA=1`, `countB=1`, `mask=4`) and later advanced
+it to `mask=5`. When public-bubble churn changed `countA` to 2 while `countB` remained 1, Sunrise
+continued replacing the entire source list every few frames; rewrite 358 landed only 380 ms before
+the final `group_target` reset stalled. Ghidra confirms the hooked sweep at `0x140BE6240` obtains the
+source list through the call at `0x140BE6284`, compares all `0x210` bytes against its held copy, and
+later copies the complete `0x210`-byte source record into that copy. The seed is now strictly a
+bootstrap: producer mask bit 4 permanently latches native ownership, after which Sunrise observes
+the list but never rewrites it, including during legitimate counter mismatches.
+
+A live Linux GDB attachment confirmed the Wine host was waiting but could not recover useful Windows
+frames because this Proton process presents the x64-32 target mismatch. A scripted WineDbg attach did
+not detach safely and the helper cleanup terminated the already-hung game. Do not repeat that attach
+method; use code breadcrumbs or a prepared WineDbg GDB proxy for any later stopped-thread capture.
 
 ## Instrumentation added
 
@@ -957,21 +974,23 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ free roam and remain in the initial zone while namespace 2 finishes its native baseline
-   population; movement must no longer be required.
-2. Confirm the first `stage=entity-create-out` follows the slot-13 `stage=entity-view` update
+1. Load EDZ free roam and confirm one `stage=family0 result=native-owned` appears after producer
+   mask 4 or 5, with no later `stage=family0 result=seeded` during public-bubble transitions.
+2. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
+   must no longer be required and `network_update` must survive `group_target` session resets.
+3. Confirm the first `stage=entity-create-out` follows the slot-13 `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
-3. Confirm retry attempts retain the exact same token, slot, and handle generation while the
+4. Confirm retry attempts retain the exact same token, slot, and handle generation while the
    queued RSAT dependency has time to load.
-4. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
+5. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
    unread, over-read, generation, or occupied-slot conflict before attempting an update.
-5. If `0x80C4FEAD` remains unloaded on all four settled-slot attempts, trace its package request
+6. If `0x80C4FEAD` remains unloaded on all four settled-slot attempts, trace its package request
    after `FUN_140A020E0`; do not substitute a native RSAT until its gameplay meaning is known.
-6. Read `sobject-update` captures to identify which named components are present in an initial
+7. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-7. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+8. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-8. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+9. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
 
 ## Build and verification
