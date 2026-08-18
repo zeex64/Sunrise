@@ -106,7 +106,6 @@ __declspec(noinline) void __fastcall enqueue_body(std::int32_t siteId, const cha
         if (siteId != kUnregisteredSite && text != nullptr) {
             capture_line(siteId, text);
         }
-        assert_verbosity();
         g_inObserver = false;
     }
 }
@@ -119,8 +118,9 @@ void* enqueue_entry_point() noexcept {
 }
 
 /**
- * Opens every category in the game's own log table, once we know the block exists. Reaching the
- * enqueue funnel is the proof: without the block the native body returns early.
+ * Opens every category in the game's own log table from Sunrise's callback service. This must not
+ * run inside the native enqueue funnel: the caller may already hold a subsystem lock while logging,
+ * and the verbosity setter can enter native logging again.
  */
 void assert_verbosity() noexcept {
     // How much the game logs follows the client threshold, so debug is what opens its table.

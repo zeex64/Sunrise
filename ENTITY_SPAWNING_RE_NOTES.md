@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 888876679927455e1abbfdf0113e253e37d8d7f21de601a42dc69cc7beb5df19
+SHA-256 4312e87f320ba6019f0a6eca15a95aaffdb96a794832664dd0dc1c93266eda57
 ```
 
 ## Confirmed high-level path
@@ -892,6 +892,15 @@ name-change lines plus roughly 1,400 full scheduler bodies were synchronously co
 157 seconds. Sunrise now suppresses that cosmetic retail line and retains the full scheduler-body
 diagnostic only on signature updates. If the freeze reproduces with that pressure removed, capture
 the stopped thread rather than attributing it to the entity codec.
+
+The reduced-log run reproduced the freeze and provided the native watchdog diagnosis:
+`network_update` stalled in `activity:in_world` immediately after the target `group_target` session
+identifier changed. No namespace-2 create or entity-list decode had occurred. Both frozen runs ended
+on the first retail line emitted by that session reset. The retail-log detour used to call all 26
+native category-verbosity setters after capturing every outer log line; when its two-second refresh
+became due inside this critical transition, a setter could re-enter native logging while
+`network_update` still held its subsystem state. The periodic refresh now runs from Sunrise's normal
+Steam callback service after callback dispatch, never from inside the native enqueue funnel.
 
 ## Instrumentation added
 
