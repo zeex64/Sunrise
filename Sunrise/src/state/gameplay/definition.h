@@ -96,8 +96,10 @@ struct ViewSignature {
 
 /** A scheduler signature contains at most three registered native views. */
 inline constexpr std::size_t kSchedulerSignatureViewCapacity = 3;
+/** The largest three-view signature update is 347 bits including its update gate. */
+inline constexpr std::size_t kSchedulerSignatureWireCapacity = 64;
 
-/** One 72-bit registered-view entry in scheduler signature schema 0x80806AEA. */
+/** One diagnostic 72-bit wire slice from scheduler signature schema 0x80806AEA. */
 struct SchedulerSignatureView {
     std::uint64_t key{};
     std::uint8_t tag{};
@@ -107,6 +109,9 @@ struct SchedulerSignatureView {
 struct SchedulerSignature {
     std::array<std::uint64_t, 2> header{};
     std::array<SchedulerSignatureView, kSchedulerSignatureViewCapacity> views{};
+    /** Exact MSB-first update prefix captured from the client, with a low-aligned tail byte. */
+    std::array<std::byte, kSchedulerSignatureWireCapacity> wire{};
+    std::uint16_t wireBits{};
     std::uint8_t viewCount{};
     bool present{};
 };

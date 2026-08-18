@@ -193,8 +193,8 @@ void report(const Snapshot& snapshot,
     core::log::write(core::log::Channel::client, core::log::Level::info, {line.data(), used});
 }
 
-/** Publishes the newest safe-slot state for one native view token. */
-void publish(const ViewCapture& capture) noexcept {
+/** @return True when publishing changed this token's captured view state. */
+[[nodiscard]] bool publish(const ViewCapture& capture) noexcept {
     AcquireSRWLockExclusive(&g_captureLock);
     ViewCapture* destination = nullptr;
     for (ViewCapture& current : g_viewCaptures) {
@@ -210,8 +210,10 @@ void publish(const ViewCapture& capture) noexcept {
         destination = &g_viewCaptures[g_captureCursor % g_viewCaptures.size()];
         ++g_captureCursor;
     }
+    const bool changed = !(*destination == capture);
     *destination = capture;
     ReleaseSRWLockExclusive(&g_captureLock);
+    return changed;
 }
 
 /** Preserves inbound entity-list decoding and reports the authoritative slot maps once. */
@@ -260,12 +262,15 @@ void observe_manager(const void* manager, int result) noexcept {
 }
 
 void observe_view(std::uint64_t token, const void* view) noexcept {
-    if (token == 0 || view == nullptr) {
+    if (view == nullptr) {
         return;
     }
     const void* manager = nullptr;
     std::uint64_t schedulerKey = 0;
     std::uint8_t schedulerTag = 0;
+    std::int32_t schedulerViewCount = -1;
+    std::array<std::uint64_t, ViewCapture::kSchedulerViewCapacity> schedulerViewKeys{};
+    std::array<std::uint8_t, ViewCapture::kSchedulerViewCapacity> schedulerViewTags{};
     __try {
         const auto* const bytes = static_cast<const std::byte*>(view);
         std::memcpy(&manager, bytes + 0xB8, sizeof manager);
@@ -278,7 +283,29 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
             const auto* const managerBytes = static_cast<const std::byte*>(manager);
             std::memcpy(&schedulerTag, managerBytes + 0xD024, sizeof schedulerTag);
         }
+        const std::byte* schedulerOwner = nullptr;
+        std::memcpy(&schedulerOwner, bytes + 0x68, sizeof schedulerOwner);
+        if (schedulerOwner != nullptr) {
+            const auto* const scheduler = schedulerOwner + 0x38;
+            std::memcpy(&schedulerViewCount, scheduler + 0x20, sizeof schedulerViewCount);
+            if (schedulerViewCount >= 0
+                && schedulerViewCount
+                       <= static_cast<std::int32_t>(ViewCapture::kSchedulerViewCapacity)) {
+                for (std::size_t index = 0; index < ViewCapture::kSchedulerViewCapacity; ++index) {
+                    const auto* const entry = scheduler + 0x28 + index * 0x10;
+                    std::memcpy(&schedulerViewKeys[index], entry, sizeof schedulerViewKeys[index]);
+                    std::memcpy(
+                        &schedulerViewTags[index], entry + 8, sizeof schedulerViewTags[index]);
+                }
+            }
+        }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+    if (token == 0) {
+        token = schedulerKey;
+    }
+    if (token == 0) {
         return;
     }
 
@@ -303,9 +330,47 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
         capture.objectGeneration = candidate.objectGeneration;
         capture.candidatePresent = true;
     }
-    publish(capture);
+    if (schedulerViewCount >= 0
+        && schedulerViewCount <= static_cast<std::int32_t>(capture.schedulerViewKeys.size())) {
+        capture.schedulerViewCount = static_cast<std::uint8_t>(schedulerViewCount);
+        capture.schedulerViewKeys = schedulerViewKeys;
+        capture.schedulerViewTags = schedulerViewTags;
+        capture.schedulerSignatureValid = true;
+    }
+    const bool changed = publish(capture);
     if (record_once(snapshot)) {
         report(snapshot, 0, token, schedulerKey, schedulerTag);
+    }
+    if (changed) {
+        std::array<char, 512> line{};
+        const int written = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=gameplay stage=entity-view token=0x%llX key=0x%llX tag=%u namespace=%d "
+            "signature=%u count=%u e0=0x%llX/%u e1=0x%llX/%u e2=0x%llX/%u "
+            "candidate=%u slot=%u hgen=%u rgen=%u ogen=%u",
+            static_cast<unsigned long long>(capture.token),
+            static_cast<unsigned long long>(capture.schedulerKey),
+            static_cast<unsigned>(capture.schedulerTag),
+            capture.namespaceId,
+            capture.schedulerSignatureValid ? 1U : 0U,
+            static_cast<unsigned>(capture.schedulerViewCount),
+            static_cast<unsigned long long>(capture.schedulerViewKeys[0]),
+            static_cast<unsigned>(capture.schedulerViewTags[0]),
+            static_cast<unsigned long long>(capture.schedulerViewKeys[1]),
+            static_cast<unsigned>(capture.schedulerViewTags[1]),
+            static_cast<unsigned long long>(capture.schedulerViewKeys[2]),
+            static_cast<unsigned>(capture.schedulerViewTags[2]),
+            capture.candidatePresent ? 1U : 0U,
+            static_cast<unsigned>(capture.slot),
+            static_cast<unsigned>(capture.handleGeneration),
+            static_cast<unsigned>(capture.reservedGeneration),
+            static_cast<unsigned>(capture.objectGeneration));
+        if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(written)});
+        }
     }
 }
 

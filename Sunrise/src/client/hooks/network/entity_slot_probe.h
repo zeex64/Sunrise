@@ -1,11 +1,14 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 namespace sunrise::client::hooks::network::entity_slot_probe {
 
 /** Safe-slot and scheduler identity captured from one native view. */
 struct ViewCapture {
+    static constexpr std::size_t kSchedulerViewCapacity = 3;
+
     const void* manager{};
     std::uint64_t token{};
     std::uint64_t schedulerKey{};
@@ -18,7 +21,13 @@ struct ViewCapture {
     std::uint8_t handleGeneration{};
     std::uint8_t reservedGeneration{};
     std::uint8_t objectGeneration{};
+    std::uint8_t schedulerViewCount{};
+    std::array<std::uint64_t, kSchedulerViewCapacity> schedulerViewKeys{};
+    std::array<std::uint8_t, kSchedulerViewCapacity> schedulerViewTags{};
     bool candidatePresent{};
+    bool schedulerSignatureValid{};
+
+    [[nodiscard]] bool operator==(const ViewCapture&) const noexcept = default;
 };
 
 /** @return Native inbound entity-list decoder replacement body. */
@@ -31,7 +40,7 @@ struct ViewCapture {
  */
 void observe_manager(const void* manager, int result = 0) noexcept;
 
-/** Captures one view's scheduler key and authoritative entity-manager state. */
+/** Captures one view's scheduler key, logical signature entries, and entity-manager state. */
 void observe_view(std::uint64_t token, const void* view) noexcept;
 
 /** @return True when a current safe-slot capture exists for the requested view token. */

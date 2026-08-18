@@ -117,9 +117,9 @@ struct EntityCreatePlan {
 };
 
 /**
- * Decodes only schema 0x80806AEA's fixed scheduler-signature prefix from a copied reader.
- * The schema is two raw 64-bit header fields, a two-bit count, and count 64-bit-key/8-bit-tag
- * entries. No live reader or replication state is advanced.
+ * Measures schema 0x80806AEA's fixed-width scheduler-signature prefix from a copied reader.
+ * Its 64-bit entry slices are encoded schema values, not the native logical view keys. Logical
+ * keys are captured from the scheduler object itself. No live reader or replication state moves.
  */
 void probe_scheduler_signature(bits::Reader reader, ExternalProbe& output) noexcept {
     const std::size_t before = reader.remaining_bits();
@@ -153,21 +153,47 @@ void probe_scheduler_signature(bits::Reader reader, ExternalProbe& output) noexc
     output.schedulerSignatureValid = true;
 }
 
-/** Writes the exact client scheduler signature as an update. */
+/** Retains the client's exact encoded signature instead of attempting to re-encode its schema. */
+[[nodiscard]] bool
+capture_scheduler_signature_wire(bits::Reader reader,
+                                 std::size_t bitCount,
+                                 state::gameplay::SchedulerSignature& signature) noexcept {
+    if (bitCount == 0 || bitCount > signature.wire.size() * kByteBits) {
+        return false;
+    }
+    signature.wire.fill(std::byte{});
+    std::size_t remaining = bitCount;
+    std::size_t byteIndex = 0;
+    while (remaining != 0) {
+        const auto width = static_cast<std::uint8_t>(remaining < kByteBits ? remaining : kByteBits);
+        std::uint64_t value = 0;
+        if (!reader.read(width, value)) {
+            return false;
+        }
+        signature.wire[byteIndex++] = static_cast<std::byte>(value);
+        remaining -= width;
+    }
+    signature.wireBits = static_cast<std::uint16_t>(bitCount);
+    return true;
+}
+
+/** Replays the exact schema-encoded client scheduler signature update. */
 [[nodiscard]] bool
 write_scheduler_signature(bits::Writer& writer,
                           const state::gameplay::SchedulerSignature& signature) noexcept {
     if (!signature.present || signature.viewCount == 0
-        || signature.viewCount > signature.views.size() || !writer.write(1, 1)
-        || !writer.write(signature.header[0], 64) || !writer.write(signature.header[1], 64)
-        || !writer.write(signature.viewCount, 2)) {
+        || signature.viewCount > signature.views.size() || signature.wireBits == 0
+        || signature.wireBits > signature.wire.size() * kByteBits) {
         return false;
     }
-    for (std::size_t index = 0; index < signature.viewCount; ++index) {
-        if (!writer.write(signature.views[index].key, 64)
-            || !writer.write(signature.views[index].tag, 8)) {
+    std::size_t remaining = signature.wireBits;
+    std::size_t byteIndex = 0;
+    while (remaining != 0) {
+        const auto width = static_cast<std::uint8_t>(remaining < kByteBits ? remaining : kByteBits);
+        if (!writer.write(std::to_integer<std::uint8_t>(signature.wire[byteIndex++]), width)) {
             return false;
         }
+        remaining -= width;
     }
     return true;
 }
@@ -246,18 +272,23 @@ write_scheduler_signature(bits::Writer& writer,
         return false;
     }
 
-    std::size_t match = peer.schedulerSignature.views.size();
-    for (std::size_t index = 0; index < peer.schedulerSignature.viewCount; ++index) {
-        const state::gameplay::SchedulerSignatureView& view = peer.schedulerSignature.views[index];
-        if (view.key != capture.schedulerKey || view.tag != capture.schedulerTag) {
+    if (!capture.schedulerSignatureValid
+        || capture.schedulerViewCount != peer.schedulerSignature.viewCount
+        || capture.schedulerKey != capture.token || peer.schedulerSignature.wireBits == 0) {
+        return false;
+    }
+    std::size_t match = capture.schedulerViewKeys.size();
+    for (std::size_t index = 0; index < capture.schedulerViewCount; ++index) {
+        if (capture.schedulerViewKeys[index] != capture.schedulerKey
+            || capture.schedulerViewTags[index] != capture.schedulerTag) {
             continue;
         }
-        if (match != peer.schedulerSignature.views.size()) {
+        if (match != capture.schedulerViewKeys.size()) {
             return false;
         }
         match = index;
     }
-    if (match == peer.schedulerSignature.views.size()) {
+    if (match == capture.schedulerViewKeys.size()) {
         return false;
     }
 
@@ -305,7 +336,15 @@ void scheduler_hex(std::span<const std::byte> input, std::span<char> output) noe
     }
     candidate.schedulerBitsBeforeProbe = reader.remaining_bits();
     if (candidate.status.schedulerPresent) {
+        bits::Reader signatureStart = reader;
         probe_scheduler_signature(reader, candidate);
+        if (candidate.schedulerSignatureUpdate && candidate.schedulerSignatureValid
+            && candidate.schedulerSignature.present
+            && !capture_scheduler_signature_wire(
+                signatureStart, candidate.schedulerSignatureBits, candidate.schedulerSignature)) {
+            candidate.schedulerSignatureValid = false;
+            candidate.schedulerSignature.present = false;
+        }
     }
     bits::Reader capture = reader;
     while (candidate.schedulerByteCount < candidate.schedulerBytes.size()

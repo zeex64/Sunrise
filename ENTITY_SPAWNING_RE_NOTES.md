@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 2af084ec13ab8be8a0ef3fa90b53ba8a49733b9ce9777b0efd992d178037a44a
+SHA-256 be3bb5c1e849220b130e05a72d924d17587aaa947109b3f08b18b0d445d895b6
 ```
 
 ## Confirmed high-level path
@@ -218,6 +218,20 @@ scheduler-view records and signature entries by that same key. The probe now cap
 tag, namespace, and safe slot together. Sunrise refuses a create unless exactly one entry in the
 client's current scheduler signature matches the bound token's captured key and tag.
 
+The first guarded-create run correctly emitted nothing because the client supplied only a
+zero-entry scheduler update before the activity view recycled near the end of the run. It also
+proved that the native logical scheduler keys are the session tokens themselves, while the old
+server probe's 64-bit wire slices were not those logical token values. Schema `0x80806AEA`
+transforms or frames those values even though its total width remains fixed.
+
+The scheduler address is now corrected directly from `FUN_1416E80B0` and
+`FUN_14172B453`: the view stores its scheduler owner at `view + 0x68`, and the scheduler begins at
+owner `+0x38`. The client probe reads the logical header/count/key/tag object there on every view
+pump. Separately, Sunrise retains the exact MSB-first encoded signature-update bits received from
+the client and replays them verbatim. A create is allowed only when the native logical count equals
+the wire count and the bound token/key/tag has one unique logical lane. No lane-order guess or
+server-side schema re-encoding remains in the path.
+
 This run also proves the scheduler signature is dynamic. It first sent an empty 131-bit update
 (the one-bit update gate plus a 130-bit zero-entry signature), then a valid 347-bit update with
 three registered entries (one update bit plus a 346-bit signature). Any create writer must size
@@ -319,7 +333,8 @@ otherwise it keeps the bit clear.
 ### Scheduler ownership and framing
 
 - The scheduler descriptor is anchored by the `replication-scheduler` string at `0x141C9AD78`.
-- `FUN_1416BB2B0` constructs the network view manager and its scheduler at manager `+0x5498`.
+- `FUN_1416E80B0` obtains the shared scheduler from `FUN_14172B453(viewOwner)`, which is
+  `viewOwner + 0x38`; the view stores that owner pointer at `+0x68`.
 - `FUN_1417A96D0` registers one established view and its four replication handlers.
 - `FUN_1417B0D70` is the outbound scheduler/budget pass. It gathers up to 256 candidates, chooses
   records under the packet budget, writes a one-bit signature-update flag, optionally writes the
@@ -361,12 +376,13 @@ into the remote object and then compares the complete header, count, entry key, 
 server cannot establish compatibility by echoing only the 128-bit header. The `view-slots` probe
 now logs both counts and all three local/remote entries in addition to the headers.
 
-The schema metadata makes the signature wire grammar exact:
+The schema metadata makes the signature wire widths exact, but its 64-bit slices are not raw
+logical token values:
 
 ```text
-128 bits  two raw 64-bit signature-header fields
+128 bits  two schema-encoded 64-bit header slices
   2 bits  registered-view count (0 through 3)
- 72 bits  per active entry: 64-bit key followed by 8-bit tag
+ 72 bits  per active entry: encoded 64-bit key slice followed by 8-bit tag
 ```
 
 The signature object size is `130 + 72 * count` bits; the scheduler's update gate adds one bit.
@@ -398,8 +414,8 @@ Therefore the minimum known-signature, no-record scheduler body costs one signat
 six bits per registered view. A view can additionally publish one auxiliary entity index and an
 8-bit generation in the entity prelude even when it schedules no entity record. The remaining
 prerequisite is knowing the client's registered-view count and current scheduler signature. The
-`view-slots` probe now reads those directly from manager `+0x5498`, logging the scheduler view
-count, local/remote 128-bit signatures, and signature flags.
+`view-slots` now follows `view + 0x68 -> owner + 0x38`, logging the scheduler view count,
+local/remote in-memory signature objects, and signature flags.
 
 ### Entity record grammar
 
@@ -801,15 +817,16 @@ replaces the old need to reconstruct a potentially 1500-bit native scheduler fra
 64-bit prefix words; it is read-only and is emitted only after the server considers the view
 accepted and the client declares a scheduler body.
 
-The same copied-reader path now decodes a present signature-update prefix as
-`stage=scheduler-signature`, including both header words, the two-bit count, and all three bounded
-key/tag slots. It runs even before the view is accepted so an early one-shot client signature is
-not lost; it still does not consume the live packet reader or accept scheduler state.
+The same copied-reader path now measures a present signature-update prefix as
+`stage=scheduler-signature`, including the two-bit count and bounded diagnostic 64/8-bit slices.
+It runs even before the view is accepted so an early one-shot client signature is not lost; it
+still does not consume the live packet reader. Those slices are diagnostic wire values, not the
+logical native keys.
 
-The decoded signature is also persisted on the sending peer. After that peer's native view is
-bound and its signature count is nonzero, outgoing acknowledgements echo the exact header and
-key/tag entries, followed only by the six proven empty-lane bits per registered view. This opens a
-runtime test of the 209-bit one-view frame without enabling any entity-create data.
+The exact encoded signature prefix is also persisted on the sending peer. After that peer's native
+view is bound and its signature count is nonzero, outgoing acknowledgements replay those captured
+bits verbatim, followed by the lane bodies. Logical lane selection comes independently from the
+native scheduler object.
 
 ## Instrumentation added
 
@@ -827,8 +844,8 @@ Client hooks now cover:
 - A bounded, read-only snapshot of each view or inbound decoder entity manager's 8,192-slot free
   and occupied maps, including the first eight slots whose descriptor is unclaimed and their three
   generation fields (`stage=entity-slots`).
-- A token-bound capture of the native scheduler key/tag and safe slot, used only when it uniquely
-  matches the client's current scheduler signature.
+- A token-bound capture of the native scheduler's logical count/key/tag list and safe slot, used
+  only when the target has one unique logical lane (`stage=entity-view`).
 - Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
@@ -863,19 +880,22 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ free roam and remain in-world long enough for a nonzero scheduler signature update.
-2. Confirm `stage=entity-create-out result=sent` reports namespace 2, the uniquely matched
-   scheduler lane, pristine slot/generations, and RSAT `0x80C4FEAD`.
-3. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
+1. Load EDZ free roam and remain in-world for at least 60 seconds so the delayed nonzero scheduler
+   signature update is not missed during an activity-view recycle.
+2. Confirm `stage=entity-view` reports the logical scheduler count and a unique entry equal to the
+   bound namespace-2 token/key/tag.
+3. Confirm `stage=entity-create-out result=sent` reports namespace 2, that uniquely matched lane,
+   pristine slot/generations, and RSAT `0x80C4FEAD`.
+4. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
    unread, over-read, generation, or occupied-slot conflict before attempting an update.
-4. If the first decode only queues the RSAT dependency, add an acknowledgement-driven retry that
+5. If the first decode only queues the RSAT dependency, add an acknowledgement-driven retry that
    stops as soon as the decoder or occupied map confirms acceptance; do not blindly duplicate a
    successful create.
-5. Read `sobject-update` captures to identify which named components are present in an initial
+6. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-6. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+7. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-7. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+8. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
 
 ## Build and verification
@@ -910,6 +930,7 @@ sobject-native
 entity-create
 entity-create-out
 entity-slots
+entity-view
 scheduler-body
 scheduler-signature
 activity-host-decode

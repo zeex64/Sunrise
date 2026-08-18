@@ -11,6 +11,7 @@
 
 #include "../../../core/logging/log.h"
 #include "coordinator/network_call_coordinator.h"
+#include "entity_slot_probe.h"
 #include "platform.h"
 
 namespace sunrise::client::hooks::network::view_slot_probe {
@@ -25,8 +26,9 @@ constexpr std::size_t kViewCapacity = 31;
 constexpr std::size_t kViewTableOffset = 0x178;
 constexpr std::size_t kViewActiveOffset = 0x44;
 constexpr std::size_t kViewKeyOffset = 0x68;
-/** FUN_1416BB2B0 embeds the native replication scheduler in the manager. */
-constexpr std::size_t kSchedulerOffset = 0x5498;
+/** FUN_1416E80B0 reaches the shared scheduler at the view's owner pointer plus 0x38. */
+constexpr std::size_t kSchedulerOwnerOffset = 0x68;
+constexpr std::size_t kSchedulerOffset = 0x38;
 constexpr std::size_t kSchedulerLocalSignatureOffset = 0x10;
 constexpr std::size_t kSchedulerLocalSignatureViewCountOffset = 0x20;
 constexpr std::size_t kSchedulerLocalSignatureViewsOffset = 0x28;
@@ -88,37 +90,6 @@ struct Snapshot {
         const auto* const manager = static_cast<const std::byte*>(managerAddress);
         output.manager = managerAddress;
         output.state = *reinterpret_cast<const std::int32_t*>(manager + 8);
-        const auto* const scheduler = manager + kSchedulerOffset;
-        output.schedulerRegisteredViewCount =
-            *reinterpret_cast<const std::int32_t*>(scheduler + kSchedulerRegisteredViewCountOffset);
-        std::memcpy(output.schedulerLocalSignature.data(),
-                    scheduler + kSchedulerLocalSignatureOffset,
-                    sizeof output.schedulerLocalSignature);
-        output.schedulerLocalSignatureViewCount = *reinterpret_cast<const std::int32_t*>(
-            scheduler + kSchedulerLocalSignatureViewCountOffset);
-        for (std::size_t index = 0; index < kSchedulerSignatureViewCapacity; ++index) {
-            const auto* const entry = scheduler + kSchedulerLocalSignatureViewsOffset
-                                      + index * kSchedulerSignatureViewStride;
-            output.schedulerLocalSignatureViews[index].key =
-                *reinterpret_cast<const std::uint64_t*>(entry);
-            output.schedulerLocalSignatureViews[index].tag =
-                *reinterpret_cast<const std::uint8_t*>(entry + kSchedulerSignatureViewTagOffset);
-        }
-        std::memcpy(output.schedulerRemoteSignature.data(),
-                    scheduler + kSchedulerRemoteSignatureOffset,
-                    sizeof output.schedulerRemoteSignature);
-        output.schedulerRemoteSignatureViewCount = *reinterpret_cast<const std::int32_t*>(
-            scheduler + kSchedulerRemoteSignatureViewCountOffset);
-        for (std::size_t index = 0; index < kSchedulerSignatureViewCapacity; ++index) {
-            const auto* const entry = scheduler + kSchedulerRemoteSignatureViewsOffset
-                                      + index * kSchedulerSignatureViewStride;
-            output.schedulerRemoteSignatureViews[index].key =
-                *reinterpret_cast<const std::uint64_t*>(entry);
-            output.schedulerRemoteSignatureViews[index].tag =
-                *reinterpret_cast<const std::uint8_t*>(entry + kSchedulerSignatureViewTagOffset);
-        }
-        output.schedulerSignatureFlags =
-            *reinterpret_cast<const std::uint16_t*>(scheduler + kSchedulerSignatureFlagsOffset);
         for (std::size_t index = 0; index < output.slots.size(); ++index) {
             const auto* const slot = manager + kFirstSlotOffset + index * kSlotStride;
             SlotSnapshot& snapshot = output.slots[index];
@@ -142,6 +113,53 @@ struct Snapshot {
                         *reinterpret_cast<const std::uint64_t*>(view + kViewKeyOffset);
                 }
             }
+        }
+        const std::byte* schedulerOwner = nullptr;
+        for (const SlotSnapshot& slot : output.slots) {
+            if (slot.firstView == nullptr) {
+                continue;
+            }
+            const auto* const view = static_cast<const std::byte*>(slot.firstView);
+            schedulerOwner =
+                *reinterpret_cast<const std::byte* const*>(view + kSchedulerOwnerOffset);
+            if (schedulerOwner != nullptr) {
+                break;
+            }
+        }
+        if (schedulerOwner != nullptr) {
+            const auto* const scheduler = schedulerOwner + kSchedulerOffset;
+            output.schedulerRegisteredViewCount = *reinterpret_cast<const std::int32_t*>(
+                scheduler + kSchedulerRegisteredViewCountOffset);
+            std::memcpy(output.schedulerLocalSignature.data(),
+                        scheduler + kSchedulerLocalSignatureOffset,
+                        sizeof output.schedulerLocalSignature);
+            output.schedulerLocalSignatureViewCount = *reinterpret_cast<const std::int32_t*>(
+                scheduler + kSchedulerLocalSignatureViewCountOffset);
+            for (std::size_t index = 0; index < kSchedulerSignatureViewCapacity; ++index) {
+                const auto* const entry = scheduler + kSchedulerLocalSignatureViewsOffset
+                                          + index * kSchedulerSignatureViewStride;
+                output.schedulerLocalSignatureViews[index].key =
+                    *reinterpret_cast<const std::uint64_t*>(entry);
+                output.schedulerLocalSignatureViews[index].tag =
+                    *reinterpret_cast<const std::uint8_t*>(entry
+                                                           + kSchedulerSignatureViewTagOffset);
+            }
+            std::memcpy(output.schedulerRemoteSignature.data(),
+                        scheduler + kSchedulerRemoteSignatureOffset,
+                        sizeof output.schedulerRemoteSignature);
+            output.schedulerRemoteSignatureViewCount = *reinterpret_cast<const std::int32_t*>(
+                scheduler + kSchedulerRemoteSignatureViewCountOffset);
+            for (std::size_t index = 0; index < kSchedulerSignatureViewCapacity; ++index) {
+                const auto* const entry = scheduler + kSchedulerRemoteSignatureViewsOffset
+                                          + index * kSchedulerSignatureViewStride;
+                output.schedulerRemoteSignatureViews[index].key =
+                    *reinterpret_cast<const std::uint64_t*>(entry);
+                output.schedulerRemoteSignatureViews[index].tag =
+                    *reinterpret_cast<const std::uint8_t*>(entry
+                                                           + kSchedulerSignatureViewTagOffset);
+            }
+            output.schedulerSignatureFlags =
+                *reinterpret_cast<const std::uint16_t*>(scheduler + kSchedulerSignatureFlagsOffset);
         }
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -226,6 +244,11 @@ __declspec(noinline) void __fastcall pump_body(void* manager) noexcept {
         }
         if (lease.accepting) {
             readable = inspect(manager, snapshot);
+        }
+        if (readable) {
+            for (const SlotSnapshot& slot : snapshot.slots) {
+                entity_slot_probe::observe_view(0, slot.firstView);
+            }
         }
         if (readable && record_once(snapshot)) {
             std::array<char, 1536> line{};
