@@ -224,6 +224,22 @@ BAP listener (`30974`). This is correct because the parameter constructs a plain
 The activity client's BAP service resolution still reports `127.0.0.1:30974`; that is a separate
 service-transport path and is expected.
 
+## Message-40 and post-view path
+
+- `FUN_1416E13E0` is message 40's native receptor. It first resolves the body token through
+  `FUN_1416FC4A0`, then passes the decoded stage, view index, optional signature length/bytes, and
+  token into `FUN_1416EB4D0`.
+- `FUN_1416ECDD0` builds the native outbound 40-byte body. Only stage 2 includes the compatibility
+  signature; stages 3 through 5 keep the agreed view index but omit that list.
+- `FUN_1416F6CE0` exposes the two useful completion thresholds: both sides at stage 2 open the
+  compatible-view gate, while both sides at stage 5 mark replication fully open.
+- This matches Sunrise's existing five-stage server state machine and its captured stage-2
+  signature. No handshake-format change is currently indicated.
+- Once Sunrise marks the view bound, established packets already send the native simulation
+  gatekeeper bit as enabled. The following replication-scheduler presence bit remains deliberately
+  clear; encoding that scheduler frame and its entity-create body is the next protocol layer after
+  the view is proven.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -271,7 +287,9 @@ The current checkpoint includes work in:
    ```
 
 3. Confirm `view-create result=ok`, a nonzero view count, and successful message-40 lookup.
-4. Continue through the five message-40 stages and then validate server-authored entity output.
+4. Confirm stages 1 through 5 complete and the external probe reports `view=1 gate=1`.
+5. Use the first post-bind `external-probe` scheduler sample to map the replication frame before
+   adding the first server-authored entity-create body.
 
 ## Build and verification
 
