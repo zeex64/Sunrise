@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <intrin.h>
 #include <string_view>
 
 #include "../../../core/logging/log.h"
@@ -18,11 +19,13 @@ using Enqueue = void(__fastcall*)(std::int32_t, const char*) noexcept;
 constexpr std::size_t kNativeTextSize = 320;
 /** Site id the game uses for an unregistered line. */
 constexpr std::int32_t kUnregisteredSite = -1;
-/** Line storage holds the cleaned text plus its fixed key prefix. */
-constexpr std::size_t kEventCapacity = kNativeTextSize + 64;
+/** Line storage holds the cleaned text plus caller and predecessor diagnostics. */
+constexpr std::size_t kEventCapacity = kNativeTextSize + 320;
 /** Native zone churn can toggle this cosmetic channel name hundreds of times per second. */
 constexpr std::string_view kChannelNameChangePrefix =
     "networking:channel: Channel name change from";
+/** This later line is emitted on another thread even when network_update is already stopped. */
+constexpr std::int32_t kApplicationStateSite = 5;
 
 thread_local bool g_inObserver{};
 /** Outer native-log call currently entered, or the last one when no call is active. */
@@ -33,8 +36,19 @@ std::atomic<std::int32_t> g_returnedSite{-1};
 std::atomic<std::uint64_t> g_nextSerial{0};
 std::atomic<std::uint64_t> g_enteredSerial{0};
 std::atomic<std::uint64_t> g_returnedSerial{0};
+std::atomic<std::uint64_t> g_enteredCallerRva{0};
+std::atomic<std::uint64_t> g_returnedCallerRva{0};
+std::atomic<std::uint32_t> g_enteredThread{0};
+std::atomic<std::uint32_t> g_returnedThread{0};
 std::atomic<std::uint32_t> g_activeObservers{0};
 std::atomic<std::uint32_t> g_activeNative{0};
+
+/** Converts a main-image return address to the RVA used by the Ghidra dump. */
+[[nodiscard]] std::uint64_t image_rva(const void* address) noexcept {
+    const auto base = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+    const auto value = reinterpret_cast<std::uintptr_t>(address);
+    return value < base ? 0 : static_cast<std::uint64_t>(value - base);
+}
 
 /**
  * Copies the native text into fixed storage as one printable line.
@@ -64,7 +78,11 @@ std::atomic<std::uint32_t> g_activeNative{0};
  * @param siteId Registered site id.
  * @param text Borrowed native buffer.
  */
-void capture_line(std::int32_t siteId, const char* text) noexcept {
+void capture_line(std::int32_t siteId,
+                  const char* text,
+                  std::uint64_t callerRva,
+                  std::uint32_t threadId,
+                  const ProgressSnapshot* predecessor) noexcept {
     if (!core::log::accepts(core::log::Channel::client, core::log::Level::info)) {
         return;
     }
@@ -74,12 +92,39 @@ void capture_line(std::int32_t siteId, const char* text) noexcept {
         return;
     }
     std::array<char, kEventCapacity> line{};
-    const int written = std::snprintf(line.data(),
-                                      line.size(),
-                                      "ev=retail site=%d text=%.*s",
-                                      siteId,
-                                      static_cast<int>(textLength),
-                                      sanitized.data());
+    int written = 0;
+    if (predecessor == nullptr) {
+        written = std::snprintf(line.data(),
+                                line.size(),
+                                "ev=retail site=%d caller=+0x%llX tid=%lu text=%.*s",
+                                siteId,
+                                static_cast<unsigned long long>(callerRva),
+                                static_cast<unsigned long>(threadId),
+                                static_cast<int>(textLength),
+                                sanitized.data());
+    } else {
+        written = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=retail site=%d caller=+0x%llX tid=%lu "
+            "prev_enter=%d/%llu/+0x%llX/%lu prev_return=%d/%llu/+0x%llX/%lu "
+            "prev_observer=%u prev_native=%u text=%.*s",
+            siteId,
+            static_cast<unsigned long long>(callerRva),
+            static_cast<unsigned long>(threadId),
+            predecessor->enteredSite,
+            static_cast<unsigned long long>(predecessor->enteredSerial),
+            static_cast<unsigned long long>(predecessor->enteredCallerRva),
+            static_cast<unsigned long>(predecessor->enteredThread),
+            predecessor->returnedSite,
+            static_cast<unsigned long long>(predecessor->returnedSerial),
+            static_cast<unsigned long long>(predecessor->returnedCallerRva),
+            static_cast<unsigned long>(predecessor->returnedThread),
+            predecessor->activeObserverCalls,
+            predecessor->activeNativeCalls,
+            static_cast<int>(textLength),
+            sanitized.data());
+    }
     if (written <= 0) {
         return;
     }
@@ -95,14 +140,24 @@ void capture_line(std::int32_t siteId, const char* text) noexcept {
  * @param text Native buffer holding the already-formatted line.
  */
 __declspec(noinline) void __fastcall enqueue_body(std::int32_t siteId, const char* text) noexcept {
+    const std::uint64_t callerRva = image_rva(_ReturnAddress());
+    const std::uint32_t threadId = GetCurrentThreadId();
     // Native enqueue can itself emit a nested line, so only the outer call is captured.
     const bool outer = !g_inObserver;
+    ProgressSnapshot predecessor{};
+    const bool capturePredecessor = outer && siteId == kApplicationStateSite;
+    if (capturePredecessor) {
+        // Take this before the application-state call replaces the last network-thread progress.
+        predecessor = progress_snapshot();
+    }
     g_inObserver = true;
     std::uint64_t serial = 0;
     if (outer) {
         g_activeObservers.fetch_add(1, std::memory_order_acq_rel);
         serial = g_nextSerial.fetch_add(1, std::memory_order_relaxed) + 1;
         g_enteredSite.store(siteId, std::memory_order_relaxed);
+        g_enteredCallerRva.store(callerRva, std::memory_order_relaxed);
+        g_enteredThread.store(threadId, std::memory_order_relaxed);
         g_enteredSerial.store(serial, std::memory_order_release);
         g_activeNative.fetch_add(1, std::memory_order_acq_rel);
     }
@@ -112,10 +167,16 @@ __declspec(noinline) void __fastcall enqueue_body(std::int32_t siteId, const cha
     }
     if (outer) {
         g_returnedSite.store(siteId, std::memory_order_relaxed);
+        g_returnedCallerRva.store(callerRva, std::memory_order_relaxed);
+        g_returnedThread.store(threadId, std::memory_order_relaxed);
         g_returnedSerial.store(serial, std::memory_order_release);
         g_activeNative.fetch_sub(1, std::memory_order_acq_rel);
         if (siteId != kUnregisteredSite && text != nullptr) {
-            capture_line(siteId, text);
+            capture_line(siteId,
+                         text,
+                         callerRva,
+                         threadId,
+                         capturePredecessor ? &predecessor : nullptr);
         }
         g_inObserver = false;
         g_activeObservers.fetch_sub(1, std::memory_order_acq_rel);
@@ -134,8 +195,12 @@ ProgressSnapshot progress_snapshot() noexcept {
     ProgressSnapshot snapshot{};
     snapshot.enteredSerial = g_enteredSerial.load(std::memory_order_acquire);
     snapshot.enteredSite = g_enteredSite.load(std::memory_order_relaxed);
+    snapshot.enteredCallerRva = g_enteredCallerRva.load(std::memory_order_relaxed);
+    snapshot.enteredThread = g_enteredThread.load(std::memory_order_relaxed);
     snapshot.returnedSerial = g_returnedSerial.load(std::memory_order_acquire);
     snapshot.returnedSite = g_returnedSite.load(std::memory_order_relaxed);
+    snapshot.returnedCallerRva = g_returnedCallerRva.load(std::memory_order_relaxed);
+    snapshot.returnedThread = g_returnedThread.load(std::memory_order_relaxed);
     snapshot.activeObserverCalls = g_activeObservers.load(std::memory_order_acquire);
     snapshot.activeNativeCalls = g_activeNative.load(std::memory_order_acquire);
     return snapshot;

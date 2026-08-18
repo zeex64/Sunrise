@@ -996,6 +996,19 @@ PUB96-to-PUB24 citizen transition after `peer join successful`, `peer-establishe
 reservation update, while the stage-4 view reset loop was saturating the same reliable gameplay
 channel. The entity-record capture cannot be the cause of that lockup because its hook never ran.
 
+With duplicate stage retries removed, the next run proved that view recovery and the transition
+freeze are separate. The new namespace-2 view advanced directly through stages 1 to 5 and bound at
+index 2 without an establishment error. A later PUB24-to-PUB96 citizen join again stopped at
+`Queuing join-complete`, before `sending initial join-complete`; no entity create or record decoder
+ran near the stop. The stage-4 fix is therefore effective, but not sufficient for this older native
+`network_update` stall.
+
+Retail capture now records the main-image caller RVA and Windows thread id for every native line.
+The application-state site that remains live after the networking thread stops also embeds the
+previous entry/return snapshot before replacing it. On the next freeze this directly identifies the
+Ghidra function containing the join-complete queue log and distinguishes a native enqueue stall, a
+Sunrise post-enqueue capture stall, and a return into the surrounding session update.
+
 ## Instrumentation added
 
 Client hooks now cover:

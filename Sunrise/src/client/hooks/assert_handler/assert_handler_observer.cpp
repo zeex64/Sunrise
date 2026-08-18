@@ -29,7 +29,7 @@ constexpr char kUnformattable[] = "<unformattable>";
 /** Watchdog message whose first occurrence receives the lock-free retail progress snapshot. */
 constexpr std::string_view kNetworkHitchPrefix = "hitch detected: mainloop world controller";
 /** One progress line carries two sites, two serials, and the active native-call count. */
-constexpr std::size_t kProgressLineCapacity = 192;
+constexpr std::size_t kProgressLineCapacity = 320;
 
 /**
  * Halt category of the graphics device-loss assert. A removed device never returns, so this one
@@ -108,12 +108,16 @@ void report(int code, const char* text) noexcept {
         const int progressWritten = std::snprintf(
             progressLine.data(),
             progressLine.size(),
-            "ev=assert stage=network-hitch retail_enter=%d/%llu retail_return=%d/%llu "
-            "observer=%u native=%u",
+            "ev=assert stage=network-hitch retail_enter=%d/%llu/+0x%llX/%lu "
+            "retail_return=%d/%llu/+0x%llX/%lu observer=%u native=%u",
             progress.enteredSite,
             static_cast<unsigned long long>(progress.enteredSerial),
+            static_cast<unsigned long long>(progress.enteredCallerRva),
+            static_cast<unsigned long>(progress.enteredThread),
             progress.returnedSite,
             static_cast<unsigned long long>(progress.returnedSerial),
+            static_cast<unsigned long long>(progress.returnedCallerRva),
+            static_cast<unsigned long>(progress.returnedThread),
             progress.activeObserverCalls,
             progress.activeNativeCalls);
         if (progressWritten > 0) {
