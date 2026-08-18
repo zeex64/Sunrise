@@ -28,6 +28,9 @@ constexpr std::uint64_t kReassertIntervalMs = 2'000;
 constexpr std::uint32_t kCategoryCount = 26;
 /** 0 is the game's loosest category threshold. A higher value logs less. */
 constexpr std::uint32_t kMostVerbose = 0;
+/** Native zone churn can toggle this cosmetic channel name hundreds of times per second. */
+constexpr std::string_view kChannelNameChangePrefix =
+    "networking:channel: Channel name change from";
 
 thread_local bool g_inObserver{};
 /** Tick at which the next re-assert is due. Zero makes the first call assert. */
@@ -67,6 +70,9 @@ void capture_line(std::int32_t siteId, const char* text) noexcept {
     }
     std::array<char, kNativeTextSize> sanitized{};
     const std::size_t textLength = sanitize(text, sanitized);
+    if (std::string_view(sanitized.data(), textLength).starts_with(kChannelNameChangePrefix)) {
+        return;
+    }
     std::array<char, kEventCapacity> line{};
     const int written = std::snprintf(line.data(),
                                       line.size(),

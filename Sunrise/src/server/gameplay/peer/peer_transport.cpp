@@ -271,8 +271,8 @@ write_scheduler_signature(bits::Writer& writer,
     client::hooks::network::entity_slot_probe::ViewCapture capture{};
     if (!client::hooks::network::entity_slot_probe::find(peer.view.token, capture)
         || !capture.candidatePresent || capture.namespaceId != kFirstEntityNamespace
-        || capture.occupiedCount < kFirstEntityBaselineOccupied
-        || capture.slot >= 0x2000 || capture.availableCount == 0 || capture.handleGeneration != 0
+        || capture.occupiedCount < kFirstEntityBaselineOccupied || capture.slot >= 0x2000
+        || capture.availableCount == 0 || capture.handleGeneration != 0
         || capture.reservedGeneration != 0 || capture.objectGeneration != 0) {
         return false;
     }
@@ -974,7 +974,11 @@ void consume_established(const state::gameplay::Endpoint& from,
     }
     if (externalReadable) {
         const bool viewAccepted = sessionId != 0 && group::view_accepted(sessionId);
-        if (viewAccepted || external.status.gatekeeperEnabled || external.status.schedulerPresent) {
+        // The scheduler boundary is proven. Retain its large diagnostic body only when the
+        // signature changes instead of synchronously writing it for every simulation packet.
+        if (external.schedulerSignatureUpdate
+            && (viewAccepted || external.status.gatekeeperEnabled
+                || external.status.schedulerPresent)) {
             report(core::log::Level::debug,
                    "ev=gameplay stage=external-probe view=%u offset=%zu tail=%zu gate=%u "
                    "scheduler=%u words=%u widths=%u,%u,%u,%u "
@@ -995,7 +999,7 @@ void consume_established(const state::gameplay::Endpoint& from,
                    static_cast<unsigned long long>(external.words[3]),
                    external.schedulerBitsAfterProbe);
         }
-        if (viewAccepted && external.status.schedulerPresent) {
+        if (external.schedulerSignatureUpdate && viewAccepted && external.status.schedulerPresent) {
             std::array<char, kExternalProbeByteCapacity * 2 + 1> schedulerHex{};
             scheduler_hex(std::span<const std::byte>{external.schedulerBytes}.first(
                               external.schedulerByteCount),
@@ -1235,14 +1239,27 @@ void service(std::uint64_t now) noexcept {
     std::size_t count = 0;
     AcquireSRWLockExclusive(&g_lock);
     for (state::gameplay::PeerLink& peer : g_peers) {
+        if (peer.stage == state::gameplay::PeerStage::absent) {
+            continue;
+        }
+        // A settled native slot may become ready after the last packet was acknowledged. Poll the
+        // first guarded create directly so an idle zone does not need movement traffic to wake it.
+        EntityCreatePlan candidate{};
+        const bool firstAttempt = peer.entityCreateAttempts == 0;
+        bool prepared = false;
+        if (firstAttempt) {
+            (void)synchronise_scheduler_layout(peer);
+            prepared = prepare_entity_create(peer, candidate);
+        }
         // An unacknowledged send queue keeps the packet going out until the peer confirms it.
         // Every packet burns one sequence, so the resend is paced.
         const bool resendDue = peer.outbound.count != 0 && now - peer.lastSend >= kResendInterval;
         const bool entityRetryDue = peer.entityCreateAttempts != 0
                                     && peer.entityCreateAttempts < kEntityCreateAttemptLimit
                                     && now - peer.lastEntityCreate >= kEntityCreateRetryInterval;
-        const bool due = peer.acknowledgementOwed || resendDue || entityRetryDue;
-        if (peer.stage == state::gameplay::PeerStage::absent || !due) {
+        const bool entityFirstDue = firstAttempt && prepared;
+        const bool due = peer.acknowledgementOwed || resendDue || entityFirstDue || entityRetryDue;
+        if (!due) {
             continue;
         }
         peer.acknowledgementOwed = false;
@@ -1259,15 +1276,15 @@ void service(std::uint64_t now) noexcept {
             static_cast<std::uint16_t>((peer.outboundHead + 1) % kPacketSequenceModulus);
         peer.outboundHeadPresent = true;
         peer.lastTick = now;
-        (void)synchronise_scheduler_layout(peer);
-        EntityCreatePlan candidate{};
-        const bool prepared = prepare_entity_create(peer, candidate);
-        const bool firstAttempt = peer.entityCreateAttempts == 0;
+        if (!firstAttempt) {
+            (void)synchronise_scheduler_layout(peer);
+            prepared = prepare_entity_create(peer, candidate);
+        }
         const bool sameAttempt = entityRetryDue && prepared
                                  && candidate.token == peer.entityCreateToken
                                  && candidate.slot == peer.entityCreateSlot
                                  && candidate.handleGeneration == peer.entityCreateHandleGeneration;
-        if (prepared && (firstAttempt || sameAttempt)) {
+        if (entityFirstDue || sameAttempt) {
             if (firstAttempt) {
                 peer.entityCreateToken = candidate.token;
                 peer.entityCreateSlot = candidate.slot;

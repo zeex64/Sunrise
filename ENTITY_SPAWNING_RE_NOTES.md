@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 5a75000e19a7e512b061a889305680b5eccad970b546c41287464acea0d7098e
+SHA-256 888876679927455e1abbfdf0113e253e37d8d7f21de601a42dc69cc7beb5df19
 ```
 
 ## Confirmed high-level path
@@ -878,6 +878,21 @@ fourth attempt. Sunrise now waits until the namespace-2 occupied map reaches the
 baseline of 13 objects before sending the first guarded create. This keeps the probe on the first
 post-baseline candidate, normally slot 13, instead of competing with native zone setup.
 
+The settled-baseline run reached slot 13 and kept the exact token, slot, and generations across all
+four attempts. It also exposed why creation appeared to require moving between zones: the first
+attempt was only evaluated while the peer already owed an acknowledgement, resend, or retry. The
+slot became ready at `t=141324`, but unrelated transition traffic did not wake the create until
+`t=141342`. The service loop now polls only the guarded first-attempt predicate, so a ready idle EDZ
+view emits immediately without movement.
+
+That run was force-closed after the main activity/network path stopped during a public-bubble
+session-ID transition. It did not reach the entity-list decoder, so the freeze was not caused by
+native sobject decoding. Diagnostic pressure was nevertheless excessive: 9,390 cosmetic channel
+name-change lines plus roughly 1,400 full scheduler bodies were synchronously copied to the log in
+157 seconds. Sunrise now suppresses that cosmetic retail line and retains the full scheduler-body
+diagnostic only on signature updates. If the freeze reproduces with that pressure removed, capture
+the stopped thread rather than attributing it to the entity codec.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -933,10 +948,10 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ free roam, enter one zone, and remain there while namespace 2 finishes its native
-   baseline population.
-2. Confirm the first `stage=entity-create-out` now reports pristine slot 13 (or the first slot
-   after an occupied count of at least 13), never transient slot 0.
+1. Load EDZ free roam and remain in the initial zone while namespace 2 finishes its native baseline
+   population; movement must no longer be required.
+2. Confirm the first `stage=entity-create-out` follows the slot-13 `stage=entity-view` update
+   directly, without waiting for unrelated BAP or zone-transition traffic.
 3. Confirm retry attempts retain the exact same token, slot, and handle generation while the
    queued RSAT dependency has time to load.
 4. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
