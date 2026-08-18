@@ -16,6 +16,10 @@ namespace sunrise::client::hooks::network::sobject_native_probe {
 namespace {
 
 constexpr std::size_t kSeenCapacity = 4096;
+/** Package-backed handles encode a 13-bit entry below the package id. */
+constexpr std::uint32_t kTagBase = 0x80800000;
+constexpr std::uint32_t kTagEntryBits = 13;
+constexpr std::uint32_t kTagEntryMask = (1U << kTagEntryBits) - 1U;
 
 std::array<std::atomic_uint32_t, kSeenCapacity> g_seen{};
 
@@ -60,13 +64,19 @@ registration_body(std::uint32_t objectId, std::uint32_t rsat, std::uint8_t unbou
             call(objectId, rsat, unbound);
         }
         if (lease.accepting && record_once(rsat)) {
+            const std::uint32_t handle = rsat >= kTagBase ? rsat - kTagBase : 0;
+            const auto packageId = static_cast<std::uint16_t>(handle >> kTagEntryBits);
+            const auto entryIndex = static_cast<std::uint16_t>(handle & kTagEntryMask);
             std::array<char, 192> line{};
             const int written = std::snprintf(line.data(),
                                               line.size(),
                                               "ev=gameplay stage=sobject-native "
-                                              "object=0x%08X rsat=0x%08X unbound=%u",
+                                              "object=0x%08X rsat=0x%08X package=0x%04X "
+                                              "entry=0x%04X unbound=%u",
                                               objectId,
                                               rsat,
+                                              static_cast<unsigned>(packageId),
+                                              static_cast<unsigned>(entryIndex),
                                               static_cast<unsigned>(unbound));
             if (written > 0) {
                 core::log::write(core::log::Channel::client,

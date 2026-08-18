@@ -1106,6 +1106,24 @@ uses the same gate, so a suppressed multi-view packet cannot consume a retry or 
 sent. Ordinary acknowledgements continue with `schedulerPresent=0` during multi-view transitions,
 which should keep the gameplay channel alive while that tail is reverse engineered.
 
+The next run confirmed that containment: it crossed several EDZ regions without a corrupt gameplay
+packet timeout. Its final `connection_failure_suicide` followed the client disabling the world and
+gracefully leaving its sessions, so it is not the earlier four-second channel failure. The run also
+exposed an unnecessarily narrow entity gate. At `t=147392`, namespace 1 had one scheduler view,
+matching local and remote signatures/lists, and a pristine slot 14, but no create fired because the
+probe still required namespace 2. The four scheduler handlers repeat per logical view and the
+successful record did not depend on namespace-specific syntax, so the one-view gate now accepts any
+captured namespace while retaining every slot, generation, signature, and layout check.
+
+Seven later native registrations and create-codec captures resolved to tags `0x815AA673`,
+`0x80FC45CE`, `0x815AA68E`, `0x8157E74D`, `0x8157E747`, `0x815A6C5E`, and `0x815B16E9`.
+Their package ids are `0x06D5`, `0x03E2`, `0x06D5`, `0x06BF`, `0x06BF`, `0x06D3`, and `0x06D8`;
+all installed files are `w64_environments_*`. They are zone-streamed environment objects rather
+than combatant exemplars. The delayed `sobject-create` calls reflect later authority/transition
+serialization of objects first registered during streaming. `sobject-native` deliberately records
+each RSAT only once per process, so remaining in or revisiting an already-seen zone is expected to
+produce no repeated line. Future reports include the decoded package and entry ids directly.
+
 ## External authored-content research
 
 `D2-Server-Infrastructure.pdf` describes a separate client-side requirement for complete activity
