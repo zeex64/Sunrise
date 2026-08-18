@@ -35,6 +35,7 @@ constexpr std::array<const char*, kHandleCount> kSlotNames{
     "sobject_update_encoder",
     "sobject_native_registration",
     "entity_create_encoder",
+    "entity_slot_decoder",
     "view_membership_sync",
     "activity_membership_decoder",
     "activity_membership_queue",

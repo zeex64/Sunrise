@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 593882ae24715f5db526305c2ba0af9960916bc79894569716ba2734efc12d88
+SHA-256 ebd039466429d7b5ed63a222eec4401f13ad58e598aad0e1c232de8538597c88
 ```
 
 ## Confirmed high-level path
@@ -175,6 +175,28 @@ the raw fixed-array wire grammar is correct.
 
 ## Latest runtime diagnosis
 
+The 2026-08-18 EDZ free-roam run reached the real in-world state and completed the native view
+handshake. Token `0x9EAA300100200006` progressed through local stages 1, 2, and 5; Sunrise then
+reported the view bound with both halves at stage 5 and index 3:
+
+```text
+world_controller:state_manager: Entering state 'activity:in_world'
+Starting activity ... (grognok: edz_freeroam)
+client ... view-state ... local=5 ... compatible=1
+server ... stage=view result=bound local=5 remote=5 index=3 token=0x9EAA300100200006
+```
+
+The live codec registry exactly matched the four functions recovered in Ghidra. No
+`entity-create`, `sobject-create`, or `sobject-update` event occurred, however. The missing enemies
+are therefore not evidence of a failed session or view: Sunrise has not yet published an entity
+record.
+
+This run also proves the scheduler signature is dynamic. It first sent an empty 131-bit update
+(the one-bit update gate plus a 130-bit zero-entry signature), then a valid 347-bit update with
+three registered entries (one update bit plus a 346-bit signature). Any create writer must size
+itself from the captured count and echo the complete captured signature; it must not assume the
+earlier one-view 203-bit prefix.
+
 The field-11 address correction resolved native view creation. The latest run proves all of the
 following:
 
@@ -230,12 +252,9 @@ client ... local=2 local_index=0 remote=1
 server ... result=invalid-stage local=1 remote=0 got=2 index=-1 token=...002
 ```
 
-The newest available log file was last written at `2026-08-18 08:56:41`. It proves native
-`view-create result=ok` for families 0 and 1, and both live scheduler slots report one registered
-view. It still contains no `scheduler-signature`, `scheduler-body`, `view-codecs`,
-`sobject-create`, `sobject-update`, `sobject-native`, or `entity-create` capture. It therefore
-predates the newest probes and cannot validate the current diagnostic DLL. No newer runtime log is
-expected while the game is not running.
+That earlier pre-probe log has now been superseded by the EDZ run above. The newer log validates
+view binding, dynamic scheduler signatures, and the runtime codec table, but still has no native
+entity-create activity to mirror.
 
 ## Endpoint clarification
 
@@ -323,11 +342,22 @@ The schema metadata makes the signature wire grammar exact:
  72 bits  per active entry: 64-bit key followed by 8-bit tag
 ```
 
+The signature object size is `130 + 72 * count` bits; the scheduler's update gate adds one bit.
+The observed totals therefore agree exactly with the schema:
+
+| Registered views | Signature object | Update gate plus signature |
+| ---: | ---: | ---: |
+| 0 | 130 bits | 131 bits |
+| 1 | 202 bits | 203 bits |
+| 2 | 274 bits | 275 bits |
+| 3 | 346 bits | 347 bits |
+
 For one registered view the signature object is therefore 202 bits. `FUN_14171EFE0` writes the
 entity lane's one-bit end marker as one, while `FUN_14171F020` writes the other three lanes' end
 markers as zero. The entity prelude contributes a zero one-bit auxiliary count and a zero one-bit
 generation-presence flag. A signature-update-only empty scheduler frame for one view is exactly
-`1 + 202 + 6 = 209` bits.
+`1 + 202 + 6 = 209` bits. In general, a signature-update-only empty frame is
+`131 + 78 * count` bits, so the three-entry EDZ form is 365 bits.
 
 The empty-stream terminators are also recovered from the four inbound decoders:
 
@@ -570,6 +600,32 @@ records. A complete metadata scan found zero entries whose package class is `0x8
 is the sobject creation wire schema, not the resource class of an sobject RSAT, so class-scanning
 for it cannot produce spawn definitions.
 
+The working `edz_freeroam:scenario_client` (`0x80B2F00A`) was then scanned through its complete
+installed package graph. Its 37 registries contain 773 object containers and 13,149 placed
+handles. Of those, 431 placements use the NPC component class `0x80806382`, reducing to 24 unique
+loadable `0x80809BB6` sobject RSATs:
+
+| RSAT | Object definition | Placements | RSAT | Object definition | Placements |
+| --- | --- | ---: | --- | --- | ---: |
+| `0x80C4FE6B` | `0x80B8341A` | 1 | `0x80C4FE6C` | `0x80B8341C` | 2 |
+| `0x80C4FE81` | `0x80B837B0` | 1 | `0x80C4FE9F` | `0x80B837E3` | 3 |
+| `0x80C4FEAD` | `0x80B83809` | 24 | `0x80C4FEB5` | `0x80B8381A` | 1 |
+| `0x80C4FEC5` | `0x80B8382E` | 1 | `0x80C4FEC7` | `0x80B83830` | 6 |
+| `0x80C4FEEC` | `0x80B83865` | 29 | `0x80C58297` | `0x80B83DA3` | 1 |
+| `0x80C58320` | `0x80C5CE43` | 3 | `0x80C58334` | `0x80BEA05E` | 21 |
+| `0x80C58335` | `0x80BEA060` | 4 | `0x80C58337` | `0x80BEA062` | 23 |
+| `0x80C5833D` | `0x80BEA064` | 42 | `0x80C5833E` | `0x80BEA066` | 30 |
+| `0x80F44DC1` | `0x80BEA90E` | 27 | `0x80F44DC2` | `0x80BEA910` | 3 |
+| `0x80FB4182` | `0x80C0090B` | 2 | `0x80FB4185` | `0x80C0090D` | 6 |
+| `0x80FB418D` | `0x80C00914` | 19 | `0x80FB4B95` | `0x80C0190C` | 176 |
+| `0x80FB4B96` | `0x80C0190E` | 3 | `0x80FB9FC7` | `0x80F67021` | 3 |
+
+The same runtime registered 18 native RSAT dependencies. Every tag resolves to class
+`0x80809BB6` and points back to a `0x80809C0F` definition, validating the static class and
+back-reference interpretation. None is one of the 24 placed EDZ NPC RSATs above, so those live
+registrations are generic activity/sandbox dependencies rather than a trustworthy enemy exemplar.
+They must not be selected blindly for the first create.
+
 A concrete combat activity was then traced locally without running the game:
 
 ```text
@@ -735,8 +791,11 @@ Client hooks now cover:
 - Bounded, read-only native sobject update masks and their exact encoded bit deltas.
 - Bounded, read-only successful native entity-create bodies, including the six-argument encoder
   context and exact body bit delta (`stage=entity-create`).
-- The first native construction observed for up to 4096 distinct RSAT tags, before any dependency
-  on a functioning replication view (`stage=sobject-native`).
+- The first native RSAT dependency registration observed for up to 4096 distinct tags, before any
+  dependency on a functioning replication view (`stage=sobject-native`).
+- A bounded, read-only snapshot of each inbound entity manager's 8,192-slot free and occupied
+  maps, including the first eight slots whose descriptor is unclaimed and their three generation
+  fields (`stage=entity-slots`).
 - Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
@@ -771,30 +830,24 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. On the next game run, confirm `scheduler-signature valid=1 bits=203 count=1`, then verify the
-   client's next `view-slots` snapshot has identical local/remote header, count, key, and tag after
-   Sunrise sends the guarded 209-bit empty frame.
-2. Confirm that empty exchange leaves the native scheduler error-free and fully consumes the six
-   empty-lane bits before enabling any entity data.
-3. Confirm `view-codecs count=4` and that the four runtime RVAs match the static `sobject`, `squad`,
-   `player_broadcast`, and `test_entity` registrations.
-4. Read `sobject-native`, `entity-create`, and `sobject-create` captures to collect known-valid
-   installed RSATs, confirm a 50-bit create-only core body, and determine whether schema
-   `0x80800014` uses the native tag unchanged or remaps it at runtime.
-5. Check whether a captured RSAT is `0x80FCC6C6`, `0x80FCC6C7`, or `0x80FCC6C8`, and correlate it
-   with the three known Gambit Badlands NPC object definitions. Confirm which combatant each tag
-   represents and whether the wire remap preserves the installed id.
-6. Add authoritative vacant-slot tracking, then resolve one captured RSAT to an enemy definition
-   and send one guarded 286-bit create-only kind-0 frame using handle generation zero, object
-   generation two, and explicit default cell `1,0`.
+1. Deploy the current diagnostic DLL and load EDZ free roam until `activity:in_world`.
+2. Capture `stage=entity-slots` and verify an authoritative client manager reports unclaimed slots
+   with free bit one, occupied bit zero, descriptor `-1`, handle generation zero, and object
+   generation zero before choosing a wire handle.
+3. Reconfirm the complete dynamic scheduler signature and registered count for that run. Size the
+   first frame from `130 + 72 * count`, not from a fixed one-view assumption.
+4. Select one of the 24 placed EDZ NPC RSATs only after correlating its object definition with an
+   ordinary combatant; prefer a common placement over a singleton or encounter controller.
+5. Send one guarded kind-0 create-only frame to the bound view using the captured signature, a
+   proven vacant handle, object generation two, and explicit default cell `1,0`.
+6. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
+   unread, over-read, generation, or occupied-slot conflict before attempting an update.
 7. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
 8. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
 9. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
-10. Enable the create writer only after the client has accepted the exact signature and empty
-    terminators without an unread/over-read error.
 
 ## Build and verification
 
@@ -826,6 +879,7 @@ sobject-create
 sobject-update
 sobject-native
 entity-create
+entity-slots
 scheduler-body
 scheduler-signature
 activity-host-decode

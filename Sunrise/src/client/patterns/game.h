@@ -25,6 +25,7 @@ enum class Id : std::size_t {
     sobjectUpdateEncoder,
     sobjectNativeRegistration,
     entityCreateEncoder,
+    entitySlotDecoder,
     viewMembershipSync,
     activityMembershipDecoder,
     activityMembershipQueue,

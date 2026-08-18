@@ -126,6 +126,16 @@ constexpr std::string_view kEntityCreateEncoderText =
 constexpr auto kEntityCreateEncoder =
     signature<signature_length(kEntityCreateEncoderText)>(kEntityCreateEncoderText);
 
+// Matches the inbound direct-entity list decoder. The three position-dependent cookie bytes are
+// wildcarded; the full save sequence, 0x4F0-byte frame, and first context load make it unique.
+constexpr std::string_view kEntitySlotDecoderText =
+    "48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 10 FC FF FF "
+    "48 81 EC F0 04 00 00 48 8B 05 ? ? ? ? 48 33 C4 48 89 85 E0 03 00 00 "
+    "48 8B 41 10 48 8B F1";
+/** Compiled pattern bytes of the entity-list decoder signature above. */
+constexpr auto kEntitySlotDecoder =
+    signature<signature_length(kEntitySlotDecoderText)>(kEntitySlotDecoderText);
+
 // Matches the membership-to-view synchronization pass. The fixed prologue is unique in the
 // current image and ends before the first position-dependent branch displacement.
 constexpr std::string_view kViewMembershipSyncText =
@@ -255,6 +265,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"sobject_update_encoder", kSobjectUpdateEncoder},
     patterns::Pattern{"sobject_native_registration", kSobjectNativeRegistration},
     patterns::Pattern{"entity_create_encoder", kEntityCreateEncoder},
+    patterns::Pattern{"entity_slot_decoder", kEntitySlotDecoder},
     patterns::Pattern{"view_membership_sync", kViewMembershipSync},
     patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},

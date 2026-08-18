@@ -64,6 +64,7 @@ bool derive(std::span<const patterns::ImageRange> image,
     resolved.sobjectNativeRegistration =
         matches[index(patterns::game::Id::sobjectNativeRegistration)].address;
     resolved.entityCreateEncoder = matches[index(patterns::game::Id::entityCreateEncoder)].address;
+    resolved.entitySlotDecoder = matches[index(patterns::game::Id::entitySlotDecoder)].address;
     resolved.viewMembershipSync = matches[index(patterns::game::Id::viewMembershipSync)].address;
     resolved.activityMembershipDecoder =
         matches[index(patterns::game::Id::activityMembershipDecoder)].address;
