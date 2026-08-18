@@ -502,11 +502,24 @@ bool enqueue_message(state::gameplay::OutboundQueue& queue,
     return true;
 }
 
-/** Writes the filler trailer that ends every packet. */
-bool write_absent_filler(bits::Writer& writer) noexcept {
-    // Two bits close a packet: the extended-presence bit, then the external-body present bit.
-    // The reader consumes both, so both must be written even though both are zero.
-    return writer.write(0, kFlagWidth) && writer.write(0, kFlagWidth);
+/** Reads the simulation-gatekeeper and replication-scheduler presence bits. */
+bool read_external_status(bits::Reader& reader, ExternalStatus& output) noexcept {
+    std::uint64_t gatekeeper = 0;
+    std::uint64_t scheduler = 0;
+    if (!reader.read(kFlagWidth, gatekeeper) || !reader.read(kFlagWidth, scheduler)) {
+        return false;
+    }
+    output.gatekeeperEnabled = gatekeeper != 0;
+    output.schedulerPresent = scheduler != 0;
+    return true;
+}
+
+/** Writes the simulation-gatekeeper and replication-scheduler presence bits. */
+bool write_external_status(bits::Writer& writer,
+                           bool gatekeeperEnabled,
+                           bool schedulerPresent) noexcept {
+    return writer.write(gatekeeperEnabled ? 1U : 0U, kFlagWidth)
+        && writer.write(schedulerPresent ? 1U : 0U, kFlagWidth);
 }
 
 } // namespace sunrise::middleware::gameplay::peer

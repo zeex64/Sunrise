@@ -173,6 +173,22 @@ void report_message(std::uint32_t messageType,
     plan.joinCharacterSoid = parsed.characterSoid;
     plan.delivery = Delivery::joinNotifications;
     plan.mutationDomain = MutationDomain::entitySlots;
+    std::array<char, core::log::kLineCapacity> line{};
+    const int written = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=activity stage=join result=prepared session=0x%016llX member=0x%016llX "
+        "character=0x%016llX granted=%zu reserve=%zu",
+        static_cast<unsigned long long>(parsed.sessionId),
+        static_cast<unsigned long long>(parsed.memberKey),
+        static_cast<unsigned long long>(parsed.characterSoid),
+        granted,
+        reserve);
+    if (written > 0) {
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
     return true;
 }
 

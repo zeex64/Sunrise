@@ -3,7 +3,13 @@
 #include "../../../targets/game.h"
 #include "../../../targets/steam_targets.h"
 #include "../bubble_authority/bubble_authority_replacements.h"
+#include "../activity_host_probe.h"
 #include "../coordinator/network_call_coordinator.h"
+#include "../view_creation_probe.h"
+#include "../view_membership_probe.h"
+#include "../view_message_probe.h"
+#include "../view_signature_capture.h"
+#include "../view_slot_probe.h"
 
 namespace sunrise::client::hooks::network::lifecycle {
 namespace {
@@ -15,6 +21,15 @@ namespace {
         http::execute_request_entry_point(),
         bubble_authority::decoder_entry_point(),
         bubble_authority::content_untracked_entry_point(),
+        view_signature::refresh_entry_point(),
+        view_message_probe::lookup_entry_point(),
+        view_slot_probe::pump_entry_point(),
+        view_membership_probe::sync_entry_point(),
+        view_membership_probe::wire_entry_point(),
+        view_membership_probe::decoded_entry_point(),
+        view_creation_probe::creator_entry_point(),
+        activity_host_probe::decoder_entry_point(),
+        activity_host_probe::connection_state_entry_point(),
         signon::readiness_entry_point(),
         signon::ready_entry_point(),
     };
@@ -39,8 +54,17 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.httpExecuteRequest, replacements[1]},
         hooking::detour::Spec{resolved.bubbleAuthorityDecoder, replacements[2]},
         hooking::detour::Spec{resolved.contentUntrackedGetter, replacements[3]},
-        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[4]},
-        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[5]},
+        hooking::detour::Spec{resolved.viewSignatureRefresh, replacements[4]},
+        hooking::detour::Spec{resolved.viewMessageLookup, replacements[5]},
+        hooking::detour::Spec{resolved.viewSlotPump, replacements[6]},
+        hooking::detour::Spec{resolved.viewMembershipSync, replacements[7]},
+        hooking::detour::Spec{resolved.activityMembershipDecoder, replacements[8]},
+        hooking::detour::Spec{resolved.activityMembershipQueue, replacements[9]},
+        hooking::detour::Spec{resolved.viewCreator, replacements[10]},
+        hooking::detour::Spec{resolved.activityHostDecoder, replacements[11]},
+        hooking::detour::Spec{resolved.activityHostConnectionState, replacements[12]},
+        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[13]},
+        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[14]},
     };
 }
 

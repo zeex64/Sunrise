@@ -5,6 +5,9 @@
 #include "../../../../../middleware/bap/activity_message/replicate_membership.h"
 #include "../../../../../middleware/secure_channel/runtime.h"
 #include "../../../../gameplay/gameplay_advertisement.h"
+#include "../../../../gameplay/endpoint/gameplay_endpoint.h"
+#include "../../../../gameplay/group/group_host.h"
+#include "../../../../gameplay/group/group_host_sessions.h"
 #include "activity_arrival.h"
 #include "activity_notification_frame.h"
 
@@ -16,6 +19,35 @@ namespace message = middleware::bap::activity_message::replicate_membership;
 /** The one published member always occupies slot zero of both top-level masks. */
 constexpr std::uint8_t kLocalMemberSlot = 0;
 
+/** Copies one State identity into its wire form. */
+void copy_identity(const state::activity::membership::Identity& source,
+                   middleware::bap::activity_message::client_identity::ClientIdentity&
+                       target) noexcept {
+    target.memberKey = source.memberKey;
+    target.field1 = source.smallOpaque;
+    target.field2 = source.signedOpaque;
+    target.field3 = source.joinIdentity;
+    target.accountSoid = source.accountSoid;
+    target.field5 = source.opaqueSoid;
+    target.field6 = source.secondaryOpaque;
+}
+
+/** Adds the synthetic gameplay host as the second activity-member record. */
+void reflect_host(message::MembershipSnapshot& wire, std::uint64_t hostKey) noexcept {
+    const state::gameplay::Endpoint host = server::gameplay::endpoint::advertised();
+    if (hostKey == 0 || hostKey == wire.identity.memberKey || host.address == 0
+        || host.port == 0) {
+        return;
+    }
+    wire.reflectedHost.memberKey = hostKey;
+    wire.reflectedHost.field1 = -1;
+    wire.reflectedHost.field2 = -1;
+    wire.reflectedHost.field3 = hostKey;
+    middleware::gameplay::descriptor::write_net_addr(
+        host.address, host.port, wire.reflectedHostAddress);
+    wire.hasReflectedHost = true;
+}
+
 /**
  * Maps a lock-consistent State snapshot into the fixed Middleware schema.
  * @param sessionId Joined activity session, used to resolve the advertised region.
@@ -24,16 +56,11 @@ constexpr std::uint8_t kLocalMemberSlot = 0;
  */
 [[nodiscard]] message::MembershipSnapshot
 make_wire_snapshot(std::uint64_t sessionId,
-                   const state::activity::membership::PendingMutation& mutation) noexcept {
+                   const state::activity::membership::PendingMutation& mutation,
+                   bool includeCitizenAdvertisement) noexcept {
     const state::activity::membership::Snapshot& snapshot = mutation.snapshot;
     message::MembershipSnapshot wire{};
-    wire.identity.memberKey = snapshot.identity.memberKey;
-    wire.identity.field1 = snapshot.identity.smallOpaque;
-    wire.identity.field2 = snapshot.identity.signedOpaque;
-    wire.identity.field3 = snapshot.identity.joinIdentity;
-    wire.identity.accountSoid = snapshot.identity.accountSoid;
-    wire.identity.field5 = snapshot.identity.opaqueSoid;
-    wire.identity.field6 = snapshot.identity.secondaryOpaque;
+    copy_identity(snapshot.identity, wire.identity);
     wire.spawn.state = snapshot.spawn.state;
     wire.spawn.opaqueByte = snapshot.spawn.opaqueByte;
     wire.spawn.opaqueValue = snapshot.spawn.opaqueValue;
@@ -44,14 +71,36 @@ make_wire_snapshot(std::uint64_t sessionId,
     wire.revision = snapshot.revision;
     wire.epoch = snapshot.epoch;
     wire.transitionToken = snapshot.transitionToken;
+    // A foreign activity still receives its own two-member copy for normal membership handling.
+    // View creation itself is driven from the active root membership below, not this foreign copy.
+    if (!includeCitizenAdvertisement) {
+        state::activity::membership::Identity local{};
+        const std::uint64_t hostKey =
+            server::gameplay::group::holding_group_session(sessionId);
+        if (hostKey != 0 && state::activity::membership::primary_identity(local)) {
+            copy_identity(local, wire.identity);
+            reflect_host(wire, hostKey);
+        }
+        SecureZeroMemory(&local, sizeof local);
+    }
     // The region this body is about to commit, not the one State still holds. Staging runs before
     // the commit, so the region just left would leave the pending record empty for good.
-    const EffectiveRegion region = planned_region(mutation, sessionId);
-    server::gameplay::build_advertisement(region.index,
-                                          region.reported ? server::gameplay::RegionSource::reported
-                                                          : server::gameplay::RegionSource::arrival,
-                                          kLocalMemberSlot,
-                                          wire.citizen);
+    if (includeCitizenAdvertisement) {
+        const EffectiveRegion region = planned_region(mutation, sessionId);
+        server::gameplay::build_advertisement(
+            region.index,
+            region.reported ? server::gameplay::RegionSource::reported
+                            : server::gameplay::RegionSource::arrival,
+            kLocalMemberSlot,
+            wire.citizen);
+        // FUN_141702580 synchronizes the single active root membership. Mirror the gameplay group
+        // named by this region into that membership so its non-local slot reaches view creation.
+        const std::uint64_t hostKey =
+            server::gameplay::group::advertised_group_session(region.index);
+        if (server::gameplay::group::session_admitted(hostKey)) {
+            reflect_host(wire, hostKey);
+        }
+    }
     return wire;
 }
 
@@ -60,6 +109,7 @@ make_wire_snapshot(std::uint64_t sessionId,
 /** Appends one current membership svc9 notification and advances its local nonce. */
 bool append_membership_notification(Scratch& scratch,
                                     const activity_message::ActivityPlan& activity,
+                                    bool includeCitizenAdvertisement,
                                     std::span<const std::byte, state::kAesKeySize> key,
                                     std::array<std::byte, state::kBapNonceSize>& nonce,
                                     std::span<std::byte> response,
@@ -71,8 +121,8 @@ bool append_membership_notification(Scratch& scratch,
     const std::size_t initialWritten = written;
     auto initialNonce = nonce;
     std::size_t messageSize = 0;
-    const message::MembershipSnapshot snapshot =
-        make_wire_snapshot(activity.sessionId, activity.membershipMutation);
+    const message::MembershipSnapshot snapshot = make_wire_snapshot(
+        activity.sessionId, activity.membershipMutation, includeCitizenAdvertisement);
     const bool encoded =
         message::encode_replicate_membership(snapshot, scratch.responseBody, messageSize)
         && append_notification_frame(scratch,

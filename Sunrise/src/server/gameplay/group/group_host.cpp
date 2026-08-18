@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 
+#include "../../../client/hooks/network/view_signature_capture.h"
 #include "../../../core/settings/settings.h"
 #include "../../../middleware/gameplay/descriptor/join_descriptor.h"
 #include "../../../middleware/gameplay/group/member_messages.h"
@@ -45,8 +46,6 @@ constexpr std::size_t kSnapshotMemberCount = 2;
 constexpr std::uint8_t kJoinLatchParameter = 0;
 /** Peers this host tracks at once. The public POC admits one. */
 constexpr std::size_t kAdmittedCapacity = 4;
-/** Loopback address the BAP listener binds, in host order. */
-constexpr std::uint32_t kLoopbackAddress = 0x7F000001;
 /** Every member index the `activity-host` parameter covers. The peer needs its own bit set. */
 constexpr std::uint32_t kAllMembers = 0xFFFFFFFF;
 /** Shortest gap between two retries of an owed publish. */
@@ -55,6 +54,27 @@ constexpr std::uint64_t kRetryInterval = 250;
 constexpr std::uint32_t kPeerPlayerSlot = 0;
 /** Counter the first player of a session carries. The consumer's own add starts here too. */
 constexpr std::uint32_t kFirstAddSequence = 0;
+/** Native view establishment begins with both sides publishing stage one. */
+constexpr std::uint8_t kInitialViewStage = 1;
+/** Only stage two carries the runtime compatibility signature. */
+constexpr std::uint8_t kSignatureViewStage = 2;
+/** Both sides reaching stage five opens the simulation gatekeeper. */
+constexpr std::uint8_t kFinalViewStage = 5;
+/** This host owns the first replication view on its one admitted channel. */
+constexpr std::int32_t kInitialViewIndex = 0;
+
+/** Per-session host side of native message 40's five-stage handshake. */
+struct ViewHandshake {
+    client::hooks::network::view_signature::CapturedSignature signature{};
+    /** Native activity-session token carried inside message 40. */
+    std::uint64_t token{};
+    std::int32_t index{-1};
+    std::uint8_t localStage{};
+    std::uint8_t remoteStage{};
+    bool started{};
+    bool signatureReady{};
+    bool bound{};
+};
 
 /** One admitted peer and the player it asked this host to add. */
 struct Admitted {
@@ -73,8 +93,14 @@ struct Admitted {
     bool activityHostPublished{};
     /** Set once a snapshot naming the peer's player is on that channel. The queue can refuse it. */
     bool playerPublished{};
+    /** Set once this host has answered the peer's establish announcement on the reliable link. */
+    bool peerEstablishPublished{};
+    /** Message-40 state is per group session even when one channel carries several sessions. */
+    ViewHandshake view{};
     /** Tick of the last retry, so a full queue is retried on a timer rather than every packet. */
     std::uint64_t lastRetry{};
+    /** View retry clock is independent of the membership/parameter queue. */
+    std::uint64_t viewLastRetry{};
     /** Order in which the peer last named this session. The lowest is the least recently used. */
     std::uint64_t lastUse{};
 };
@@ -155,6 +181,16 @@ template <typename Body>
             entry.endpoint = peer;
             entry.sessionId = sessionId;
             entry.lastUse = use;
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+/** @return Admitted record whose native view carries one activity token. */
+[[nodiscard]] Admitted* find_admitted_view(std::uint64_t token) noexcept {
+    for (Admitted& entry : g_admitted) {
+        if (entry.occupied && entry.view.token == token) {
             return &entry;
         }
     }
@@ -259,8 +295,12 @@ void fill_activity_host(wire::ActivityHostParameter& body, std::uint64_t groupSe
     // The peer tests only the bit for its own member index, and this host does not decode which
     // index that is, so every bit is set.
     body.memberMask = kAllMembers;
-    body.address = kLoopbackAddress;
-    body.port = core::settings::get().server.bapPort;
+    // This parameter constructs a plain-UDP peer address. It must name the same gameplay endpoint
+    // as the join descriptor; advertising the BAP service port creates a second, unestablished
+    // channel that the native view creator resolves and then rejects.
+    const state::gameplay::Endpoint host = endpoint::advertised();
+    body.address = host.address;
+    body.port = host.port;
 }
 
 /**
@@ -301,33 +341,191 @@ void fill_activity_host(wire::ActivityHostParameter& body, std::uint64_t groupSe
 }
 
 /**
- * Answers one view establishment by binding and echoing the peer's own signature.
- * What a host's own view should hold is unknown. Echoing is the only answer that cannot produce
- * a signature mismatch.
- * @param sessionId Group session the link carries.
- * @param view Decoded view body.
+ * Answers the peer's establish announcement.
+ *
+ * Peer-establish is symmetric: each endpoint publishes the session id after its local membership
+ * reaches the establish gate. The client's inbound half raises the native session event that binds
+ * the corresponding replication slot. Message 40 cannot resolve a view until that event runs.
  */
-void bind_view(std::uint64_t sessionId, const wire::ViewEstablishment& view) noexcept {
-    state::gameplay::ViewSignature signature{};
-    signature.token = view.sessionToken;
-    signature.kind = view.kind;
-    signature.listCount = view.listCount;
-    signature.hasList = view.hasList;
-    signature.list = view.list;
-    signature.bound = true;
-    peer::bind_view(sessionId, signature);
-
+[[nodiscard]] bool publish_peer_establish(const Admitted& record) noexcept {
     const bool sent = send_reliable(
-        sessionId,
+        record.sessionId,
+        static_cast<std::uint8_t>(wire::SessionMessageId::peerEstablish),
+        wire::kPeerEstablishSize,
+        [&record](bits::Writer& writer) noexcept {
+            return wire::write_session_only(writer, record.sessionId);
+        });
+    report(sent ? core::log::Level::info : core::log::Level::debug,
+           "ev=gameplay stage=establish result=%s direction=out session=0x%016llX",
+           sent ? "queued" : "deferred",
+           static_cast<unsigned long long>(record.sessionId));
+    return sent;
+}
+
+/** Queues one local stage of message 40 and advances only after the queue accepts it. */
+[[nodiscard]] bool send_view_stage(Admitted& record, std::uint8_t stage) noexcept {
+    wire::ViewEstablishment body{};
+    body.kind = stage;
+    body.sessionToken = record.view.token;
+    if (stage >= kSignatureViewStage) {
+        body.hasOptionalValue = true;
+        body.optionalValue = record.view.index;
+    }
+    if (stage == kSignatureViewStage) {
+        body.hasList = record.view.signatureReady;
+        body.listCount = record.view.signature.count;
+        body.list = record.view.signature.bytes;
+    }
+    const bool sent = send_reliable(
+        record.sessionId,
         wire::kViewMessageId,
         wire::kViewMessageSize,
-        [&view](bits::Writer& writer) noexcept { return wire::write_view(writer, view); });
-    report(sent ? core::log::Level::info : core::log::Level::warn,
-           "ev=gameplay stage=view result=%s kind=%u token=0x%llX list=%u",
-           sent ? "bound" : "fail",
-           static_cast<unsigned>(view.kind),
-           static_cast<unsigned long long>(view.sessionToken),
-           static_cast<unsigned>(view.listCount));
+        [&body](bits::Writer& writer) noexcept { return wire::write_view(writer, body); });
+    if (sent) {
+        record.view.localStage = stage;
+    }
+    report(sent ? core::log::Level::info : core::log::Level::debug,
+           "ev=gameplay stage=view result=%s direction=out local=%u remote=%u index=%d "
+           "token=0x%llX list=%u",
+           sent ? "queued" : "deferred",
+           static_cast<unsigned>(stage),
+           static_cast<unsigned>(record.view.remoteStage),
+           record.view.index,
+           static_cast<unsigned long long>(record.view.token),
+           static_cast<unsigned>(body.listCount));
+    return sent;
+}
+
+/** Marks the peer bound only after both sides complete native stage five. */
+void complete_view(Admitted& record) noexcept {
+    if (record.view.bound) {
+        return;
+    }
+    state::gameplay::ViewSignature signature{};
+    signature.token = record.view.token;
+    signature.kind = kFinalViewStage;
+    signature.listCount = record.view.signature.count;
+    signature.hasList = record.view.signatureReady;
+    signature.list = record.view.signature.bytes;
+    signature.bound = true;
+    peer::bind_view(record.sessionId, signature);
+    record.view.bound = true;
+    report(core::log::Level::info,
+           "ev=gameplay stage=view result=bound local=%u remote=%u index=%d token=0x%llX",
+           static_cast<unsigned>(record.view.localStage),
+           static_cast<unsigned>(record.view.remoteStage),
+           record.view.index,
+           static_cast<unsigned long long>(record.view.token));
+}
+
+/**
+ * Advances the initiator half of the native handshake by at most one stage.
+ * The native client refreshes the stage-two signature continuously. Capturing that exact value
+ * avoids hard-coding a destination/world datum that changes across activity transitions.
+ */
+void progress_view(Admitted& record) noexcept {
+    if (!record.view.started || record.view.bound) {
+        return;
+    }
+    if (record.view.token == state::activity::kAbsentSessionId) {
+        record.view.token = held_host_session(record.sessionId);
+        if (record.view.token == state::activity::kAbsentSessionId) {
+            return;
+        }
+        report(core::log::Level::info,
+               "ev=gameplay stage=view result=routed group=0x%016llX token=0x%016llX",
+               static_cast<unsigned long long>(record.sessionId),
+               static_cast<unsigned long long>(record.view.token));
+    }
+    if (record.view.localStage == 0) {
+        (void)send_view_stage(record, kInitialViewStage);
+        return;
+    }
+    // Reliable delivery only proves the channel consumed message 40. The native view lookup may
+    // not exist yet, in which case its handler deliberately drops the body without replying.
+    // Keep the current logical stage moving until the receptor publishes the same stage.
+    if (record.view.remoteStage < record.view.localStage) {
+        (void)send_view_stage(record, record.view.localStage);
+        return;
+    }
+    if (record.view.localStage == kInitialViewStage
+        && record.view.remoteStage >= kInitialViewStage) {
+        if (!record.view.signatureReady) {
+            client::hooks::network::view_signature::CapturedSignature captured{};
+            if (!client::hooks::network::view_signature::find(record.view.token, captured)) {
+                return;
+            }
+            record.view.signature = captured;
+            record.view.signatureReady = true;
+            record.view.index = kInitialViewIndex;
+        }
+        (void)send_view_stage(record, kSignatureViewStage);
+        return;
+    }
+    if (record.view.localStage >= kSignatureViewStage
+        && record.view.remoteStage >= record.view.localStage) {
+        if (record.view.localStage == kFinalViewStage) {
+            complete_view(record);
+            return;
+        }
+        (void)send_view_stage(record, static_cast<std::uint8_t>(record.view.localStage + 1));
+    }
+}
+
+/** Validates one receptor stage and advances the matching host view. */
+void accept_view(const state::gameplay::Endpoint& from,
+                 const wire::ViewEstablishment& body,
+                 std::uint64_t now) noexcept {
+    const char* result = "missing-session";
+    std::uint8_t localStage = 0;
+    std::uint8_t remoteStage = 0;
+    std::int32_t index = -1;
+    AcquireSRWLockExclusive(&g_admittedLock);
+    Admitted* const record = find_admitted_view(body.sessionToken);
+    if (record != nullptr && record->endpoint.address == from.address
+        && record->endpoint.port == from.port) {
+        result = "invalid-stage";
+        const bool stageValid = body.kind >= kInitialViewStage && body.kind <= kFinalViewStage;
+        const bool ordered = body.kind <= record->view.remoteStage + 1;
+        bool formValid = false;
+        if (body.kind == kInitialViewStage) {
+            formValid = !body.hasOptionalValue && !body.hasList;
+        } else if (body.kind == kSignatureViewStage) {
+            formValid = record->view.signatureReady && body.hasOptionalValue && body.hasList
+                        && body.optionalValue == record->view.index
+                        && body.listCount == record->view.signature.count
+                        && body.list == record->view.signature.bytes;
+        } else {
+            formValid = body.hasOptionalValue && !body.hasList
+                        && body.optionalValue == record->view.index;
+        }
+        if (stageValid && ordered && formValid) {
+            if (body.kind > record->view.remoteStage) {
+                record->view.remoteStage = body.kind;
+            }
+            record->view.started = true;
+            record->viewLastRetry = now;
+            progress_view(*record);
+            result = "accepted";
+        } else if (stageValid && body.kind <= record->view.remoteStage && formValid) {
+            result = "repeat";
+        }
+        localStage = record->view.localStage;
+        remoteStage = record->view.remoteStage;
+        index = record->view.index;
+    }
+    ReleaseSRWLockExclusive(&g_admittedLock);
+    report(result[0] == 'a' || result[0] == 'r' ? core::log::Level::info
+                                                : core::log::Level::warn,
+           "ev=gameplay stage=view result=%s direction=in local=%u remote=%u got=%u index=%d "
+           "token=0x%llX list=%u",
+           result,
+           static_cast<unsigned>(localStage),
+           static_cast<unsigned>(remoteStage),
+           static_cast<unsigned>(body.kind),
+           index,
+           static_cast<unsigned long long>(body.sessionToken),
+           static_cast<unsigned>(body.listCount));
 }
 
 /**
@@ -450,7 +648,9 @@ bool consume(const state::gameplay::Endpoint& from,
         if (!wire::read_view(reader, view)) {
             return false;
         }
-        bind_view(sessionId, view);
+        // Message 40 names its own group session. A link may carry several overlapping regions,
+        // so the fallback session is deliberately not used here.
+        accept_view(from, view, now);
         return true;
     }
     if (id == static_cast<std::uint8_t>(wire::SessionMessageId::leaveSession)) {
@@ -477,9 +677,25 @@ bool consume(const state::gameplay::Endpoint& from,
         if (!wire::read_session_only(reader, established)) {
             return false;
         }
+        bool establishPublished = false;
+        AcquireSRWLockExclusive(&g_admittedLock);
+        Admitted* const record = claim(from, established);
+        if (record != nullptr) {
+            record->view.started = true;
+            if (!record->peerEstablishPublished) {
+                record->peerEstablishPublished = publish_peer_establish(*record);
+            }
+            establishPublished = record->peerEstablishPublished;
+            // Even when the echo queues immediately, wait for the service slice before sending
+            // message 40. Its handler otherwise runs before the client's native session event has
+            // had a frame in which to bind the replication slot.
+            record->viewLastRetry = now;
+        }
+        ReleaseSRWLockExclusive(&g_admittedLock);
         report(core::log::Level::info,
-               "ev=gameplay stage=establish result=ok session=0x%016llX",
-               static_cast<unsigned long long>(established));
+               "ev=gameplay stage=establish result=ok direction=in session=0x%016llX echo=%s",
+               static_cast<unsigned long long>(established),
+               establishPublished ? "queued" : "deferred");
         return true;
     }
     if (id == static_cast<std::uint8_t>(wire::SessionMessageId::joinComplete)) {
@@ -611,7 +827,10 @@ bool publish_membership(const state::gameplay::Endpoint& peer,
         record->joinPublished = false;
         record->activityHostPublished = false;
         record->playerPublished = false;
+        record->peerEstablishPublished = false;
+        record->view = {};
         record->lastRetry = 0;
+        record->viewLastRetry = 0;
         published = publish_snapshot(*record);
     }
     ReleaseSRWLockExclusive(&g_admittedLock);
@@ -640,6 +859,18 @@ void service(std::uint64_t now) noexcept {
     if (occupied > kPublicSessionCapacity && oldest != nullptr) {
         retired = oldest->sessionId;
         *oldest = {};
+    }
+    for (Admitted& record : g_admitted) {
+        if (!record.occupied || !record.view.started || record.view.bound
+            || now - record.viewLastRetry < kRetryInterval) {
+            continue;
+        }
+        record.viewLastRetry = now;
+        if (!record.peerEstablishPublished) {
+            record.peerEstablishPublished = publish_peer_establish(record);
+            continue;
+        }
+        progress_view(record);
     }
     for (Admitted& record : g_admitted) {
         const bool owed =
@@ -701,6 +932,20 @@ bool publish_join_parameters(std::uint64_t sessionId) noexcept {
 /** Reports whether replication may produce entity output for one peer. */
 bool view_accepted(std::uint64_t sessionId) noexcept {
     return peer::view_bound(sessionId);
+}
+
+/** Reports whether a peer has joined one advertised gameplay group. */
+bool session_admitted(std::uint64_t sessionId) noexcept {
+    bool admitted = false;
+    AcquireSRWLockShared(&g_admittedLock);
+    for (const Admitted& entry : g_admitted) {
+        if (entry.occupied && entry.sessionId == sessionId) {
+            admitted = true;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_admittedLock);
+    return admitted;
 }
 
 /** Copies every admitted group-session record. */

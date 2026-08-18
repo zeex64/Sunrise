@@ -120,6 +120,37 @@ std::uint64_t held_host_session(std::uint64_t groupSessionId) noexcept {
     return held;
 }
 
+/** Resolves the gameplay group advertised for one region. */
+std::uint64_t advertised_group_session(std::int32_t regionIndex) noexcept {
+    std::uint64_t groupSessionId = 0;
+    AcquireSRWLockShared(&g_hostSessionLock);
+    for (const HostSession& entry : g_hostSessions) {
+        if (entry.occupied && entry.regionIndex == regionIndex) {
+            groupSessionId = entry.groupSessionId;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_hostSessionLock);
+    return groupSessionId;
+}
+
+/** Resolves the gameplay group that owns one advertised activity-host session. */
+std::uint64_t holding_group_session(std::uint64_t hostSessionId) noexcept {
+    std::uint64_t groupSessionId = 0;
+    if (hostSessionId == state::activity::kAbsentSessionId) {
+        return groupSessionId;
+    }
+    AcquireSRWLockShared(&g_hostSessionLock);
+    for (const HostSession& entry : g_hostSessions) {
+        if (entry.occupied && entry.hostSessionId == hostSessionId) {
+            groupSessionId = entry.groupSessionId;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_hostSessionLock);
+    return groupSessionId;
+}
+
 /** Copies every occupied host-session row. */
 void snapshot_host_sessions(std::span<HostSessionRow> output, std::size_t& count) noexcept {
     count = 0;

@@ -19,6 +19,18 @@ struct Targets {
     std::byte* contentManifestSignatureGate{};
     std::byte* bubbleAuthorityDecoder{};
     std::byte* contentUntrackedGetter{};
+    std::byte* viewSignatureRefresh{};
+    std::byte* viewMessageLookup{};
+    std::byte* viewSlotPump{};
+    std::byte* viewMembershipSync{};
+    std::byte* activityMembershipDecoder{};
+    std::byte* activityMembershipQueue{};
+    std::byte* viewCreator{};
+    std::byte* viewAddressResolver{};
+    std::byte* viewChannelValidator{};
+    std::byte* viewChannelAccessor{};
+    std::byte* activityHostDecoder{};
+    std::byte* activityHostConnectionState{};
     std::byte* contentIdToken{};
 };
 

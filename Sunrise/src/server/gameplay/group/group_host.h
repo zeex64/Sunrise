@@ -105,6 +105,14 @@ void service(std::uint64_t now) noexcept;
 [[nodiscard]] bool view_accepted(std::uint64_t sessionId) noexcept;
 
 /**
+ * Reports whether the gameplay host has admitted the region's group session.
+ * A claimed advertisement row alone is earlier than the client's gameplay connection.
+ * @param sessionId Group session advertised for the region.
+ * @return True once a peer has joined that group.
+ */
+[[nodiscard]] bool session_admitted(std::uint64_t sessionId) noexcept;
+
+/**
  * Frees every admitted record at one endpoint.
  * Only an association timeout calls this. A connect-closed must not: the client rebuilds its
  * channel within 50 ms and keeps every group session it held.

@@ -264,6 +264,12 @@
     <ClCompile Include="src\client\hooks\queuez\queuez_hook_lifecycle.cpp" />
     <ClCompile Include="src\client\content\diagnostics\content_readiness_report.cpp" />
     <ClCompile Include="src\client\hooks\network\bubble_authority\bubble_authority_replacements.cpp" />
+    <ClCompile Include="src\client\hooks\network\view_signature_capture.cpp" />
+    <ClCompile Include="src\client\hooks\network\view_message_probe.cpp" />
+    <ClCompile Include="src\client\hooks\network\view_slot_probe.cpp" />
+    <ClCompile Include="src\client\hooks\network\view_membership_probe.cpp" />
+    <ClCompile Include="src\client\hooks\network\view_creation_probe.cpp" />
+    <ClCompile Include="src\client\hooks\network\activity_host_probe.cpp" />
     <ClCompile Include="src\client\hooks\network\bubble_authority\scope\bubble_authority_scope.cpp" />
     <ClCompile Include="src\client\hooks\network\http\http_descriptor_route.cpp" />
     <ClCompile Include="src\client\hooks\network\http\http_executor_replacement.cpp" />
@@ -835,6 +841,12 @@
     <ClInclude Include="src\client\hooks\network\investment\investment_derived_rebuild.h" />
     <ClInclude Include="src\client\hooks\network\runtime.h" />
     <ClInclude Include="src\client\hooks\network\bubble_authority\bubble_authority_replacements.h" />
+    <ClInclude Include="src\client\hooks\network\view_signature_capture.h" />
+    <ClInclude Include="src\client\hooks\network\view_message_probe.h" />
+    <ClInclude Include="src\client\hooks\network\view_slot_probe.h" />
+    <ClInclude Include="src\client\hooks\network\view_membership_probe.h" />
+    <ClInclude Include="src\client\hooks\network\view_creation_probe.h" />
+    <ClInclude Include="src\client\hooks\network\activity_host_probe.h" />
     <ClInclude Include="src\client\hooks\network\bubble_authority\scope\bubble_authority_scope.h" />
     <ClInclude Include="src\client\hooks\network\coordinator\network_call_coordinator.h" />
     <ClInclude Include="src\client\hooks\network\content_config\coordinator\content_config_call_coordinator.h" />

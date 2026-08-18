@@ -53,6 +53,27 @@ bool derive(std::span<const patterns::ImageRange> image,
         matches[index(patterns::game::Id::bubbleAuthorityDecoder)].address;
     resolved.contentUntrackedGetter =
         matches[index(patterns::game::Id::contentUntrackedGetter)].address;
+    resolved.viewSignatureRefresh =
+        matches[index(patterns::game::Id::viewSignatureRefresh)].address;
+    resolved.viewMessageLookup = matches[index(patterns::game::Id::viewMessageLookup)].address;
+    resolved.viewSlotPump = matches[index(patterns::game::Id::viewSlotPump)].address;
+    resolved.viewMembershipSync =
+        matches[index(patterns::game::Id::viewMembershipSync)].address;
+    resolved.activityMembershipDecoder =
+        matches[index(patterns::game::Id::activityMembershipDecoder)].address;
+    resolved.activityMembershipQueue =
+        matches[index(patterns::game::Id::activityMembershipQueue)].address;
+    resolved.viewCreator = matches[index(patterns::game::Id::viewCreator)].address;
+    resolved.viewAddressResolver =
+        matches[index(patterns::game::Id::viewAddressResolver)].address;
+    resolved.viewChannelValidator =
+        matches[index(patterns::game::Id::viewChannelValidator)].address;
+    resolved.viewChannelAccessor =
+        matches[index(patterns::game::Id::viewChannelAccessor)].address;
+    resolved.activityHostDecoder =
+        matches[index(patterns::game::Id::activityHostDecoder)].address;
+    resolved.activityHostConnectionState =
+        matches[index(patterns::game::Id::activityHostConnectionState)].address;
     std::byte* const contentIdTokenLoad =
         matches[index(patterns::game::Id::contentIdTokenLoad)].address;
     if (!relative::resolve(contentIdTokenLoad,

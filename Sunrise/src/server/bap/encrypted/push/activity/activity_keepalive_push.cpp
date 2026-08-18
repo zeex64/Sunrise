@@ -10,6 +10,8 @@
 #include "../../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../../state/runtime/runtime.h"
 #include "../../../../gameplay/gameplay_advertisement.h"
+#include "../../../../gameplay/group/group_host.h"
+#include "../../../../gameplay/group/group_host_sessions.h"
 #include "../../activity_message/definition.h"
 #include "activity_arrival.h"
 #include "activity_global_state_push.h"
@@ -103,6 +105,7 @@ bool consume_activity_keepalive(Session& session,
     bool published = false;
     // Held until the frame reaches the caller. Encoding alone does not spend the region trigger.
     std::int32_t stagedAdvertisedRegion = -1;
+    std::uint64_t stagedReflectedGroupSession = 0;
     // The burst is what step 36 waits on. When both timers fire together the roster goes out last,
     // because the type-13 key binds to the player message 12 creates.
     if (!keepaliveDue && !regionChanged) {
@@ -115,24 +118,33 @@ bool consume_activity_keepalive(Session& session,
     session.activityKeepaliveDueTick = now + kKeepaliveIntervalMs;
     published = append_global_state_notification(
         scratch, session.activitySessionId, key, nextSendNonce, scratch.framed, framedSize);
-    if (session.activityJoinedForeignSession) {
-        // This link exists only so the client's second activity instance sees traffic. A roster or
-        // membership push on it leaves the transition running with no world entered.
-        return publish_frame(
-            session, scratch, response, written, framedSize, nextSendNonce, published);
-    }
 
-    // The client applies one membership update per revision and drops repeats, so an already
-    // acknowledged region change needs a new revision to land. Move it only when there is a real
-    // advertisement, or an empty channel advances the revision on every poll.
-    if (regionChanged
+    // A claimed advertisement row exists before its gameplay peer. Reflect it only after admission;
+    // publishing it during initial slice loading makes the root membership wait on a peer that the
+    // world controller has not created yet.
+    const std::int32_t effectiveRegion = effective_region(session.activitySessionId).index;
+    const std::uint64_t advertisedGroup = session.activityJoinedForeignSession
+                                              ? 0
+                                              : server::gameplay::group::advertised_group_session(
+                                                    effectiveRegion);
+    const std::uint64_t reflectedGroup =
+        server::gameplay::group::session_admitted(advertisedGroup) ? advertisedGroup : 0;
+    const bool groupReflectionChanged =
+        reflectedGroup != 0 && reflectedGroup != session.activityReflectedGroupSession;
+    // The client applies one membership update per revision and drops repeats. Either a new region
+    // or a newly admitted gameplay host therefore needs a fresh root-membership revision.
+    const bool regionRepublishReady =
+        regionChanged
         && server::gameplay::advertisement_state(reportedRegion)
-               == server::gameplay::AdvertisementState::ready
+               == server::gameplay::AdvertisementState::ready;
+    if ((regionRepublishReady || groupReflectionChanged)
         && state::activity::membership::acknowledged(session.activitySessionId)
         && state::activity::membership::republish(session.activitySessionId)) {
         core::log::write(core::log::Channel::server,
                          core::log::Level::info,
-                         "ev=gameplay stage=membership result=republished reason=region");
+                         groupReflectionChanged
+                             ? "ev=gameplay stage=membership result=republished reason=gameplay-host"
+                             : "ev=gameplay stage=membership result=republished reason=region");
     }
     // Membership only becomes publishable after the client sends its identity, so it joins the
     // keepalive instead of the join reply.
@@ -161,13 +173,15 @@ bool consume_activity_keepalive(Session& session,
     // Re-sending a stable snapshot instead would make it rebuild every player snapshot.
     const bool publishesMembership =
         hasMembership
-        && (regionChanged || !state::activity::membership::acknowledged(session.activitySessionId));
+        && (regionChanged || groupReflectionChanged
+            || !state::activity::membership::acknowledged(session.activitySessionId));
     // Resolved the way the body resolves it, not from the reported field. Before the first report
     // the arrival slice set stands in, and that first push carries a descriptor too.
     const server::gameplay::AdvertisementState advertisement =
-        publishesMembership ? server::gameplay::advertisement_state(
-                                  effective_region(session.activitySessionId).index)
-                            : server::gameplay::AdvertisementState::absent;
+        publishesMembership && !session.activityJoinedForeignSession
+            ? server::gameplay::advertisement_state(
+                  effective_region(session.activitySessionId).index)
+            : server::gameplay::AdvertisementState::absent;
     if (publishesMembership && advertisement == server::gameplay::AdvertisementState::pending) {
         // The client applies one membership update per revision, so a push made while the
         // advertisement is still being allocated spends that revision on a region record with no
@@ -179,12 +193,20 @@ bool consume_activity_keepalive(Session& session,
         activity_message::ActivityPlan plan{};
         plan.sessionId = session.activitySessionId;
         plan.membershipMutation = refresh;
-        const bool sent = append_membership_notification(
-            scratch, plan, key, nextSendNonce, scratch.framed, framedSize);
+        const bool sent = append_membership_notification(scratch,
+                                                         plan,
+                                                         !session.activityJoinedForeignSession,
+                                                         key,
+                                                         nextSendNonce,
+                                                         scratch.framed,
+                                                         framedSize);
         // Only `pending` leaves the trigger armed, because only `pending` is transient. `absent`
         // means this channel advertises nothing, so re-arming there republishes on every poll.
         if (sent && reportedRegion >= 0) {
             stagedAdvertisedRegion = reportedRegion;
+        }
+        if (sent && reflectedGroup != 0) {
+            stagedReflectedGroupSession = reflectedGroup;
         }
         published = sent || published;
         SecureZeroMemory(&plan, sizeof plan);
@@ -199,6 +221,29 @@ bool consume_activity_keepalive(Session& session,
     // push could have been read at all. Without it a correct body and a deduped one look the same.
     const std::uint32_t reportedRevision = refresh.snapshot.revision;
     SecureZeroMemory(&refresh, sizeof refresh);
+    if (session.activityJoinedForeignSession) {
+        // This session is already the destination advertised by its parent. Membership creates
+        // the native slot; another citizen advertisement or roster would recursively transition.
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count =
+            std::snprintf(line.data(),
+                          line.size(),
+                          "ev=activity stage=keepalive result=%s foreign=1 bytes=%zu "
+                          "membership=%u key=0x%llX token=%u revision=%u",
+                          published ? "ok" : "fail",
+                          framedSize,
+                          hasMembership ? 1U : 0U,
+                          static_cast<unsigned long long>(session.activityMemberKey),
+                          static_cast<unsigned>(reportedToken),
+                          reportedRevision);
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::debug,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
+        return publish_frame(
+            session, scratch, response, written, framedSize, nextSendNonce, published);
+    }
     // The keepalive always carries the roster, in or out of a transition.
     session.activityRosterDueTick = now + kRosterBurstIntervalMs;
     published = append_roster_notification(
@@ -232,6 +277,9 @@ bool consume_activity_keepalive(Session& session,
     // A body the client never saw must advertise its region again on the next poll.
     if (delivered && stagedAdvertisedRegion >= 0) {
         session.activityAdvertisedRegion = stagedAdvertisedRegion;
+    }
+    if (delivered && stagedReflectedGroupSession != 0) {
+        session.activityReflectedGroupSession = stagedReflectedGroupSession;
     }
     return delivered;
 }

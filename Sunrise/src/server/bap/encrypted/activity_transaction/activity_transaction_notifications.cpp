@@ -55,14 +55,24 @@ namespace {
                                  std::size_t& written) noexcept {
     bool staged = push::activity::append_global_state_notification(
         scratch, activity.sessionId, key, nonce, response, written);
-    if (activity.membershipMutation.hasSnapshot && !advertisement_pending(activity)) {
+    const bool includeCitizenAdvertisement = !session.activityJoinedForeignSession;
+    if (activity.membershipMutation.hasSnapshot
+        && (!includeCitizenAdvertisement || !advertisement_pending(activity))) {
         staged = push::activity::append_membership_notification(
-                     scratch, activity, key, nonce, response, written)
+                     scratch,
+                     activity,
+                     includeCitizenAdvertisement,
+                     key,
+                     nonce,
+                     response,
+                     written)
                  || staged;
     }
-    return push::activity::append_roster_notification(
-               session, scratch, key, nonce, response, written, false)
-           || staged;
+    return session.activityJoinedForeignSession
+               ? staged
+               : push::activity::append_roster_notification(
+                     session, scratch, key, nonce, response, written, false)
+                     || staged;
 }
 
 /**
@@ -87,14 +97,20 @@ namespace {
                                        std::size_t& written) noexcept {
     bool staged = false;
     bool held = false;
+    const bool includeCitizenAdvertisement = !session.activityJoinedForeignSession;
     if (activity.membershipMutation.hasSnapshot) {
-        held = advertisement_pending(activity);
+        held = includeCitizenAdvertisement && advertisement_pending(activity);
         if (!held) {
-            staged = push::activity::append_membership_notification(
-                scratch, activity, key, nonce, response, written);
+            staged = push::activity::append_membership_notification(scratch,
+                                                                    activity,
+                                                                    includeCitizenAdvertisement,
+                                                                    key,
+                                                                    nonce,
+                                                                    response,
+                                                                    written);
         }
     }
-    if (activity.regionMoved) {
+    if (activity.regionMoved && !session.activityJoinedForeignSession) {
         staged = push::activity::append_roster_notification(
                      session, scratch, key, nonce, response, written, false)
                  || staged;
@@ -140,8 +156,13 @@ bool stage_notifications(Session& session,
                                                                written);
     }
     if (activity.delivery == activity_message::Delivery::membershipNotification) {
-        return push::activity::append_membership_notification(
-            scratch, activity, key, nonce, response, written);
+        return push::activity::append_membership_notification(scratch,
+                                                              activity,
+                                                              !session.activityJoinedForeignSession,
+                                                              key,
+                                                              nonce,
+                                                              response,
+                                                              written);
     }
     if (activity.delivery == activity_message::Delivery::refreshNotifications) {
         return stage_refresh(session, scratch, activity, key, nonce, response, written);

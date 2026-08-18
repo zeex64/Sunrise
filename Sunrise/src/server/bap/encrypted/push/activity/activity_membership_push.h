@@ -13,6 +13,7 @@ namespace sunrise::server::bap::encrypted::push::activity {
  * Appends one current membership svc9 notification and advances its local nonce.
  * @param scratch Lock-owned transform buffers.
  * @param activity Session and prepared State snapshot picked by the svc8 route.
+ * @param includeCitizenAdvertisement Whether the region record may advertise another activity.
  * @param key Active AES-GCM session key.
  * @param nonce Local send nonce advanced only after the complete notification exists.
  * @param response Lock-owned complete-frame staging storage.
@@ -22,6 +23,7 @@ namespace sunrise::server::bap::encrypted::push::activity {
 [[nodiscard]] bool
 append_membership_notification(Scratch& scratch,
                                const activity_message::ActivityPlan& activity,
+                               bool includeCitizenAdvertisement,
                                std::span<const std::byte, state::kAesKeySize> key,
                                std::array<std::byte, state::kBapNonceSize>& nonce,
                                std::span<std::byte> response,

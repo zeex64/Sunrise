@@ -58,6 +58,10 @@ constexpr std::uint16_t kFirstPacketSequence = 1;
 constexpr std::uint8_t kMinimumHeadCursor = 1;
 /** One packet cannot report more delivered messages than this. */
 constexpr std::size_t kMessageReportCapacity = 8;
+/** Scheduler prefix retained by the external-body diagnostic probe. */
+constexpr std::size_t kExternalProbeWords = 4;
+/** Bits retained in each diagnostic scheduler-prefix word. */
+constexpr std::uint8_t kExternalProbeWordBits = 64;
 /**
  * Milliseconds between two resends of the same queue. The peer discards a packet more than 128
  * sequences ahead of its window, so this host must not send faster than the peer does.
@@ -68,6 +72,47 @@ SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
 std::uint32_t g_channelId{0};
+
+/** Read-only summary of the native simulation gate and replication-scheduler prefix. */
+struct ExternalProbe {
+    std::array<std::uint64_t, kExternalProbeWords> words{};
+    std::array<std::uint8_t, kExternalProbeWords> widths{};
+    std::size_t schedulerBitsBeforeProbe{};
+    std::size_t schedulerBitsAfterProbe{};
+    wire::ExternalStatus status{};
+    std::uint8_t wordCount{};
+};
+
+/**
+ * Reads the external trailer without accepting or mutating any replication state.
+ * The first bit is c_network_channel_simulation_gatekeeper. The second is the
+ * replication-scheduler body-presence bit. Words after those bits remain MSB-first.
+ */
+[[nodiscard]] bool probe_external(std::span<const std::byte> payload,
+                                  std::size_t bitOffset,
+                                  ExternalProbe& output) noexcept {
+    ExternalProbe candidate{};
+    bits::Reader reader(payload);
+    if (!reader.skip(bitOffset) || !wire::read_external_status(reader, candidate.status)) {
+        return false;
+    }
+    candidate.schedulerBitsBeforeProbe = reader.remaining_bits();
+    while (candidate.wordCount < candidate.words.size() && reader.remaining_bits() != 0) {
+        const std::size_t remaining = reader.remaining_bits();
+        const auto width = static_cast<std::uint8_t>(
+            remaining < kExternalProbeWordBits ? remaining : kExternalProbeWordBits);
+        std::uint64_t word = 0;
+        if (!reader.read(width, word)) {
+            return false;
+        }
+        candidate.words[candidate.wordCount] = word;
+        candidate.widths[candidate.wordCount] = width;
+        ++candidate.wordCount;
+    }
+    candidate.schedulerBitsAfterProbe = reader.remaining_bits();
+    output = candidate;
+    return true;
+}
 
 /** @return True when both endpoints name the same address and port. */
 [[nodiscard]] bool same_endpoint(const state::gameplay::Endpoint& left,
@@ -622,6 +667,31 @@ void consume_established(const state::gameplay::Endpoint& from,
     if (peer == nullptr) {
         return;
     }
+    ExternalProbe external{};
+    if (probe_external(payload, packet.externalBitOffset, external)) {
+        const bool viewAccepted = sessionId != 0 && group::view_accepted(sessionId);
+        if (viewAccepted || external.status.gatekeeperEnabled || external.status.schedulerPresent) {
+            report(core::log::Level::debug,
+                   "ev=gameplay stage=external-probe view=%u offset=%zu tail=%zu gate=%u "
+                   "scheduler=%u words=%u widths=%u,%u,%u,%u "
+                   "data=%016llX,%016llX,%016llX,%016llX remain=%zu",
+                   viewAccepted ? 1U : 0U,
+                   packet.externalBitOffset,
+                   external.schedulerBitsBeforeProbe,
+                   external.status.gatekeeperEnabled ? 1U : 0U,
+                   external.status.schedulerPresent ? 1U : 0U,
+                   static_cast<unsigned>(external.wordCount),
+                   static_cast<unsigned>(external.widths[0]),
+                   static_cast<unsigned>(external.widths[1]),
+                   static_cast<unsigned>(external.widths[2]),
+                   static_cast<unsigned>(external.widths[3]),
+                   static_cast<unsigned long long>(external.words[0]),
+                   static_cast<unsigned long long>(external.words[1]),
+                   static_cast<unsigned long long>(external.words[2]),
+                   static_cast<unsigned long long>(external.words[3]),
+                   external.schedulerBitsAfterProbe);
+        }
+    }
     for (std::size_t index = 0; index < deliveredCount; ++index) {
         report(core::log::Level::info,
                "ev=gameplay stage=message result=ok id=%u peerstage=%u",
@@ -686,7 +756,8 @@ void consume_established(const state::gameplay::Endpoint& from,
     std::size_t size = 0;
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)
-        || !wire::write_empty_queue(writer) || !wire::write_absent_filler(writer)
+        || !wire::write_empty_queue(writer)
+        || !wire::write_external_status(writer, peer.view.bound, false)
         || !writer.finish(size)) {
         return false;
     }

@@ -95,6 +95,8 @@ struct Session {
      * leaves the region-change trigger armed for the next poll.
      */
     std::int32_t activityAdvertisedRegion{-1};
+    /** Gameplay group already mirrored into the root membership's remote slot. */
+    std::uint64_t activityReflectedGroupSession{};
     /**
      * Reason code of the last logged roster outcome.
      * The push runs every second, so a refusal is logged only when the reason changes. One flag

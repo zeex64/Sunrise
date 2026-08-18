@@ -23,6 +23,20 @@ struct HostSessionRow {
  */
 [[nodiscard]] std::uint64_t held_host_session(std::uint64_t groupSessionId) noexcept;
 
+/**
+ * Resolves the gameplay group advertised for one region.
+ * @param regionIndex Region carried by the root activity membership advertisement.
+ * @return Its gameplay group session, or zero when the region has no claimed row.
+ */
+[[nodiscard]] std::uint64_t advertised_group_session(std::int32_t regionIndex) noexcept;
+
+/**
+ * Resolves the gameplay group that owns one advertised activity-host session.
+ * @param hostSessionId Activity session published by that group's activity-host parameter.
+ * @return Owning gameplay group session, or zero when no row holds the activity session.
+ */
+[[nodiscard]] std::uint64_t holding_group_session(std::uint64_t hostSessionId) noexcept;
+
 /** Copies every occupied host-session row. @param count Receives the copied row count. */
 void snapshot_host_sessions(std::span<HostSessionRow> output, std::size_t& count) noexcept;
 

@@ -123,6 +123,15 @@ struct PendingMutation final {
 [[nodiscard]] std::uint64_t join_identity(std::uint64_t sessionId) noexcept;
 
 /**
+ * Reads the oldest published identity belonging to the signed-in account.
+ * Activity-host sessions are allocated later and may publish their own join identities, but the
+ * native session manager keeps this original member key as the process-local identity.
+ * @param identity Cleared first, then receives the primary identity on success.
+ * @return True when a joined session has published the signed-in account and character.
+ */
+[[nodiscard]] bool primary_identity(Identity& identity) noexcept;
+
+/**
  * Prepares an acknowledgement mark for the current membership revision.
  * @param sessionId Existing joined activity session id.
  * @param revision Revision the client applied; stale and future values are valid no-ops.

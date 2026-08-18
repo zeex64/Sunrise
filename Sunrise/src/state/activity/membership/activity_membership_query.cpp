@@ -71,4 +71,24 @@ std::uint64_t join_identity(std::uint64_t sessionId) noexcept {
     return identity;
 }
 
+/** Reads the oldest published identity belonging to the signed-in account. */
+bool primary_identity(Identity& identity) noexcept {
+    identity = {};
+    std::uint64_t oldest = kAbsentSessionId;
+    AcquireSRWLockShared(&runtime::storage::g_stateLock);
+    const auto& root = runtime::storage::g_state;
+    for (const SessionRecord& record : root.activity.sessions) {
+        if (!record.occupied || !record.joined || !record.membership.hasIdentity
+            || record.membership.identity.accountSoid != root.account.primarySoid
+            || record.membership.identity.opaqueSoid == 0
+            || (oldest != kAbsentSessionId && record.sessionId >= oldest)) {
+            continue;
+        }
+        identity = record.membership.identity;
+        oldest = record.sessionId;
+    }
+    ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+    return oldest != kAbsentSessionId;
+}
+
 } // namespace sunrise::state::activity::membership

@@ -1,9 +1,15 @@
 #include "../../external_server/route.h"
 #include "../content_config/runtime.h"
 #include "../coordinator/network_call_coordinator.h"
+#include "../activity_host_probe.h"
 #include "../investment/investment_derived_rebuild.h"
 #include "../platform.h"
 #include "../runtime.h"
+#include "../view_creation_probe.h"
+#include "../view_membership_probe.h"
+#include "../view_message_probe.h"
+#include "../view_signature_capture.h"
+#include "../view_slot_probe.h"
 #include "network_hook_entries.h"
 #include "network_hook_group.h"
 
@@ -126,6 +132,14 @@ bool uninstall() noexcept {
     }
     const auto gameProtectedEntries = lifecycle::game_protected_entries();
     const bool removed = lifecycle::uninstall_group(lifecycle::kGameSlots, gameProtectedEntries);
+    if (removed) {
+        view_creation_probe::reset();
+        activity_host_probe::reset();
+        view_membership_probe::reset();
+        view_message_probe::reset();
+        view_signature::reset();
+        view_slot_probe::reset();
+    }
     ReleaseSRWLockExclusive(&g_lock);
     return removed;
 }

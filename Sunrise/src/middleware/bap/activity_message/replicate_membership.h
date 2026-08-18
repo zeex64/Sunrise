@@ -13,10 +13,12 @@ namespace sunrise::middleware::bap::activity_message::replicate_membership {
 
 /** Membership snapshots use activity message type 12. */
 inline constexpr std::uint32_t kMessageType = 12;
-/** One local player plus a reflected host is 29,968 meaningful bits. */
+/** One local player without a reflected host is 29,968 meaningful bits. */
 inline constexpr std::size_t kMeaningfulBitCount = 29'968;
-/** The host-present snapshot is byte-aligned at 3,746 bytes. */
+/** The local-only snapshot is byte-aligned at 3,746 bytes. */
 inline constexpr std::size_t kEncodedSize = 3'746;
+/** A reflected host adds its member, six-bit view gate, and 86-byte gameplay address. */
+inline constexpr std::size_t kReflectedHostExtraBitCount = 1'367;
 /** One filled descriptor makes its record 1,024 bits longer and shifts every later field. */
 inline constexpr std::size_t kDescriptorBitCount = gameplay::descriptor::kDescriptorSize * 8U;
 /** Byte size once one record carries a descriptor. */
@@ -45,6 +47,10 @@ struct CitizenAdvertisement final {
 /** Inputs for one local-player membership snapshot. */
 struct MembershipSnapshot final {
     client_identity::ClientIdentity identity{};
+    /** Distinct activity host for a client that joined somebody else's activity. */
+    client_identity::ClientIdentity reflectedHost{};
+    /** Method-0 gameplay address decoded into reflected-host identity field 10. */
+    std::array<std::byte, gameplay::descriptor::kNetAddrSize> reflectedHostAddress{};
     client_authoritative_data::SpawnState spawn{};
     client_authoritative_data::TeleportState teleport{};
     /** Empty unless the gameplay channel is advertising an endpoint this run. */
@@ -54,11 +60,23 @@ struct MembershipSnapshot final {
     std::uint32_t epoch{};
     /** Transition token copied into every member lane of every region. */
     std::uint8_t transitionToken{};
+    bool hasReflectedHost{};
 };
 
 /** @return Encoded byte size for one snapshot, which grows with a citizen advertisement. */
 [[nodiscard]] constexpr std::size_t encoded_size(const MembershipSnapshot& snapshot) noexcept {
-    return snapshot.citizen.present ? kCitizenEncodedSize : kEncodedSize;
+    const std::size_t bits = kMeaningfulBitCount
+                             + (snapshot.hasReflectedHost ? kReflectedHostExtraBitCount : 0)
+                             + (snapshot.citizen.present ? kDescriptorBitCount : 0);
+    return (bits + 7U) / 8U;
+}
+
+/** @return Meaningful bits in one local-only or local-plus-host snapshot. */
+[[nodiscard]] constexpr std::size_t
+meaningful_bit_count(const MembershipSnapshot& snapshot) noexcept {
+    return kMeaningfulBitCount
+           + (snapshot.hasReflectedHost ? kReflectedHostExtraBitCount : 0)
+           + (snapshot.citizen.present ? kDescriptorBitCount : 0);
 }
 
 /**
@@ -79,10 +97,19 @@ inline constexpr std::size_t kRegionBlockStartBit = 835;
 /** The host-present region block ends before top-level field four. */
 inline constexpr std::size_t kRegionBlockEndBit = 29'899;
 
+/** @return Bit where the region records begin after one or two populated members. */
+[[nodiscard]] constexpr std::size_t
+region_block_start_bit(const MembershipSnapshot& snapshot) noexcept {
+    return kRegionBlockStartBit
+           + (snapshot.hasReflectedHost ? kReflectedHostExtraBitCount : 0);
+}
+
 /** @return Bit at which the region block ends for one snapshot. */
 [[nodiscard]] constexpr std::size_t
 region_block_end_bit(const MembershipSnapshot& snapshot) noexcept {
-    return snapshot.citizen.present ? kRegionBlockEndBit + kDescriptorBitCount : kRegionBlockEndBit;
+    return kRegionBlockEndBit
+           + (snapshot.hasReflectedHost ? kReflectedHostExtraBitCount : 0)
+           + (snapshot.citizen.present ? kDescriptorBitCount : 0);
 }
 
 /** @return True when the teleport slice-set index fits its fixed wire field. */
@@ -95,7 +122,7 @@ region_block_end_bit(const MembershipSnapshot& snapshot) noexcept {
  * @return True when the writer reaches the region-block presence bit.
  */
 [[nodiscard]] bool write_member_table(encoding::bits::Writer& writer,
-                                      const client_identity::ClientIdentity& identity) noexcept;
+                                      const MembershipSnapshot& snapshot) noexcept;
 
 /**
  * Writes all 64 state-zero regions and the host-present tail.

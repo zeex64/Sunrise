@@ -71,6 +71,14 @@ struct EstablishedPacket {
     bool hasExternal{};
 };
 
+/** Prefix shared by the native simulation gatekeeper and replication scheduler. */
+struct ExternalStatus {
+    /** State the remote simulation gatekeeper expects for this channel. */
+    bool gatekeeperEnabled{};
+    /** True when a scheduler frame follows; the frame owns its signature-update flag. */
+    bool schedulerPresent{};
+};
+
 /**
  * Decodes one established packet up to and including both reliable queues.
  * The external handler body is not parsed here. The packet reports the bit offset it starts at.
@@ -137,10 +145,24 @@ struct EstablishedPacket {
                                    std::size_t bodyBits) noexcept;
 
 /**
- * Writes the filler trailer that ends every packet.
- * @param writer Writer positioned after the last handler payload.
- * @return True when the absent-filler bit fit.
+ * Reads the simulation-gatekeeper and replication-scheduler presence bits.
+ * @param reader Reader positioned at EstablishedPacket::externalBitOffset.
+ * @param output Receives both native handler states.
+ * @return True when both bits were present.
  */
-[[nodiscard]] bool write_absent_filler(encoding::bits::Writer& writer) noexcept;
+[[nodiscard]] bool read_external_status(encoding::bits::Reader& reader,
+                                        ExternalStatus& output) noexcept;
+
+/**
+ * Writes the simulation-gatekeeper and replication-scheduler presence bits.
+ * A bound view requires the gatekeeper bit even before this host can publish a scheduler body.
+ * @param writer Writer positioned after the reliable queues.
+ * @param gatekeeperEnabled State expected by the peer's simulation gatekeeper.
+ * @param schedulerPresent True only when a scheduler frame follows.
+ * @return True when both status bits fit.
+ */
+[[nodiscard]] bool write_external_status(encoding::bits::Writer& writer,
+                                         bool gatekeeperEnabled,
+                                         bool schedulerPresent) noexcept;
 
 } // namespace sunrise::middleware::gameplay::peer

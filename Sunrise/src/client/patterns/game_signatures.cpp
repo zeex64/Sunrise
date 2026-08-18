@@ -68,6 +68,106 @@ constexpr std::string_view kContentUntrackedGetterText =
 constexpr auto kContentUntrackedGetter =
     signature<signature_length(kContentUntrackedGetterText)>(kContentUntrackedGetterText);
 
+// Matches c_network_channel_view's signature refresh. The fixed tail clears the signature storage
+// immediately after the prologue, which separates it from the other small view helpers.
+constexpr std::string_view kViewSignatureRefreshText =
+    "48 89 5C 24 ? 48 89 6C 24 ? 48 89 74 24 ? 57 48 83 EC ? 48 8B 41 48 40 32 ED 40 32 F6 "
+    "48 8B D9 48 8B 78 10 33 C0 C7 81 A0 00 00 00 00 00 00 00";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewSignatureRefresh =
+    signature<signature_length(kViewSignatureRefreshText)>(kViewSignatureRefreshText);
+
+// Matches the message-40 view lookup. The complete fixed prologue is unique in the current image;
+// its saved second argument is the group-session token that the message body carries.
+constexpr std::string_view kViewMessageLookupText =
+    "48 89 54 24 10 53 57 48 83 EC 28 33 FF 48 8B D9";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewMessageLookup =
+    signature<signature_length(kViewMessageLookupText)>(kViewMessageLookupText);
+
+// Matches the manager pump that walks all three fixed replication slots. The fixed prologue
+// includes its leading REX prefix so the detour begins at the function entry, not byte +1.
+constexpr std::string_view kViewSlotPumpText =
+    "40 55 56 48 83 EC 38 83 79 08 01 48 8B E9";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewSlotPump =
+    signature<signature_length(kViewSlotPumpText)>(kViewSlotPumpText);
+
+// Matches the membership-to-view synchronization pass. The fixed prologue is unique in the
+// current image and ends before the first position-dependent branch displacement.
+constexpr std::string_view kViewMembershipSyncText =
+    "41 57 48 83 EC 50 4C 8B F9 48 8B 09 48 85 C9 0F";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewMembershipSync =
+    signature<signature_length(kViewMembershipSyncText)>(kViewMembershipSyncText);
+
+// Matches the generic root-object decoder used for activity membership type 0x808086A8. The
+// complete nonvolatile-save prologue and 0x160-byte frame distinguish the decoder entry.
+constexpr std::string_view kActivityMembershipDecoderText =
+    "48 89 5C 24 20 55 56 57 41 54 41 55 41 56 41 57 48 81 EC 60 01 00 00";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kActivityMembershipDecoder =
+    signature<signature_length(kActivityMembershipDecoderText)>(
+        kActivityMembershipDecoderText);
+
+// Matches the simulation-queue insertion that receives a fully decoded activity membership.
+// The allocation size and payload label load distinguish it from the adjacent queue insertions.
+constexpr std::string_view kActivityMembershipQueueText =
+    "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 48 8B FA 4C 8D 0D ? ? ? ? "
+    "48 8B D9 BA 70 92 05 00";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kActivityMembershipQueue =
+    signature<signature_length(kActivityMembershipQueueText)>(kActivityMembershipQueueText);
+
+// Matches the view creator driven by session-membership synchronization. It is the only path that
+// allocates and binds a per-peer native view before message 40 can find it.
+constexpr std::string_view kViewCreatorText =
+    "40 55 53 56 41 54 41 55 41 56 41 57 48 8D AC 24 C0 FD FF FF 48 81 EC 40 03 00 00";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewCreator = signature<signature_length(kViewCreatorText)>(kViewCreatorText);
+
+// Matches the active-channel address resolver used at the head of view creation.
+constexpr std::string_view kViewAddressResolverText =
+    "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 49 8B E8 8B F2";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewAddressResolver =
+    signature<signature_length(kViewAddressResolverText)>(kViewAddressResolverText);
+
+// Matches the resolved-channel validity check. The fixed comparison distinguishes it from the
+// adjacent accessor, which has the same prologue.
+constexpr std::string_view kViewChannelValidatorText =
+    "40 53 48 83 EC ? 49 63 D8 E8 ? ? ? ? 48 69 CB F0 41 00 00 83 BC 08 E8 30 00 00 04 0F 94 C0";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewChannelValidator =
+    signature<signature_length(kViewChannelValidatorText)>(kViewChannelValidatorText);
+
+// Matches the accessor whose returned channel owns the establishment state at byte 0x1d18.
+constexpr std::string_view kViewChannelAccessorText =
+    "40 53 48 83 EC ? 49 63 D8 E8 ? ? ? ? 48 69 CB F0 41 00 00 48 81 C1 A8 00 00 00 48 03 C1";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewChannelAccessor =
+    signature<signature_length(kViewChannelAccessorText)>(kViewChannelAccessorText);
+
+// Matches registry parameter 3's decoder. Its fixed prefix includes the raw selection-id read and
+// the saved output pointer, which separates it from the adjacent activity-host encoder.
+constexpr std::string_view kActivityHostDecoderText =
+    "48 89 5C 24 08 57 48 83 EC 20 41 B8 40 00 00 00 48 8B DA 48 8B F9 "
+    "E8 ? ? ? ? BA 40 00 00 00 48 8B CF E8 ? ? ? ? 48 8D 53 10";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kActivityHostDecoder =
+    signature<signature_length(kActivityHostDecoderText)>(kActivityHostDecoderText);
+
+// Matches the native activity-host connection-state publisher. The large fixed frame and complete
+// nonvolatile-register save sequence make its entry unique in the current image.
+constexpr std::string_view kActivityHostConnectionStateText =
+    "40 55 53 56 57 41 54 41 56 41 57 48 8D AC 24 D0 FD FF FF 48 81 EC 30 03 00 00 "
+    "48 8B 05 ? ? ? ? 48 33 C4 48 89 85 20 02 00 00 48 8B F2 48 8B D9 BA 04 00 00 00 "
+    "41 8B F8";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kActivityHostConnectionState =
+    signature<signature_length(kActivityHostConnectionStateText)>(
+        kActivityHostConnectionStateText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -117,6 +217,18 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"content_manifest_gate", kContentManifestGate},
     patterns::Pattern{"bubble_authority_decoder", kBubbleAuthorityDecoder},
     patterns::Pattern{"content_untracked_getter", kContentUntrackedGetter},
+    patterns::Pattern{"view_signature_refresh", kViewSignatureRefresh},
+    patterns::Pattern{"view_message_lookup", kViewMessageLookup},
+    patterns::Pattern{"view_slot_pump", kViewSlotPump},
+    patterns::Pattern{"view_membership_sync", kViewMembershipSync},
+    patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
+    patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},
+    patterns::Pattern{"view_creator", kViewCreator},
+    patterns::Pattern{"view_address_resolver", kViewAddressResolver},
+    patterns::Pattern{"view_channel_validator", kViewChannelValidator},
+    patterns::Pattern{"view_channel_accessor", kViewChannelAccessor},
+    patterns::Pattern{"activity_host_decoder", kActivityHostDecoder},
+    patterns::Pattern{"activity_host_connection_state", kActivityHostConnectionState},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},
