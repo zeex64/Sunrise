@@ -1079,6 +1079,50 @@ report buffer no longer silently discards the remainder. The next runtime proof 
 `stage=fragment result=held` followed by `result=complete`, then a packet whose reliable `next`
 advances beyond `1361` with `drop=0`.
 
+The next run supplied that proof. Fragment set 1 completed from 1,238-byte and 688-byte pieces into
+a 1,926-byte established packet. Both the citizen join already in flight and a later public-region
+join advanced from queued through sending to received, while the reliable packet reports remained
+at `drop=0`.
+
+## Multi-view scheduler timeout containment
+
+The same run separated a later disconnect from DTLS and reliable fragmentation. A one-view
+namespace-2 scheduler packet first queued `0x80C4FEAD`, and its second guarded attempt decoded one
+complete 78-bit entity record. The client invoked the sobject create codec and advanced the manager
+from 14 to 15 occupied slots. This is the first complete server-authored object allocation.
+
+The disconnect began only when the scheduler expanded from one logical view to two. At `t=146142`
+the client partially applied the server packet: its remote signature and view list converged to the
+two local entries. Native channel statistics nevertheless treated that packet and the following 68
+repeated scheduler packets as corrupt. The last valid receive remained the preceding stage-2 view
+packet, so the channel closed on its exact four-second receive timeout. An earlier run has the same
+shape: two-view convergence is visible, but the receive clock never advances and 126 packets are
+reported corrupt.
+
+That partial mutation is not proof of full packet acceptance. The signature prefix is correct, but
+at least one multi-view handler or final scheduler boundary remains wrong. Sunrise now publishes a
+scheduler body only when the native registered-view count is exactly one. Entity-create preparation
+uses the same gate, so a suppressed multi-view packet cannot consume a retry or claim a create was
+sent. Ordinary acknowledgements continue with `schedulerPresent=0` during multi-view transitions,
+which should keep the gameplay channel alive while that tail is reverse engineered.
+
+## External authored-content research
+
+`D2-Server-Infrastructure.pdf` describes a separate client-side requirement for complete activity
+content. Its central distinction agrees with the runtime boundary seen here: a public/peer route can
+create a live world session and replication slots, while identity 1 must enter authored mode 1 for
+the mission director, activity script, encounters, AI, and cinematics to be constructed. A single
+accepted kind-0 sobject therefore proves transport and object replication, but does not by itself
+prove that an enemy actor or its encounter logic exists.
+
+The document is Towerfall-specific, so its conclusion cannot yet be applied wholesale to EDZ patrol.
+Its address base is compatible with this pinned executable (`read_bits` RVA `0x3513B0` matches
+`FUN_1403513B0`), making the listed route/pump functions useful Ghidra anchors. One implementation
+claim does not match this repository: the paper says `activity_forced_destination.cpp` synthesizes a
+full roughly 620-bit authored descriptor, while this branch only renames a captured descriptor and
+clears the bits when no compatible capture exists. Treat that builder as external/unpublished work,
+not as code already available here.
+
 ## Source areas changed
 
 The current checkpoint includes work in:
@@ -1094,8 +1138,9 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Cross one EDZ public-zone boundary and confirm the transition burst reports fragment pieces,
-   one completed assembly, `drop=0`, and an inbound reliable `next` that continues advancing.
+1. Cross one EDZ public-zone boundary and confirm multi-view transitions now keep the channel alive:
+   scheduler output should disappear while `scheduler[views=2]`, reliable reports should remain at
+   `drop=0`, and no four-second `channel-manager-connected-timeout` should follow.
 2. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
    `restart=1`, followed by ordinary stages 1 through 5. If local and remote both pause at stage 4,
    confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
@@ -1109,14 +1154,17 @@ The current checkpoint includes work in:
    directly, without waiting for unrelated BAP or zone-transition traffic.
 7. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
    and that its `entity-view` local and remote layouts are identical immediately beforehand.
-8. Capture `stage=entity-record` from the successful 78-bit create and identify the baseline update
-   buffer's transform, parent, stream-source, and RSAT-defined regions.
+8. Use the captured `stage=entity-record` from the successful 78-bit create to identify the
+   baseline update buffer's transform, parent, stream-source, and RSAT-defined regions.
 9. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
 10. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
 11. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
+12. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime before using
+    its Towerfall conclusions for patrol. Locate or reconstruct the missing authored descriptor
+    builder separately; it is not present in this branch.
 
 ## Build and verification
 

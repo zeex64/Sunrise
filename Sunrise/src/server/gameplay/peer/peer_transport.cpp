@@ -86,6 +86,8 @@ constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
 constexpr std::uint64_t kEntityCreateRetryInterval = 2000;
 /** Keeps resource-readiness retries bounded even when the selected RSAT cannot load. */
 constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
+/** Runtime currently proves complete inbound acceptance only for one registered scheduler view. */
+constexpr std::uint8_t kProvenSchedulerViewCount = 1;
 
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
@@ -260,7 +262,8 @@ write_scheduler_signature(bits::Writer& writer,
 [[nodiscard]] bool write_scheduler(bits::Writer& writer,
                                    const state::gameplay::SchedulerSignature& signature,
                                    const EntityCreatePlan& plan) noexcept {
-    if (!write_scheduler_signature(writer, signature)) {
+    if (signature.viewCount != kProvenSchedulerViewCount
+        || !write_scheduler_signature(writer, signature)) {
         return false;
     }
     for (std::size_t index = 0; index < signature.viewCount; ++index) {
@@ -298,7 +301,7 @@ write_scheduler_signature(bits::Writer& writer,
     output = {};
     output.namespaceId = -1;
     if (!peer.view.bound || peer.view.token == 0 || !peer.schedulerSignature.present
-        || peer.schedulerSignature.viewCount == 0
+        || peer.schedulerSignature.viewCount != kProvenSchedulerViewCount
         || peer.schedulerSignature.viewCount > peer.schedulerSignature.views.size()) {
         return false;
     }
@@ -1225,8 +1228,12 @@ void consume_established(const state::gameplay::Endpoint& from,
     std::array<std::byte, kReplyCapacity> buffer{};
     bits::Writer writer(buffer);
     const auto guard = static_cast<std::uint8_t>(peer.localConnectionSequence % kSequenceGuardBase);
+    // One-view packets remain accepted after signature convergence and after a successful create.
+    // In both captured two-view transitions the client applied the remote signature, then marked
+    // that packet and every repeated scheduler packet corrupt until its four-second timeout. Keep
+    // ordinary transport acknowledgements healthy while the multi-view handler tail is unmapped.
     const bool schedulerPresent = peer.view.bound && peer.schedulerSignature.present
-                                  && peer.schedulerSignature.viewCount != 0;
+                                  && peer.schedulerSignature.viewCount == kProvenSchedulerViewCount;
     std::size_t size = 0;
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)
