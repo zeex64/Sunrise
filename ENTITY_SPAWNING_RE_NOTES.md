@@ -196,11 +196,16 @@ server ... stage=view result=accepted direction=in local=2 remote=1 got=1 index=
 ```
 
 `FUN_1416ECF00` is the native local-stage/index selector called by `FUN_1416EB4D0`. On a receptor
-view, incoming stage 2 requires a nonnegative index that differs from `view + 0x80`. The creator
-`FUN_141703910` copies the client's local peer index from its manager into `view + 0x80`; that value
-is `0` in this topology. Sunrise also sent index `0`, so native code rejected the transition before
-the client could advance to stage 2. The server now uses remote host peer index `1`, matching the
-client's `p1[...] create=1` membership/view entry.
+view, incoming stage 2 requires a nonnegative index that differs from `view + 0x80`.
+`FUN_141703910` copies manager field `+0x130` into that view field. The first implementation sent
+index `0`; changing it to the apparent remote host peer index `1` did not clear the transition:
+the client still retransmitted stage 1 while the server remained `local=2 remote=1`. Therefore the
+index is not yet proven to be the only rejection, and the exact runtime meaning/value of
+`view + 0x80` still needs direct confirmation.
+
+The next build logs the compact native state at each change: error code, local/remote stages and
+indices, `view + 0x80`, signature validity/count, compatibility, and fully-open flags. This will
+distinguish protocol error 5 from signature mismatch error 9 on the first repeated lookup.
 
 The established slot-0 NetAddr remains:
 
@@ -225,8 +230,8 @@ service-transport path and is expected.
   signature; stages 3 through 5 keep the agreed view index but omit that list.
 - `FUN_1416F6CE0` exposes the two useful completion thresholds: both sides at stage 2 open the
   compatible-view gate, while both sides at stage 5 mark replication fully open.
-- This matches Sunrise's existing five-stage server state machine and its captured stage-2
-  signature. The stage-2 index is the remote host peer index, not the client's local peer index.
+- The five-stage server shape and captured stage-2 signature still match the native body builder,
+  but the accepted stage-2 index remains under test.
 - Once Sunrise marks the view bound, established packets already send the native simulation
   gatekeeper bit as enabled. The following replication-scheduler presence bit remains deliberately
   clear; encoding that scheduler frame and its entity-create body is the next protocol layer after
@@ -237,6 +242,7 @@ service-transport path and is expected.
 Client hooks now cover:
 
 - View-message lookup and message-40 routing.
+- Native message-40 error, local/remote stage, index, signature, compatibility, and open state.
 - View-slot manager state.
 - Membership-to-view synchronization predicates.
 - Type-12 native wire decoder bit consumption.
@@ -269,11 +275,12 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the index-1 build and confirm the client advances from stage 1 through stage 5 instead of
-   retransmitting stage 1 after the server's stage-2 body.
-2. Confirm the server reports `stage=view result=bound` and the external probe reports
+1. Run the `view-state` probe build and inspect the first state change after the server sends stage
+   2. Error `5` indicates index/order rejection; error `9` identifies signature mismatch.
+2. Correct the rejected field, then confirm the client advances through stages 2 through 5.
+3. Confirm the server reports `stage=view result=bound` and the external probe reports
    `view=1 gate=1`.
-3. Use the first post-bind `external-probe` scheduler sample to map the replication frame before
+4. Use the first post-bind `external-probe` scheduler sample to map the replication frame before
    adding the first server-authored entity-create body.
 
 ## Build and verification
