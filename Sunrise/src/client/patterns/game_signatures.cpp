@@ -100,6 +100,15 @@ constexpr std::string_view kSobjectCreateEncoderText =
 constexpr auto kSobjectCreateEncoder =
     signature<signature_length(kSobjectCreateEncoderText)>(kSobjectCreateEncoderText);
 
+// Matches kind 0's sobject update encoder. The saved update context, its create-buffer load, and
+// the two zeroed component cursors distinguish this entry from the adjacent codec functions.
+constexpr std::string_view kSobjectUpdateEncoderText =
+    "48 89 5C 24 08 48 89 6C 24 20 56 57 41 56 48 83 EC 40 48 8B 72 20 33 FF 48 8B DA "
+    "4C 8B 72 30 8B EF 89 7C 24 68 89 7C 24 70 40 38 7A 54";
+/** Compiled pattern bytes of the update-encoder signature above. */
+constexpr auto kSobjectUpdateEncoder =
+    signature<signature_length(kSobjectUpdateEncoderText)>(kSobjectUpdateEncoderText);
+
 // Matches the membership-to-view synchronization pass. The fixed prologue is unique in the
 // current image and ends before the first position-dependent branch displacement.
 constexpr std::string_view kViewMembershipSyncText =
@@ -226,6 +235,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"view_message_lookup", kViewMessageLookup},
     patterns::Pattern{"view_slot_pump", kViewSlotPump},
     patterns::Pattern{"sobject_create_encoder", kSobjectCreateEncoder},
+    patterns::Pattern{"sobject_update_encoder", kSobjectUpdateEncoder},
     patterns::Pattern{"view_membership_sync", kViewMembershipSync},
     patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},

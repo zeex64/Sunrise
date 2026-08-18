@@ -6,6 +6,7 @@
 #include "../platform.h"
 #include "../runtime.h"
 #include "../sobject_create_probe.h"
+#include "../sobject_update_probe.h"
 #include "../view_creation_probe.h"
 #include "../view_membership_probe.h"
 #include "../view_message_probe.h"
@@ -135,6 +136,7 @@ bool uninstall() noexcept {
     const bool removed = lifecycle::uninstall_group(lifecycle::kGameSlots, gameProtectedEntries);
     if (removed) {
         sobject_create_probe::reset();
+        sobject_update_probe::reset();
         view_creation_probe::reset();
         activity_host_probe::reset();
         view_membership_probe::reset();

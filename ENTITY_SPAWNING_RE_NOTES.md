@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 758c225a15812b418596d2e6287395892442eda542ea735702ee5a3bc97f9104
+SHA-256 5b92c2004519ab0910776dd8872c797f3030b03e839fb66726f18fdf206118f0
 ```
 
 ## Confirmed high-level path
@@ -355,8 +355,10 @@ generation/variant value, and, for one lifecycle form, a signed 16-bit nested-bo
   object table and clears lifecycle/dirty state.
 
 The 2-bit codec registry is now resolved. An AI enemy's primary replicated object uses the
-`sobject` codec (kind 0), but Sunrise still needs a valid enemy sobject RSAT identifier and the
-matching baseline/update state before it can construct a valid first create record.
+`sobject` codec (kind 0). A valid, loadable enemy sobject RSAT identifier is the only codec-specific
+input now proven necessary for a first create-only record: the native receiver explicitly injects
+the codec baseline when no update accompanies creation. A later update is still needed to choose
+placement and drive non-baseline state.
 
 The create-body encoder is now tied directly to the scheduler's entity collector rather than a
 separate transport:
@@ -365,10 +367,29 @@ separate transport:
 - A create-pending object calls `FUN_1417084B0`, which packages `FUN_1417003C0`'s kind, entity id,
   0x400-bit authority/presence mask, optional anchor, and codec `+0x58` payload.
 - An update-pending object calls `FUN_141708C40` and the codec's update path.
-- `FUN_1417085C0` and `FUN_1416FF790` are the matching create-body receive path. They validate the
-  kind and entity id before calling codec `+0x60` and committing the object.
+- `FUN_1416FF790` decodes the create body through codec slot `+0x60`.
+- `FUN_1417085C0` validates the decoded record, then calls codec slot `+0xB0` to instantiate or bind
+  the native runtime object.
 - The collector explicitly warns and schedules a baseline when creation is pending without an
   update, matching the baseline behavior already found in `FUN_14171E240`.
+
+The client-side application chain is now concrete:
+
+```text
+FUN_1416FF790 (decode entity creation through codec +0x60)
+  -> FUN_1417085C0 (validate and apply through codec +0xB0)
+    -> FUN_1417242F0 (sobject instantiate/apply)
+      -> FUN_140A01030 (resolve/load RSAT resource reference)
+      -> native sobject allocation/construction
+      -> FUN_141704870 (bind runtime object id to replicated entity id)
+```
+
+The create-only baseline path is equally explicit. `FUN_141718080` emits
+`receiving sobject creation without update, will inject baseline`, allocates a zeroed update
+record, and calls `FUN_14170B600`; that helper invokes codec slot `+0x80`, the baseline
+initializer. The outbound mirror in `FUN_14171E240` has the corresponding send-side warning.
+Sunrise should therefore test a minimal kind-0 create before attempting to reproduce the full
+transform/update body.
 
 `FUN_1416EFD70`, called during network-manager startup for manager `+0x59820`, initializes the
 global codec registry and proves that all four 2-bit values are registered:
@@ -433,6 +454,22 @@ The last two fields are derived from the resolved RSAT on both sender and receiv
 codec bookkeeping, not values Sunrise should choose. The new `sobject-create` boundary probe will
 confirm the exact schema bit width and representation from a native outbound exemplar.
 
+Static schema metadata now separates the value presented to the generic codec from its local
+scratch allocation. The same metadata fields agree with the known raw 86-byte NetAddr schema and
+with the other two replicated-object creation codecs:
+
+| Creation schema | Value bytes | Local scratch bytes |
+| --- | ---: | ---: |
+| sobject `0x80800014` | `0x04` | `0x10` |
+| squad `0x80809C42` | `0x08` | `0x08` |
+| player-broadcast `0x80806ABD` | `0x08` | `0x08` |
+| raw NetAddr `0x80807C82` | `0x56` | `0x56` |
+
+This proves that only the first four bytes of the sobject create scratch record are handed to the
+schema before the separate flag bit. It does not yet prove that the table-driven scalar encoder
+writes those four bytes as an uncompressed 32-bit value, so the native bit-count capture remains
+the authority for the exact wire width.
+
 The sobject update path also identifies the baseline state an enemy needs. `FUN_141725140` encodes
 the named `transform`, `parent`, and `stream-source` components before its remaining sobject update
 body; `FUN_141724FD0` decodes the same components. Squad updates use a named `squad` component, and
@@ -441,11 +478,36 @@ but not yet proven as a mandatory creation prerequisite.
 
 The three named sobject component schema ids are now resolved from their descriptor tables:
 
+| Component | Schema | Value bytes | Scratch bytes | Scratch offset |
+| --- | --- | ---: | ---: | ---: |
+| transform | `0x80809F75` | `0x20` | `0x20` | `0x00` |
+| parent | `0x8080949B` | `0x28` | `0x4A` | `0x20` |
+| stream-source | `0x8080949A` | `0x08` | `0x14` | `0x70` |
+
+`FUN_141725140` aligns those scratch records to 16 bytes. After the three named records, the
+RSAT-defined update body begins at scratch offset `0x90`. Each named component is encoded as a
+presence decision followed immediately by its schema payload when dirty; the corresponding sent
+mask is updated after successful encoding. This means a valid baseline is not simply three fixed
+presence bits followed by three unconditional structures.
+
+Kind 1 (`squad`) is a separate replicated-object lane, not an embedded requirement in the sobject
+create payload. Its native outbound constructor `FUN_141726A50` fills the eight-byte creation
+buffer as follows:
+
 ```text
-transform      0x80809F75
-parent         0x8080949B
-stream-source  0x8080949A
++0x00  uint32 native squad field +0x30
++0x04  uint8  native squad field +0x34
++0x05  uint8  padding/reserved
++0x06  uint16 native squad field +0x36
 ```
+
+The create schema is `0x80809C42`. The named squad update component uses schema `0x80807EB9`,
+with a `0x300`-byte value and `0x505`-byte local scratch record. Most importantly, squad codec slot
+`+0xB0` is `FUN_141724A80`: it resolves an already-existing native squad from that eight-byte
+identity and binds the replicated id; it does not construct a native squad from scratch. Nothing
+currently proves that a kind-1 squad record must precede a first enemy sobject. Defer squad
+replication until a minimal sobject create has been accepted, then inspect whether the spawned
+definition expects an existing activity-owned squad relationship.
 
 The next diagnostic build follows `view + 0xB8 -> entity manager +0x10 -> global registry` without
 calling native code. It logs the live count plus Ghidra-relative vtable/create/update RVAs as
@@ -457,6 +519,12 @@ The same build hooks only the kind-0 outbound create encoder and reports each di
 bit-count delta, accumulator state, and any bytes flushed by the call. It does not change the
 payload or enable scheduler injection.
 
+The follow-up diagnostic build also hooks `FUN_141725140`, the kind-0 outbound update encoder, as
+`stage=sobject-update`. It records at most 32 distinct inputs, including the create identity, the
+first 16 bytes of both native dirty/sent mask objects, the component scratch base, exact bit-count
+delta, accumulator state, and up to 64 flushed bytes. The hook calls the original encoder first
+and never edits its context, masks, or writer.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -465,6 +533,7 @@ Client hooks now cover:
 - Native message-40 error, local/remote stage, index, signature, compatibility, and open state.
 - Live replicated-object codec count, vtable, create, and update entry points.
 - Bounded, read-only native sobject creation inputs and their exact encoded bit deltas.
+- Bounded, read-only native sobject update masks and their exact encoded bit deltas.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
 - Membership-to-view synchronization predicates.
@@ -509,12 +578,16 @@ The current checkpoint includes work in:
    `player_broadcast`, and `test_entity` registrations.
 5. Read `sobject-create` captures to confirm schema `0x80800014`'s exact RSAT-id bit representation
    and collect known-valid native sobject exemplars.
-6. Resolve one captured or package-derived RSAT id to an enemy definition, then decode the
-   `transform`/`parent`/`stream-source` update body closely enough to reproduce a baseline.
-7. Determine whether an enemy additionally requires a kind-1 squad object or merely references an
-   existing squad through its sobject update.
-8. Add a scheduler writer only after an empty frame and one create record can be encoded without
-   leaving unread or over-read bits on the native client.
+6. Resolve one captured or package-derived RSAT id to an enemy definition and send a minimal
+   create-only kind-0 record, relying on the native codec `+0x80` baseline injection path.
+7. Read `sobject-update` captures to identify which named components are present in an initial
+   native update and separate their bit spans from the RSAT-defined suffix.
+8. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+   successfully created enemy.
+9. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+   sobject is accepted; do not assume the squad codec can create the underlying native squad.
+10. Enable the scheduler writer only after an empty frame and one create-only record can be encoded
+    without leaving unread or over-read bits on the native client.
 
 ## Build and verification
 
@@ -543,5 +616,6 @@ view-lookup
 view-state
 view-codecs
 sobject-create
+sobject-update
 activity-host-decode
 ```
