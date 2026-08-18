@@ -971,6 +971,31 @@ stage as accepted but answered it with stage 4 about 15 times per second, so the
 converge. A stage-1 regression on an unbound view now clears the stale stage, index, and signature and
 restarts both sides at stage 1. The inbound view report carries `restart=1` when this recovery fires.
 
+The following run isolated a second, more precise stage-4 failure. The client and Sunrise advanced
+normally through stages 1, 2, 3, and 4. If the client's local readiness work took longer than the
+host's 250 ms retry interval, Sunrise resent stage 4. The native client accepted the first stage 4
+but rejected the duplicate immediately:
+
+```text
+client ... view-state ... local=4 ... remote=4 ... compatible=1 open=0
+client ... view ... mode=4/id=66 -> mode=4/id=66 establishment error ... dying
+server ... view ... got=1 ... restart=1
+```
+
+`FUN_1416EB4D0` confirms that an initiator accepts the ordered 3-to-4 remote transition but treats a
+second remote stage 4 as invalid. `FUN_1416F6810` may legitimately leave the local side at stage 4
+while its readiness scan and simulation lifecycle gate are pending, then advances it to stage 5.
+Message 40 already rides the reliable gameplay channel, and an inbound later stage proves that the
+previous receptor stage arrived. Sunrise therefore retries only stage 1, whose body may be dropped
+before the native token-to-view lookup exists; stages 2 through 4 are emitted exactly once per
+initiator advance.
+
+The frozen session did not enter the experimental entity path: it contained no
+`entity-create-out`, `entity-list-decode`, or `entity-record` event. It instead stopped during a
+PUB96-to-PUB24 citizen transition after `peer join successful`, `peer-established`, and the bubble
+reservation update, while the stage-4 view reset loop was saturating the same reliable gameplay
+channel. The entity-record capture cannot be the cause of that lockup because its hook never ran.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -1027,7 +1052,8 @@ The current checkpoint includes work in:
 ## Next investigation
 
 1. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
-   `restart=1`, followed by ordinary stages 1 through 5 rather than a stage-4 retry stream.
+   `restart=1`, followed by ordinary stages 1 through 5. If local and remote both pause at stage 4,
+   confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
 2. If `network_update` stalls again, read the one `stage=network-hitch` line. `observer=0 native=0`
    excludes both log paths; nonzero `native` means the reported entered site never returned.
 3. Reproduce the PUB448-to-PUB96 or equivalent preempted handoff and confirm the join advances from

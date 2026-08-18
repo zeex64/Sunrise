@@ -437,7 +437,9 @@ void complete_view(Admitted& record) noexcept {
 /**
  * Drives the receptor half of the native handshake without advancing ahead of the client.
  * The client initiator chooses the view index in stage two. This host validates and echoes that
- * stage, then echoes each later stage until both sides reach five.
+ * stage, then echoes each later stage until both sides reach five. Only stage one is retried:
+ * duplicate later stages are establishment errors to the native initiator while it waits for its
+ * local readiness gates.
  */
 void progress_view(Admitted& record) noexcept {
     if (!record.view.started || record.view.bound) {
@@ -466,10 +468,13 @@ void progress_view(Admitted& record) noexcept {
         (void)send_view_stage(record, record.view.remoteStage);
         return;
     }
-    // Reliable delivery only proves the channel consumed message 40. The native view lookup may
-    // not exist yet, in which case its handler deliberately drops the body without replying.
-    // Retry the current receptor stage until the initiator advances.
-    (void)send_view_stage(record, record.view.localStage);
+    // Before stage two, the native view lookup may not exist yet and deliberately drops message 40.
+    // Once the initiator has answered, the reliable channel and its advancing stage prove receipt.
+    // Repeating stage 2, 3, or 4 is not harmless: in particular, a second remote stage 4 makes the
+    // initiator report an establishment error while it is waiting to advance its local side to 5.
+    if (record.view.localStage == kInitialViewStage) {
+        (void)send_view_stage(record, kInitialViewStage);
+    }
 }
 
 /** Validates one receptor stage and advances the matching host view. */
