@@ -7,8 +7,9 @@ Last updated: 2026-08-18
 Make a Sunrise-hosted Destiny 2 activity create the native per-peer replication view required for
 server-authored enemies and other entities to appear on the client.
 
-The immediate milestone is a successful call to the game's membership-driven view creator. Entity
-serialization cannot work until this view exists and message 40 can resolve it.
+The immediate milestone is completing message 40's five-stage view handshake. Native view
+creation and token lookup are now proven; the next layer is the replication scheduler and its
+entity-create lane.
 
 ## Environment
 
@@ -23,7 +24,7 @@ serialization cannot work until this view exists and message 40 can resolve it.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 4cf30ae42e8678d6b981c9cd4e87755e90b6bf6aa38a4c6fb43d735c9084a973
+SHA-256 93842f833f84ee19f9e97366efbe12f2e84b2ff009a43cf1ec0aa4c45e4617ae
 ```
 
 ## Confirmed high-level path
@@ -172,7 +173,7 @@ root membership with descriptor     32359 bits
 The increase is exactly 688 bits (`86 * 8`), and the native decoder reports success. This proves
 the raw fixed-array wire grammar is correct.
 
-## Current blocker at the last runtime test
+## Latest runtime diagnosis
 
 The field-11 address correction resolved native view creation. The latest run proves all of the
 following:
@@ -187,25 +188,34 @@ view-lookup result=found ... view=00000000047462E0
 view-signature result=captured ... bytes=15
 ```
 
-The remaining blocker is message 40's stage-2 view index. The server reached local stage 2 while
-the client repeatedly reported stage 1:
+The `view-state` probe resolved the stage-2 deadlock. The native client reported no protocol error
+and no signature mismatch. Instead, the two session views exposed opposite halves of an
+initiator/receptor mistake:
 
 ```text
-server ... stage=view result=queued direction=out local=2 remote=1 index=0 ... list=15
-server ... stage=view result=accepted direction=in local=2 remote=1 got=1 index=0 ... list=0
+token ...002 error=0 local=2 local_index=0 remote=1 remote_index=-1 signature=1 bytes=15
+token ...003 error=0 local=1 local_index=-1 remote=2 remote_index=1 signature=1 bytes=15
 ```
 
-`FUN_1416ECF00` is the native local-stage/index selector called by `FUN_1416EB4D0`. On a receptor
-view, incoming stage 2 requires a nonnegative index that differs from `view + 0x80`.
-`FUN_141703910` copies manager field `+0x130` into that view field. The first implementation sent
-index `0`; changing it to the apparent remote host peer index `1` did not clear the transition:
-the client still retransmitted stage 1 while the server remained `local=2 remote=1`. Therefore the
-index is not yet proven to be the only rejection, and the exact runtime meaning/value of
-`view + 0x80` still needs direct confirmation.
+For token `...002`, Sunrise sent stage 1 and the native client independently selected index `0`
+and advanced its local half to stage 2. Sunrise rejected that repeated stage 2 because the server
+record had missed the earlier client stage 1 and still had no chosen index/signature. For token
+`...003`, Sunrise prematurely sent stage 2 with index `1`; the native receptor accepted it as its
+remote stage, but the client remained at local stage 1 because only an initiator advances the
+later stages. Neither side could progress.
 
-The next build logs the compact native state at each change: error code, local/remote stages and
-indices, `view + 0x80`, signature validity/count, compatibility, and fully-open flags. This will
-distinguish protocol error 5 from signature mismatch error 9 on the first repeated lookup.
+Static analysis confirms the roles:
+
+- `FUN_1416F6770` owns the initiator's stage-1-to-stage-2 transition. It waits for remote stage 1,
+  chooses the next allowed index, stores it locally, and sends stage 2.
+- `FUN_1416F6810` runs only when the view's initiator flag at `view + 0x45` is set. It advances
+  stages 2 through 5 and sends every transition.
+- Sunrise therefore has to be the receptor: publish/retry stage 1, adopt and validate the
+  client's stage-2 index/signature, then echo stages 2 through 5.
+
+The server state machine now implements that receptor shape. It also permits a stage-2 bootstrap
+when the activity record was claimed after the native view began: stage 2 is self-contained because
+it carries both the selected index and the full 15-byte compatibility signature.
 
 The established slot-0 NetAddr remains:
 
@@ -230,12 +240,77 @@ service-transport path and is expected.
   signature; stages 3 through 5 keep the agreed view index but omit that list.
 - `FUN_1416F6CE0` exposes the two useful completion thresholds: both sides at stage 2 open the
   compatible-view gate, while both sides at stage 5 mark replication fully open.
-- The five-stage server shape and captured stage-2 signature still match the native body builder,
-  but the accepted stage-2 index remains under test.
+- `FUN_1416F6770` proves the native client initiator chooses the stage-2 index. Sunrise must not
+  guess it or advance first.
+- `FUN_1416F6810` proves stages 3 through 5 are initiator-driven. Sunrise's receptor echoes each
+  stage and marks the view bound only after both halves reach stage 5.
 - Once Sunrise marks the view bound, established packets already send the native simulation
   gatekeeper bit as enabled. The following replication-scheduler presence bit remains deliberately
   clear; encoding that scheduler frame and its entity-create body is the next protocol layer after
   the view is proven.
+
+## Replication scheduler and entity lane
+
+The scheduler is now mapped far enough to identify the exact entity record path, but not yet far
+enough to safely emit a fabricated enemy. Sending a malformed scheduler body would desynchronize
+the entire established packet bitstream, so Sunrise continues to publish `schedulerPresent=0`.
+
+### Scheduler ownership and framing
+
+- The scheduler descriptor is anchored by the `replication-scheduler` string at `0x141C9AD78`.
+- `FUN_1416BB2B0` constructs the network view manager and its scheduler at manager `+0x5498`.
+- `FUN_1417A96D0` registers one established view and its four replication handlers.
+- `FUN_1417B0D70` is the outbound scheduler/budget pass. It gathers up to 256 candidates, chooses
+  records under the packet budget, writes a one-bit signature-update flag, optionally writes the
+  scheduler signature, then appends each handler's pre-encoded bit buffer.
+- `FUN_1417A8CE0` is the inbound counterpart. It consumes the signature-update flag, verifies the
+  registered-view signature, asks each handler to decode pending 0x84-byte records, applies them,
+  and finally releases the temporary records.
+
+The handlers are registered in scheduler order as follows:
+
+| Order | View field | Candidate collector | Outbound encoder | Inbound decoder | Meaning |
+| --- | --- | --- | --- | --- | --- |
+| 0 | `+0x100` | `FUN_14170C3F0` | `FUN_14171F650` | `FUN_141718AE0` | linked event queue |
+| 1 | `+0x140` | `FUN_14170BF30` | `FUN_14171F050` | `FUN_1417183C0` | 32-bit mask/control lane |
+| 2 | `+0x0A8` | `FUN_14170C080` | `FUN_14171F200` | `FUN_141718510` | replicated entities |
+| 3 | `+0x1680` | `FUN_14170CA60` | `FUN_14171F7F0` | `FUN_141718CB0` | fixed object/control lane |
+
+The client already emits scheduler bodies before the view is bound. The read-only external probe
+has observed bodies from 105 to more than 1500 bits, commonly beginning with values such as
+`01C8`, `026C`, and `1830`. These are useful captures, but they are pre-bind scheduling traffic and
+not yet evidence of an accepted server-authored entity.
+
+### Entity record grammar
+
+`FUN_14171F200` writes scheduled entity records. It chooses either `anchor-index` or
+`entity-index`, then delegates the per-object body to `FUN_14171E5A0`. The receive side mirrors
+this in `FUN_141718510`, `FUN_141717EB0`, and `FUN_141718080`.
+
+The decoded 0x84-byte pending record contains these protocol flags:
+
+- bit 0: object creation
+- bit 1: object update
+- bit 2: a trailing per-object boolean
+- bit 3: additional lifecycle state
+- bit 6: optional `anchor-entity-index`
+
+An initial one-bit compact form represents an update-only record. Otherwise five explicit bits
+carry the flags above. The record then carries the optional anchor entity, an optional 8-bit
+generation/variant value, and, for one lifecycle form, a signed 16-bit nested-body length.
+
+`FUN_14171E240` is the core outbound object-body encoder and `FUN_141718080` is its inbound mirror:
+
+- A create writes an 8-bit generation, a 2-bit replicated-object kind, and calls that kind's
+  codec vtable slot `+0x58` for the creation payload.
+- An update calls codec slot `+0x68`; the decoder uses the matching slot `+0x70`.
+- The decoder resolves the 2-bit kind through `FUN_1416EAE90`, allocates the codec's declared
+  create/update buffers, and injects a baseline when creation arrives without an update.
+- `FUN_141714840` is the later apply/commit path that merges the decoded records into the local
+  object table and clears lifecycle/dirty state.
+
+The remaining static question is the concrete 2-bit codec kind and creation schema used by an AI
+enemy. That must be recovered before Sunrise can construct a valid first create record.
 
 ## Instrumentation added
 
@@ -275,13 +350,14 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the `view-state` probe build and inspect the first state change after the server sends stage
-   2. Error `5` indicates index/order rejection; error `9` identifies signature mismatch.
-2. Correct the rejected field, then confirm the client advances through stages 2 through 5.
-3. Confirm the server reports `stage=view result=bound` and the external probe reports
+1. Run the receptor-state-machine build and confirm Sunrise accepts the client's stage 2, adopts
+   index `0`, and echoes stages 2 through 5.
+2. Confirm the server reports `stage=view result=bound` and the external probe reports
    `view=1 gate=1`.
-4. Use the first post-bind `external-probe` scheduler sample to map the replication frame before
-   adding the first server-authored entity-create body.
+3. Capture the first post-bind scheduler signature/body and map its four handler terminators.
+4. Resolve the AI enemy's 2-bit object codec and its vtable `+0x58` creation schema.
+5. Add a scheduler writer only after an empty frame and one create record can be encoded without
+   leaving unread or over-read bits on the native client.
 
 ## Build and verification
 

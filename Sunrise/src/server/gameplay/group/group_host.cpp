@@ -60,8 +60,6 @@ constexpr std::uint8_t kInitialViewStage = 1;
 constexpr std::uint8_t kSignatureViewStage = 2;
 /** Both sides reaching stage five opens the simulation gatekeeper. */
 constexpr std::uint8_t kFinalViewStage = 5;
-/** Remote host peer index in the client's native membership/view table. */
-constexpr std::int32_t kInitialViewIndex = static_cast<std::int32_t>(kPeerMemberIndex);
 
 /** Per-session host side of native message 40's five-stage handshake. */
 struct ViewHandshake {
@@ -364,6 +362,10 @@ void fill_activity_host(wire::ActivityHostParameter& body, std::uint64_t groupSe
 
 /** Queues one local stage of message 40 and advances only after the queue accepts it. */
 [[nodiscard]] bool send_view_stage(Admitted& record, std::uint8_t stage) noexcept {
+    if ((stage >= kSignatureViewStage && record.view.index < 0)
+        || (stage == kSignatureViewStage && !record.view.signatureReady)) {
+        return false;
+    }
     wire::ViewEstablishment body{};
     body.kind = stage;
     body.sessionToken = record.view.token;
@@ -396,6 +398,20 @@ void fill_activity_host(wire::ActivityHostParameter& body, std::uint64_t groupSe
     return sent;
 }
 
+/** Captures the signature the native client built for one view, once it becomes available. */
+[[nodiscard]] bool refresh_view_signature(ViewHandshake& view) noexcept {
+    if (view.signatureReady) {
+        return true;
+    }
+    client::hooks::network::view_signature::CapturedSignature captured{};
+    if (!client::hooks::network::view_signature::find(view.token, captured)) {
+        return false;
+    }
+    view.signature = captured;
+    view.signatureReady = true;
+    return true;
+}
+
 /** Marks the peer bound only after both sides complete native stage five. */
 void complete_view(Admitted& record) noexcept {
     if (record.view.bound) {
@@ -419,9 +435,9 @@ void complete_view(Admitted& record) noexcept {
 }
 
 /**
- * Advances the initiator half of the native handshake by at most one stage.
- * The native client refreshes the stage-two signature continuously. Capturing that exact value
- * avoids hard-coding a destination/world datum that changes across activity transitions.
+ * Drives the receptor half of the native handshake without advancing ahead of the client.
+ * The client initiator chooses the view index in stage two. This host validates and echoes that
+ * stage, then echoes each later stage until both sides reach five.
  */
 void progress_view(Admitted& record) noexcept {
     if (!record.view.started || record.view.bound) {
@@ -441,35 +457,19 @@ void progress_view(Admitted& record) noexcept {
         (void)send_view_stage(record, kInitialViewStage);
         return;
     }
+    if (record.view.localStage == kFinalViewStage
+        && record.view.remoteStage == kFinalViewStage) {
+        complete_view(record);
+        return;
+    }
+    if (record.view.remoteStage > record.view.localStage) {
+        (void)send_view_stage(record, record.view.remoteStage);
+        return;
+    }
     // Reliable delivery only proves the channel consumed message 40. The native view lookup may
     // not exist yet, in which case its handler deliberately drops the body without replying.
-    // Keep the current logical stage moving until the receptor publishes the same stage.
-    if (record.view.remoteStage < record.view.localStage) {
-        (void)send_view_stage(record, record.view.localStage);
-        return;
-    }
-    if (record.view.localStage == kInitialViewStage
-        && record.view.remoteStage >= kInitialViewStage) {
-        if (!record.view.signatureReady) {
-            client::hooks::network::view_signature::CapturedSignature captured{};
-            if (!client::hooks::network::view_signature::find(record.view.token, captured)) {
-                return;
-            }
-            record.view.signature = captured;
-            record.view.signatureReady = true;
-            record.view.index = kInitialViewIndex;
-        }
-        (void)send_view_stage(record, kSignatureViewStage);
-        return;
-    }
-    if (record.view.localStage >= kSignatureViewStage
-        && record.view.remoteStage >= record.view.localStage) {
-        if (record.view.localStage == kFinalViewStage) {
-            complete_view(record);
-            return;
-        }
-        (void)send_view_stage(record, static_cast<std::uint8_t>(record.view.localStage + 1));
-    }
+    // Retry the current receptor stage until the initiator advances.
+    (void)send_view_stage(record, record.view.localStage);
 }
 
 /** Validates one receptor stage and advances the matching host view. */
@@ -486,13 +486,21 @@ void accept_view(const state::gameplay::Endpoint& from,
         && record->endpoint.port == from.port) {
         result = "invalid-stage";
         const bool stageValid = body.kind >= kInitialViewStage && body.kind <= kFinalViewStage;
-        const bool ordered = body.kind <= record->view.remoteStage + 1;
+        // A view can begin before its activity record is claimed. Its repeated stage two is enough
+        // to recover because that stage carries both the chosen index and the complete signature.
+        const bool stageTwoBootstrap = body.kind == kSignatureViewStage
+                                       && record->view.remoteStage == 0
+                                       && record->view.localStage >= kInitialViewStage;
+        const bool ordered = body.kind <= record->view.remoteStage + 1 || stageTwoBootstrap;
         bool formValid = false;
         if (body.kind == kInitialViewStage) {
             formValid = !body.hasOptionalValue && !body.hasList;
         } else if (body.kind == kSignatureViewStage) {
-            formValid = record->view.signatureReady && body.hasOptionalValue && body.hasList
-                        && body.optionalValue == record->view.index
+            const bool signatureReady = refresh_view_signature(record->view);
+            const bool indexValid = body.hasOptionalValue && body.optionalValue >= 0
+                                    && (record->view.index < 0
+                                        || body.optionalValue == record->view.index);
+            formValid = signatureReady && indexValid && body.hasList
                         && body.listCount == record->view.signature.count
                         && body.list == record->view.signature.bytes;
         } else {
@@ -500,6 +508,9 @@ void accept_view(const state::gameplay::Endpoint& from,
                         && body.optionalValue == record->view.index;
         }
         if (stageValid && ordered && formValid) {
+            if (body.kind == kSignatureViewStage && record->view.index < 0) {
+                record->view.index = body.optionalValue;
+            }
             if (body.kind > record->view.remoteStage) {
                 record->view.remoteStage = body.kind;
             }
