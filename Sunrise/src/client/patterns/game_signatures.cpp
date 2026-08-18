@@ -118,6 +118,14 @@ constexpr std::string_view kSobjectNativeRegistrationText =
 constexpr auto kSobjectNativeRegistration =
     signature<signature_length(kSobjectNativeRegistrationText)>(kSobjectNativeRegistrationText);
 
+// Matches the core replicated-object body encoder. Its complete nonvolatile-save prologue and
+// 0x1A8-byte stack frame are unique in the current image.
+constexpr std::string_view kEntityCreateEncoderText =
+    "40 53 55 56 57 41 56 41 57 48 81 EC A8 01 00 00";
+/** Compiled pattern bytes of the entity body-encoder signature above. */
+constexpr auto kEntityCreateEncoder =
+    signature<signature_length(kEntityCreateEncoderText)>(kEntityCreateEncoderText);
+
 // Matches the membership-to-view synchronization pass. The fixed prologue is unique in the
 // current image and ends before the first position-dependent branch displacement.
 constexpr std::string_view kViewMembershipSyncText =
@@ -246,6 +254,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"sobject_create_encoder", kSobjectCreateEncoder},
     patterns::Pattern{"sobject_update_encoder", kSobjectUpdateEncoder},
     patterns::Pattern{"sobject_native_registration", kSobjectNativeRegistration},
+    patterns::Pattern{"entity_create_encoder", kEntityCreateEncoder},
     patterns::Pattern{"view_membership_sync", kViewMembershipSync},
     patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},

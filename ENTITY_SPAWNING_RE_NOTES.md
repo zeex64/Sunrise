@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 05953d6c1bcbc0a52916cb28fb8ffc3a5dbebf9902aafd4357683aadc4a4b876
+SHA-256 593882ae24715f5db526305c2ba0af9960916bc79894569716ba2734efc12d88
 ```
 
 ## Confirmed high-level path
@@ -359,6 +359,28 @@ An initial one-bit compact form represents an update-only record. Otherwise five
 carry the flags above. The record then carries the optional anchor entity, an optional 8-bit
 generation/variant value, and, for one lifecycle form, a signed 16-bit nested-body length.
 
+The direct, non-anchor record framing is now exact. `FUN_14171F200` writes a zero lane-end bit,
+then a one direct-entity selector, followed by `FUN_1404C30D0`'s entity handle. That helper writes
+13 low slot bits and then four generation bits; its paired decoder `FUN_1404C16C0` confirms this is
+a 17-bit field. After the object body, `FUN_14171EFE0` writes a one to terminate the entity lane.
+
+A create-only record's explicit flag prefix is:
+
+```text
+0  use explicit flags (not compact update-only form)
+1  create
+0  update
+0  trailing per-object boolean absent
+0  additional lifecycle state absent
+0  anchor entity absent
+```
+
+With no anchor, `FUN_14171E5A0` next writes the generation-change decision. The create sub-body in
+`FUN_14171E240` then writes an 8-bit object generation, the 2-bit codec kind (`0` for sobject), and
+the codec's creation payload. The entity-handle slot/generation and the correct generation value
+for a server-created object still need a native exemplar; Sunrise must not substitute an arbitrary
+10-bit table index.
+
 `FUN_14171E240` is the core outbound object-body encoder and `FUN_141718080` is its inbound mirror:
 
 - A create writes an 8-bit generation, a 2-bit replicated-object kind, and calls that kind's
@@ -368,6 +390,21 @@ generation/variant value, and, for one lifecycle form, a signed 16-bit nested-bo
   create/update buffers, and injects a baseline when creation arrives without an update.
 - `FUN_141714840` is the later apply/commit path that merges the decoded records into the local
   object table and clears lifecycle/dirty state.
+
+The encoder's six-argument Windows x64 ABI is now confirmed directly from its body:
+
+```text
+uint8 FUN_14171E240(manager, writer, uint32 entity, record,
+                    uint64 update_context, uint32 auxiliary)
+```
+
+Its entry has the unique fixed pattern
+`40 53 55 56 57 41 56 41 57 48 81 EC A8 01 00 00`. A bounded client detour preserves the call
+and reports the first successful create body for up to 64 distinct entity handles as
+`stage=entity-create`, including the record flags, exact bit delta, writer state, and any bounded
+bytes flushed by the call. For a create-only kind-0 sobject, the expected core-body boundary is
+exactly 50 bits: 8 generation bits, 2 kind bits, and the 40-bit sobject creation payload. This
+probe does not include the outer record flags or the 17-bit entity handle written by its callers.
 
 The 2-bit codec registry is now resolved. An AI enemy's primary replicated object uses the
 `sobject` codec (kind 0). A valid, loadable enemy sobject RSAT identifier is the only codec-specific
@@ -478,8 +515,17 @@ The resulting local create-buffer layout is:
 ```
 
 The last two fields are derived from the resolved RSAT on both sender and receiver. They are local
-codec bookkeeping, not values Sunrise should choose. The new `sobject-create` boundary probe will
-confirm the exact schema bit width and representation from a native outbound exemplar.
+codec bookkeeping, not values Sunrise should choose. The `sobject-create` boundary probe can
+confirm whether a native outbound exemplar uses an identity or runtime-remapped tag.
+
+The generic schema dispatcher now makes that width exact. Schema `0x80800014`'s only field uses
+dispatcher type `0x18`; `FUN_1409F9350` first writes `FUN_1409FEC90`'s six-bit value. An installed
+package tag whose top bits are `0x80000000` selects discriminator `0x16`. Its case
+`FUN_1409F90A0` then writes a one-bit non-null marker and the 32-bit tag returned by
+`FUN_1404CE050`. The latter is an identity transform when the runtime remap table is empty, but can
+substitute a mapped tag when that table is populated. Thus a valid RSAT consumes 39 schema bits,
+and the codec's separate identity flag makes the complete sobject create payload exactly 40 bits.
+The native probe still needs to confirm whether the remap table is identity in this runtime.
 
 Static schema metadata now separates the value presented to the generic codec from its local
 scratch allocation. The same metadata fields agree with the known raw 86-byte NetAddr schema and
@@ -493,9 +539,9 @@ with the other two replicated-object creation codecs:
 | raw NetAddr `0x80807C82` | `0x56` | `0x56` |
 
 This proves that only the first four bytes of the sobject create scratch record are handed to the
-schema before the separate flag bit. It does not yet prove that the table-driven scalar encoder
-writes those four bytes as an uncompressed 32-bit value, so the native bit-count capture remains
-the authority for the exact wire width.
+schema before the separate flag bit. The table-driven encoder's six-bit discriminator and one-bit
+non-null marker mean the field is not merely an unframed 32-bit scalar, even when the final mapped
+tag value is unchanged.
 
 The sobject update path also identifies the baseline state an enemy needs. `FUN_141725140` encodes
 the named `transform`, `parent`, and `stream-source` components before its remaining sobject update
@@ -578,6 +624,8 @@ Client hooks now cover:
 - Live replicated-object codec count, vtable, create, and update entry points.
 - Bounded, read-only native sobject creation inputs and their exact encoded bit deltas.
 - Bounded, read-only native sobject update masks and their exact encoded bit deltas.
+- Bounded, read-only successful native entity-create bodies, including the six-argument encoder
+  context and exact body bit delta (`stage=entity-create`).
 - The first native construction observed for up to 4096 distinct RSAT tags, before any dependency
   on a functioning replication view (`stage=sobject-native`).
 - Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
@@ -625,8 +673,9 @@ The current checkpoint includes work in:
    empty-lane bits before enabling any entity data.
 5. Confirm `view-codecs count=4` and that the four runtime RVAs match the static `sobject`, `squad`,
    `player_broadcast`, and `test_entity` registrations.
-6. Read `sobject-native` and `sobject-create` captures to collect known-valid installed RSATs and
-   confirm schema `0x80800014`'s exact id representation.
+6. Read `sobject-native`, `entity-create`, and `sobject-create` captures to collect known-valid
+   installed RSATs, confirm a 50-bit create-only core body, and determine whether schema
+   `0x80800014` uses the native tag unchanged or remaps it at runtime.
 7. Resolve one captured or package-derived RSAT id to an enemy definition and send a minimal
    create-only kind-0 record, relying on the native codec `+0x80` baseline injection path.
 8. Read `sobject-update` captures to identify which named components are present in an initial
@@ -667,6 +716,7 @@ view-codecs
 sobject-create
 sobject-update
 sobject-native
+entity-create
 scheduler-body
 scheduler-signature
 activity-host-decode

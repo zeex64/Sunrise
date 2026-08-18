@@ -5,6 +5,7 @@
 #include "../activity_host_probe.h"
 #include "../bubble_authority/bubble_authority_replacements.h"
 #include "../coordinator/network_call_coordinator.h"
+#include "../entity_create_probe.h"
 #include "../sobject_create_probe.h"
 #include "../sobject_native_probe.h"
 #include "../sobject_update_probe.h"
@@ -30,6 +31,7 @@ namespace {
         sobject_create_probe::encoder_entry_point(),
         sobject_update_probe::encoder_entry_point(),
         sobject_native_probe::registration_entry_point(),
+        entity_create_probe::encoder_entry_point(),
         view_membership_probe::sync_entry_point(),
         view_membership_probe::wire_entry_point(),
         view_membership_probe::decoded_entry_point(),
@@ -66,14 +68,15 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.sobjectCreateEncoder, replacements[7]},
         hooking::detour::Spec{resolved.sobjectUpdateEncoder, replacements[8]},
         hooking::detour::Spec{resolved.sobjectNativeRegistration, replacements[9]},
-        hooking::detour::Spec{resolved.viewMembershipSync, replacements[10]},
-        hooking::detour::Spec{resolved.activityMembershipDecoder, replacements[11]},
-        hooking::detour::Spec{resolved.activityMembershipQueue, replacements[12]},
-        hooking::detour::Spec{resolved.viewCreator, replacements[13]},
-        hooking::detour::Spec{resolved.activityHostDecoder, replacements[14]},
-        hooking::detour::Spec{resolved.activityHostConnectionState, replacements[15]},
-        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[16]},
-        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[17]},
+        hooking::detour::Spec{resolved.entityCreateEncoder, replacements[10]},
+        hooking::detour::Spec{resolved.viewMembershipSync, replacements[11]},
+        hooking::detour::Spec{resolved.activityMembershipDecoder, replacements[12]},
+        hooking::detour::Spec{resolved.activityMembershipQueue, replacements[13]},
+        hooking::detour::Spec{resolved.viewCreator, replacements[14]},
+        hooking::detour::Spec{resolved.activityHostDecoder, replacements[15]},
+        hooking::detour::Spec{resolved.activityHostConnectionState, replacements[16]},
+        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[17]},
+        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[18]},
     };
 }
 

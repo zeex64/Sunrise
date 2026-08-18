@@ -2,6 +2,7 @@
 #include "../activity_host_probe.h"
 #include "../content_config/runtime.h"
 #include "../coordinator/network_call_coordinator.h"
+#include "../entity_create_probe.h"
 #include "../investment/investment_derived_rebuild.h"
 #include "../platform.h"
 #include "../runtime.h"
@@ -136,6 +137,7 @@ bool uninstall() noexcept {
     const auto gameProtectedEntries = lifecycle::game_protected_entries();
     const bool removed = lifecycle::uninstall_group(lifecycle::kGameSlots, gameProtectedEntries);
     if (removed) {
+        entity_create_probe::reset();
         sobject_create_probe::reset();
         sobject_native_probe::reset();
         sobject_update_probe::reset();

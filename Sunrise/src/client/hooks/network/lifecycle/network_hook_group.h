@@ -23,6 +23,7 @@ inline constexpr std::array kGameSlots{
     HookSlot::sobjectCreateEncoder,
     HookSlot::sobjectUpdateEncoder,
     HookSlot::sobjectNativeRegistration,
+    HookSlot::entityCreateEncoder,
     HookSlot::viewMembershipSync,
     HookSlot::activityMembershipDecoder,
     HookSlot::activityMembershipQueue,

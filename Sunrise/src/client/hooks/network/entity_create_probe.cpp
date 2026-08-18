@@ -1,0 +1,208 @@
+#include "entity_create_probe.h"
+
+#include <Windows.h>
+
+#include <array>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <span>
+
+#include "../../../core/logging/log.h"
+#include "coordinator/network_call_coordinator.h"
+#include "platform.h"
+
+namespace sunrise::client::hooks::network::entity_create_probe {
+namespace {
+
+constexpr std::size_t kSeenCapacity = 64;
+constexpr std::size_t kFlushedCaptureCapacity = 64;
+
+std::array<std::atomic_uint64_t, kSeenCapacity> g_seen{};
+
+using Encoder = std::uint8_t(__fastcall*)(
+    void*, void*, std::uint32_t, const void*, std::uint64_t, std::uint32_t);
+
+/** Native bit-writer fields needed to isolate one object body's encoded bits. */
+struct WriterSnapshot {
+    std::int32_t flushedBits{};
+    std::int32_t totalBits{};
+    std::uint64_t accumulator{};
+    std::uint32_t pendingBits{};
+    const std::byte* cursor{};
+};
+
+/** Converts a bounded byte capture to a compact uppercase hexadecimal field. */
+void hex(std::span<const std::byte> input, std::span<char> output) noexcept {
+    constexpr char kDigits[] = "0123456789ABCDEF";
+    if (output.empty()) {
+        return;
+    }
+    const std::size_t count =
+        input.size() < (output.size() - 1) / 2 ? input.size() : (output.size() - 1) / 2;
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto value = std::to_integer<std::uint8_t>(input[index]);
+        output[index * 2] = kDigits[value >> 4];
+        output[index * 2 + 1] = kDigits[value & 0x0F];
+    }
+    output[count * 2] = '\0';
+}
+
+/** Copies bytes flushed by the object-body call when cursor movement is bounded and readable. */
+[[nodiscard]] std::size_t
+capture_flushed(const WriterSnapshot& before,
+                const WriterSnapshot& after,
+                std::array<std::byte, kFlushedCaptureCapacity>& output) noexcept {
+    const auto begin = reinterpret_cast<std::uintptr_t>(before.cursor);
+    const auto end = reinterpret_cast<std::uintptr_t>(after.cursor);
+    if (begin == 0 || end < begin || end - begin > output.size()) {
+        return 0;
+    }
+    const std::size_t size = static_cast<std::size_t>(end - begin);
+    __try {
+        if (size != 0) {
+            std::memcpy(output.data(), before.cursor, size);
+        }
+        return size;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+/** Reads the create flags and writer without modifying either native object. */
+[[nodiscard]] bool inspect(const void* record,
+                           const void* writerAddress,
+                           std::uint8_t& flags,
+                           WriterSnapshot& writer) noexcept {
+    if (record == nullptr || writerAddress == nullptr) {
+        return false;
+    }
+    __try {
+        const auto* const recordBytes = static_cast<const std::byte*>(record);
+        flags = std::to_integer<std::uint8_t>(recordBytes[0x38]);
+        const auto* const writerBytes = static_cast<const std::byte*>(writerAddress);
+        std::memcpy(&writer.flushedBits, writerBytes + 0x20, sizeof writer.flushedBits);
+        std::memcpy(&writer.totalBits, writerBytes + 0x24, sizeof writer.totalBits);
+        std::memcpy(&writer.accumulator, writerBytes + 0x28, sizeof writer.accumulator);
+        std::memcpy(&writer.pendingBits, writerBytes + 0x30, sizeof writer.pendingBits);
+        std::memcpy(&writer.cursor, writerBytes + 0x38, sizeof writer.cursor);
+        return writer.pendingBits <= 64;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+/** @return True only for the first observed create of this exact replicated entity handle. */
+[[nodiscard]] bool record_once(std::uint32_t entity) noexcept {
+    const std::uint64_t key = static_cast<std::uint64_t>(entity) + 1;
+    for (std::atomic_uint64_t& seen : g_seen) {
+        std::uint64_t current = seen.load(std::memory_order_relaxed);
+        if (current == key) {
+            return false;
+        }
+        if (current == 0
+            && seen.compare_exchange_strong(
+                current, key, std::memory_order_relaxed, std::memory_order_relaxed)) {
+            return true;
+        }
+        if (current == key) {
+            return false;
+        }
+    }
+    return false;
+}
+
+/** Preserves native encoding and reports successful object bodies that include creation. */
+__declspec(noinline) std::uint8_t __fastcall encode_body(void* manager,
+                                                         void* writerAddress,
+                                                         std::uint32_t entity,
+                                                         const void* record,
+                                                         std::uint64_t updateContext,
+                                                         std::uint32_t auxiliary) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(
+        lease, HookSlot::entityCreateEncoder, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<Encoder>(lease.original);
+    std::uint8_t flags = 0;
+    WriterSnapshot before{};
+    WriterSnapshot after{};
+    const bool beforeReadable = inspect(record, writerAddress, flags, before);
+    std::uint8_t result = 0;
+    __try {
+        if (call != nullptr) {
+            result = call(manager, writerAddress, entity, record, updateContext, auxiliary);
+        }
+        std::uint8_t ignoredFlags = 0;
+        const bool afterReadable =
+            lease.accepting && inspect(record, writerAddress, ignoredFlags, after);
+        if (result != 0 && beforeReadable && afterReadable && (flags & 1U) != 0
+            && record_once(entity)) {
+            const std::int32_t bitDelta = after.totalBits - before.totalBits;
+            const bool scalarValid = bitDelta > 0 && bitDelta <= 64 && before.cursor == after.cursor
+                                     && before.flushedBits == after.flushedBits;
+            std::uint64_t appended = 0;
+            if (scalarValid) {
+                appended = bitDelta == 64 ? after.accumulator
+                                          : after.accumulator & ((1ULL << bitDelta) - 1ULL);
+            }
+
+            std::array<std::byte, kFlushedCaptureCapacity> flushed{};
+            const std::size_t flushedSize = capture_flushed(before, after, flushed);
+            std::array<char, kFlushedCaptureCapacity * 2 + 1> flushedHex{};
+            hex(std::span<const std::byte>{flushed.data(), flushedSize}, flushedHex);
+
+            std::array<char, 768> line{};
+            const int written =
+                std::snprintf(line.data(),
+                              line.size(),
+                              "ev=gameplay stage=entity-create entity=0x%08X flags=0x%02X bits=%d "
+                              "context=0x%016llX auxiliary=0x%08X "
+                              "before[total=%d flushed=%d pending=%u accum=0x%016llX cursor=%p] "
+                              "after[total=%d flushed=%d pending=%u accum=0x%016llX cursor=%p] "
+                              "flushed_bytes=%zu flushed_hex=%s scalar=%u append=0x%016llX",
+                              entity,
+                              static_cast<unsigned>(flags),
+                              bitDelta,
+                              static_cast<unsigned long long>(updateContext),
+                              auxiliary,
+                              before.totalBits,
+                              before.flushedBits,
+                              static_cast<unsigned>(before.pendingBits),
+                              static_cast<unsigned long long>(before.accumulator),
+                              static_cast<const void*>(before.cursor),
+                              after.totalBits,
+                              after.flushedBits,
+                              static_cast<unsigned>(after.pendingBits),
+                              static_cast<unsigned long long>(after.accumulator),
+                              static_cast<const void*>(after.cursor),
+                              flushedSize,
+                              flushedHex.data(),
+                              scalarValid ? 1U : 0U,
+                              static_cast<unsigned long long>(appended));
+            if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+                core::log::write(core::log::Channel::client,
+                                 core::log::Level::info,
+                                 {line.data(), static_cast<std::size_t>(written)});
+            }
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+    return result;
+}
+
+} // namespace
+
+void* encoder_entry_point() noexcept {
+    return reinterpret_cast<void*>(&encode_body);
+}
+
+void reset() noexcept {
+    for (std::atomic_uint64_t& seen : g_seen) {
+        seen.store(0, std::memory_order_relaxed);
+    }
+}
+
+} // namespace sunrise::client::hooks::network::entity_create_probe

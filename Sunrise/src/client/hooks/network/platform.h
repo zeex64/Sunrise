@@ -27,6 +27,7 @@ enum class HookSlot : std::size_t {
     sobjectCreateEncoder,
     sobjectUpdateEncoder,
     sobjectNativeRegistration,
+    entityCreateEncoder,
     viewMembershipSync,
     activityMembershipDecoder,
     activityMembershipQueue,
