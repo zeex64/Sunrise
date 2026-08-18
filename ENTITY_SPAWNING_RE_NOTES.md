@@ -82,6 +82,12 @@ connection state                    accessor result + 0x1D18
 The address resolver ignores lifecycle zero slots, requires the requested native-family bit, and
 compares the `0x56`-byte address with `FUN_1403df020`.
 
+`FUN_1417C08F0` is the channel association path that owns those family bits. It searches live slots
+by the same `0x56`-byte address; when it finds an exact match, it ORs the requested family bit into
+that slot's mask instead of allocating a new channel. With field 11 carrying slot 0's address, the
+family-6 and family-7 associations should therefore merge into established slot 0 rather than
+creating the zero-address slot 1 seen in the previous run.
+
 ## Activity-membership schema discoveries
 
 The relevant nested identity schema is referred to here as B2.
@@ -260,6 +266,7 @@ The current checkpoint includes work in:
 2. Verify that the public-session family bits attach to slot 0, producing:
 
    ```text
+   s0 family=0x00D0 (existing 0x10 plus family bits 0x40 and 0x80)
    view-create channel=0 valid=1 lifecycle=4 state=5 established=1
    ```
 
