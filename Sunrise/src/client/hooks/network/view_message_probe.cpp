@@ -22,6 +22,7 @@ constexpr std::size_t kCodecCapacity = 4;
 
 /** Native replicated-object codec table reached through the view's entity handler. */
 struct CodecState {
+    std::uintptr_t manager{};
     std::uintptr_t registry{};
     std::int32_t count{};
     std::array<std::uintptr_t, kCodecCapacity> codecs{};
@@ -87,10 +88,14 @@ using Lookup = void*(__fastcall*)(void*, std::uint64_t);
         std::memcpy(&candidate.signatureCount, bytes + 0xA0, sizeof candidate.signatureCount);
         candidate.fullyOpen = std::to_integer<unsigned>(bytes[0xA4]) != 0;
         candidate.compatible = std::to_integer<unsigned>(bytes[0xA5]) != 0;
-        // FUN_1417135A0 stores the object manager at entity-handler +0x10. The entity handler
-        // begins at view +0xA8, so this is view +0xB8. The manager begins with a codec count and
-        // pointer table; each codec vtable exposes create/update methods at 0x58 through 0x70.
-        std::memcpy(&codecCandidate.registry, bytes + 0xB8, sizeof codecCandidate.registry);
+        // FUN_1417135A0 stores the per-family entity manager at entity-handler +0x10. The entity
+        // handler begins at view +0xA8, so this is view +0xB8. The entity manager points to the
+        // global codec registry at +0x10; that registry begins with a count and four pointers.
+        std::memcpy(&codecCandidate.manager, bytes + 0xB8, sizeof codecCandidate.manager);
+        if (codecCandidate.manager != 0) {
+            const auto* const manager = reinterpret_cast<const std::byte*>(codecCandidate.manager);
+            std::memcpy(&codecCandidate.registry, manager + 0x10, sizeof codecCandidate.registry);
+        }
         if (codecCandidate.registry != 0) {
             const auto* const registry =
                 reinterpret_cast<const std::byte*>(codecCandidate.registry);
@@ -234,8 +239,10 @@ void observe(std::uint64_t token, void* view) noexcept {
         const int summaryWritten =
             std::snprintf(summary.data(),
                           summary.size(),
-                          "ev=gameplay stage=view-codecs token=0x%llX registry=%p count=%d",
+                          "ev=gameplay stage=view-codecs token=0x%llX manager=%p registry=%p "
+                          "count=%d",
                           static_cast<unsigned long long>(token),
+                          reinterpret_cast<void*>(codecs.manager),
                           reinterpret_cast<void*>(codecs.registry),
                           codecs.count);
         if (summaryWritten > 0) {

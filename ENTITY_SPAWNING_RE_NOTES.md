@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 3b28d9b36ab25c882699021c0e540d15d39e3062918ecbdffcc6c9a6c1281b96
+SHA-256 8700c45a9ab820f940655649f939abdae7fc211e2b2861cb65c10e888e1acf62
 ```
 
 ## Confirmed high-level path
@@ -354,8 +354,9 @@ generation/variant value, and, for one lifecycle form, a signed 16-bit nested-bo
 - `FUN_141714840` is the later apply/commit path that merges the decoded records into the local
   object table and clears lifecycle/dirty state.
 
-The remaining static question is the concrete 2-bit codec kind and creation schema used by an AI
-enemy. That must be recovered before Sunrise can construct a valid first create record.
+The 2-bit codec registry is now resolved. An AI enemy's primary replicated object uses the
+`sobject` codec (kind 0), but Sunrise still needs a valid enemy sobject RSAT identifier and the
+matching baseline/update state before it can construct a valid first create record.
 
 The create-body encoder is now tied directly to the scheduler's entity collector rather than a
 separate transport:
@@ -369,26 +370,62 @@ separate transport:
 - The collector explicitly warns and schedules a baseline when creation is pending without an
   update, matching the baseline behavior already found in `FUN_14171E240`.
 
-The codec registry layout is now confirmed by `FUN_1416F6590` and `FUN_1416EE180`:
+`FUN_1416EFD70`, called during network-manager startup for manager `+0x59820`, initializes the
+global codec registry and proves that all four 2-bit values are registered:
 
 ```text
 +0x00  signed codec count
 +0x08  codec pointer 0
 +0x10  codec pointer 1
-+0x18  per-family entity-handler registrations begin
++0x18  codec pointer 2
++0x20  codec pointer 3
 +0x28  signed event-codec count
-+0x30  per-family event-codec pointers
++0x30  event-codec pointer table (22 entries in this build)
 ```
 
-Although the wire reserves two bits, the runtime validates a kind against the registry count before
-using `registry + 0x08 + kind * 8`. The observed build appears to register two concrete object
-codecs; values 2 and 3 are not ordinary codec slots. Each codec vtable's slot `+0x08` also returns
-its diagnostic name.
+The concrete registrations are:
 
-The next diagnostic build reads this table through `view + 0xB8` without calling it. It logs the
-live count plus Ghidra-relative vtable/create/update RVAs as `stage=view-codecs` and
-`stage=view-codec`. This should turn the next runtime session into exact static entry points for
-both concrete object classes without adding another detour.
+| Kind | Name from vtable `+0x08` | Codec object | Vtable | Create out/in | Update out/in |
+| --- | --- | --- | --- | --- | --- |
+| 0 | `sobject` | `0x142038460` | `0x141CA1550` | `FUN_141726900` / `FUN_1417266B0` | `FUN_141725140` / `FUN_141724FD0` |
+| 1 | `squad` | `0x1420484A0` | `0x141CA1758` | `0x141726980` / `FUN_1417268B0` | `0x1417252A0` / `FUN_1417250E0` |
+| 2 | `player_broadcast` | `0x142038458` | `0x141CA1420` | `0x1417268E0` / `FUN_141726680` | `0x141725130` / `FUN_141724F80` |
+| 3 | `test_entity` | `0x1420484A8` | `0x141CA1858` | default/no-op | default/no-op |
+
+The non-test creation schemas and codec-declared create-buffer sizes are:
+
+| Kind | Creation schema | Buffer size |
+| --- | --- | --- |
+| `sobject` | `0x80800014` | `0x10` bytes |
+| `squad` | `0x80809C42` | `0x08` bytes |
+| `player_broadcast` | `0x80806ABD` | `0x08` bytes |
+
+The earlier `+0x18` per-family registration interpretation belonged to a different object. The
+view stores a per-family entity manager at `view + 0xB8`; that manager stores the global registry
+pointer at `+0x10` and its per-family entity-handler pointers at `+0x18 + family * 8`.
+
+The sobject creation path narrows the server payload substantially:
+
+- `FUN_141726900` encodes schema `0x80800014` from the 16-byte create buffer and appends the bit
+  `(buffer[4] & 1)`.
+- `FUN_1417266B0` clears the 16-byte destination, decodes that schema, reads the trailing bit into
+  byte 4, and resolves the first 32-bit field through `FUN_140A020E0`.
+- `FUN_140A020E0` is the sobject RSAT loader and contains the diagnostic
+  `sobject rsat loader globals is full!`. The first create field is therefore an sobject RSAT id,
+  not an arbitrary entity or activity hash.
+- `FUN_141723FD0` derives the remaining local creation data from the resolved RSAT definition.
+  The id must already name valid loadable sobject data on the client.
+
+The sobject update path also identifies the baseline state an enemy needs. `FUN_141725140` encodes
+the named `transform`, `parent`, and `stream-source` components before its remaining sobject update
+body; `FUN_141724FD0` decodes the same components. Squad updates use a named `squad` component, and
+player-broadcast updates use a named `player` component. A squad relationship for AI is plausible
+but not yet proven as a mandatory creation prerequisite.
+
+The next diagnostic build follows `view + 0xB8 -> entity manager +0x10 -> global registry` without
+calling native code. It logs the live count plus Ghidra-relative vtable/create/update RVAs as
+`stage=view-codecs` and `stage=view-codec`. A correct runtime capture should report `count=4` and
+match the four static registrations above.
 
 ## Instrumentation added
 
@@ -437,9 +474,13 @@ The current checkpoint includes work in:
 3. Read the new `view-slots ... scheduler[...]` fields, including `lcount`/`rcount` and their
    key/tag entries, then separate the `1 + 6 * views` minimum frame from any auxiliary
    entity-index/generation prelude bits.
-4. Use `view-codecs`/`view-codec` to resolve the two registered object classes, then identify the
-   AI enemy class and its vtable `+0x58` creation schema.
-5. Add a scheduler writer only after an empty frame and one create record can be encoded without
+4. Confirm `view-codecs count=4` and that the four runtime RVAs match the static `sobject`, `squad`,
+   `player_broadcast`, and `test_entity` registrations.
+5. Resolve one valid enemy sobject RSAT id, then decode schema `0x80800014` and the
+   `transform`/`parent`/`stream-source` update body closely enough to reproduce a baseline.
+6. Determine whether an enemy additionally requires a kind-1 squad object or merely references an
+   existing squad through its sobject update.
+7. Add a scheduler writer only after an empty frame and one create record can be encoded without
    leaving unread or over-read bits on the native client.
 
 ## Build and verification
