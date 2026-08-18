@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 #include "../../../core/logging/log.h"
 #include "../../targets/game/assert_handler.h"
+#include "../retail_log/retail_log_enqueue_observer.h"
 
 namespace sunrise::client::hooks::assert_handler {
 namespace {
@@ -24,6 +26,10 @@ constexpr std::uint32_t kRepeatHead = 8;
 constexpr std::uint32_t kRepeatStride = 512;
 /** Used when the game's own format string cannot be printed. */
 constexpr char kUnformattable[] = "<unformattable>";
+/** Watchdog message whose first occurrence receives the lock-free retail progress snapshot. */
+constexpr std::string_view kNetworkHitchPrefix = "hitch detected: mainloop world controller";
+/** One progress line carries two sites, two serials, and the active native-call count. */
+constexpr std::size_t kProgressLineCapacity = 192;
 
 /**
  * Halt category of the graphics device-loss assert. A removed device never returns, so this one
@@ -96,6 +102,30 @@ void report(int code, const char* text) noexcept {
                             ? static_cast<std::size_t>(written)
                             : line.size() - 1;
     core::log::write(core::log::Channel::client, core::log::Level::error, {line.data(), length});
+    if (repeats == 1 && std::string_view(text).starts_with(kNetworkHitchPrefix)) {
+        const retail_log::ProgressSnapshot progress = retail_log::progress_snapshot();
+        std::array<char, kProgressLineCapacity> progressLine{};
+        const int progressWritten = std::snprintf(
+            progressLine.data(),
+            progressLine.size(),
+            "ev=assert stage=network-hitch retail_enter=%d/%llu retail_return=%d/%llu "
+            "observer=%u native=%u",
+            progress.enteredSite,
+            static_cast<unsigned long long>(progress.enteredSerial),
+            progress.returnedSite,
+            static_cast<unsigned long long>(progress.returnedSerial),
+            progress.activeObserverCalls,
+            progress.activeNativeCalls);
+        if (progressWritten > 0) {
+            const auto progressLength =
+                static_cast<std::size_t>(progressWritten) < progressLine.size()
+                    ? static_cast<std::size_t>(progressWritten)
+                    : progressLine.size() - 1;
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::error,
+                             {progressLine.data(), progressLength});
+        }
+    }
 }
 
 /**

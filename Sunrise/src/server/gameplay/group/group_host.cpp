@@ -480,10 +480,23 @@ void accept_view(const state::gameplay::Endpoint& from,
     std::uint8_t localStage = 0;
     std::uint8_t remoteStage = 0;
     std::int32_t index = -1;
+    bool restarted = false;
     AcquireSRWLockExclusive(&g_admittedLock);
     Admitted* const record = find_admitted_view(body.sessionToken);
     if (record != nullptr && record->endpoint.address == from.address
         && record->endpoint.port == from.port) {
+        // Stage one after a later remote stage is a new native handshake, not a harmless repeat.
+        // Keeping the old local stage makes the two peers answer one another forever (for example,
+        // client stage 1 versus server stage 4) and floods the reliable channel needed by joins.
+        if (!record->view.bound && body.kind == kInitialViewStage
+            && record->view.remoteStage > kInitialViewStage) {
+            record->view.signature = {};
+            record->view.index = -1;
+            record->view.localStage = 0;
+            record->view.remoteStage = 0;
+            record->view.signatureReady = false;
+            restarted = true;
+        }
         result = "invalid-stage";
         const bool stageValid = body.kind >= kInitialViewStage && body.kind <= kFinalViewStage;
         // A view can begin before its activity record is claimed. Its repeated stage two is enough
@@ -497,15 +510,15 @@ void accept_view(const state::gameplay::Endpoint& from,
             formValid = !body.hasOptionalValue && !body.hasList;
         } else if (body.kind == kSignatureViewStage) {
             const bool signatureReady = refresh_view_signature(record->view);
-            const bool indexValid = body.hasOptionalValue && body.optionalValue >= 0
-                                    && (record->view.index < 0
-                                        || body.optionalValue == record->view.index);
+            const bool indexValid =
+                body.hasOptionalValue && body.optionalValue >= 0
+                && (record->view.index < 0 || body.optionalValue == record->view.index);
             formValid = signatureReady && indexValid && body.hasList
                         && body.listCount == record->view.signature.count
                         && body.list == record->view.signature.bytes;
         } else {
-            formValid = body.hasOptionalValue && !body.hasList
-                        && body.optionalValue == record->view.index;
+            formValid =
+                body.hasOptionalValue && !body.hasList && body.optionalValue == record->view.index;
         }
         if (stageValid && ordered && formValid) {
             if (body.kind == kSignatureViewStage && record->view.index < 0) {
@@ -526,17 +539,17 @@ void accept_view(const state::gameplay::Endpoint& from,
         index = record->view.index;
     }
     ReleaseSRWLockExclusive(&g_admittedLock);
-    report(result[0] == 'a' || result[0] == 'r' ? core::log::Level::info
-                                                : core::log::Level::warn,
+    report(result[0] == 'a' || result[0] == 'r' ? core::log::Level::info : core::log::Level::warn,
            "ev=gameplay stage=view result=%s direction=in local=%u remote=%u got=%u index=%d "
-           "token=0x%llX list=%u",
+           "token=0x%llX list=%u restart=%u",
            result,
            static_cast<unsigned>(localStage),
            static_cast<unsigned>(remoteStage),
            static_cast<unsigned>(body.kind),
            index,
            static_cast<unsigned long long>(body.sessionToken),
-           static_cast<unsigned>(body.listCount));
+           static_cast<unsigned>(body.listCount),
+           restarted ? 1U : 0U);
 }
 
 /**

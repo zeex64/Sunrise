@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 30c3956f4deacf730801c3066c6b047c58a0e1dc0016fb62041e2bcc8b0852e3
+SHA-256 8dd4ae90c238d8a233871fcb39d3ce7d20bec9ede5a23e49633140fd2d26e390
 ```
 
 ## Confirmed high-level path
@@ -919,6 +919,28 @@ frames because this Proton process presents the x64-32 target mismatch. A script
 not detach safely and the helper cleanup terminated the already-hung game. Do not repeat that attach
 method; use code breadcrumbs or a prepared WineDbg GDB proxy for any later stopped-thread capture.
 
+The native-ownership run confirmed the family-zero retirement works: `native-owned` appeared once at
+`t=72164` with mask 4, mask 5 appeared later, and no seed rewrite followed. The client then completed
+several public-region joins and reached namespace-2 decode. Its only guarded entity create was sent at
+`t=198430` and failed on the already-known unloaded `0x80C4FEAD` RSAT. The eventual stall began more
+than 17 seconds later, so neither that create record nor its decoder call caused this freeze.
+
+The later freeze has a narrower boundary. A PUB448-to-PUB96 move preempted the previous transition,
+force-disconnected its still-leaving group, and successfully established the reused PUB96 session.
+The last native line at `t=215700` says it is queuing join-complete. Every successful join immediately
+followed that line with `sending initial join-complete`; the failed one never reached that line, and
+the first `network_update` watchdog assert arrived exactly 20 seconds later. Retail capture now keeps
+lock-free entry/return serials around the original native enqueue. The first watchdog occurrence emits
+`stage=network-hitch`. Nonzero `native` proves the original native enqueue is still inside; nonzero
+`observer` with `native=0` isolates Sunrise's capture after that return; both zero place the stall
+after the last completed retail-log call.
+
+That run also exposed an independent reliable-channel flood. One unfinished view remained at local
+stage 4 / remote stage 4 while the client repeatedly restarted at stage 1. Sunrise treated each lower
+stage as accepted but answered it with stage 4 about 15 times per second, so the pair could never
+converge. A stage-1 regression on an unbound view now clears the stale stage, index, and signature and
+restarts both sides at stage 1. The inbound view report carries `restart=1` when this recovery fires.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -974,23 +996,27 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ free roam and confirm one `stage=family0 result=native-owned` appears after producer
-   mask 4 or 5, with no later `stage=family0 result=seeded` during public-bubble transitions.
-2. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
-   must no longer be required and `network_update` must survive `group_target` session resets.
-3. Confirm the first `stage=entity-create-out` follows the slot-13 `stage=entity-view` update
+1. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
+   `restart=1`, followed by ordinary stages 1 through 5 rather than a stage-4 retry stream.
+2. If `network_update` stalls again, read the one `stage=network-hitch` line. `observer=0 native=0`
+   excludes both log paths; nonzero `native` means the reported entered site never returned.
+3. Reproduce the PUB448-to-PUB96 or equivalent preempted handoff and confirm the join advances from
+   `Queuing join-complete` to `sending initial join-complete` and then `received`.
+4. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
+   must no longer be required.
+5. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
-4. Confirm retry attempts retain the exact same token, slot, and handle generation while the
+6. Confirm retry attempts retain the exact same token, slot, and handle generation while the
    queued RSAT dependency has time to load.
-5. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
+7. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
    unread, over-read, generation, or occupied-slot conflict before attempting an update.
-6. If `0x80C4FEAD` remains unloaded on all four settled-slot attempts, trace its package request
+8. If `0x80C4FEAD` remains unloaded on all four settled-slot attempts, trace its package request
    after `FUN_140A020E0`; do not substitute a native RSAT until its gameplay meaning is known.
-7. Read `sobject-update` captures to identify which named components are present in an initial
+9. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-8. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+10. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-9. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+11. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
 
 ## Build and verification
