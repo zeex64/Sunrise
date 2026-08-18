@@ -23,6 +23,7 @@ enum class Id : std::size_t {
     viewSlotPump,
     sobjectCreateEncoder,
     sobjectUpdateEncoder,
+    sobjectNativeRegistration,
     viewMembershipSync,
     activityMembershipDecoder,
     activityMembershipQueue,

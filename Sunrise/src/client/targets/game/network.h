@@ -24,6 +24,7 @@ struct Targets {
     std::byte* viewSlotPump{};
     std::byte* sobjectCreateEncoder{};
     std::byte* sobjectUpdateEncoder{};
+    std::byte* sobjectNativeRegistration{};
     std::byte* viewMembershipSync{};
     std::byte* activityMembershipDecoder{};
     std::byte* activityMembershipQueue{};

@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 f00642231c0c1f4ef5debef06e1a4573b87bafe615443d784a72f4fe5391639e
+SHA-256 3561ae183de59da44fde31f366e94985dff3b8eb5b6b7584b307b1a032126959
 ```
 
 ## Confirmed high-level path
@@ -442,6 +442,10 @@ The sobject creation path narrows the server payload substantially:
   and `FUN_140A02B50` later batch those ids into native resource-manager requests whose entries are
   `{type=2, id=RSAT}`. A usable create therefore requires that exact installed resource tag to be
   present in the client's package set; substituting an API hash cannot reach object construction.
+- General native construction reaches `FUN_1405943F0`, which resolves the construction resource
+  and passes its `+0x88` RSAT field to `FUN_140A03020`. The latter has one executable caller, takes
+  the new native object id in `ECX` and the resolved RSAT directly in `EDX`, and begins with the
+  normal package-tag split. Its entry signature is unique at `0x140A03020` in this image.
 - `FUN_141723FD0` derives the remaining local creation data from the resolved RSAT definition.
   The id must already name valid loadable sobject data on the client.
 - `FUN_1417269D0` is the matching native outbound create-buffer constructor. It zeroes all 16
@@ -549,6 +553,8 @@ Client hooks now cover:
 - Live replicated-object codec count, vtable, create, and update entry points.
 - Bounded, read-only native sobject creation inputs and their exact encoded bit deltas.
 - Bounded, read-only native sobject update masks and their exact encoded bit deltas.
+- The first native construction observed for up to 4096 distinct RSAT tags, before any dependency
+  on a functioning replication view (`stage=sobject-native`).
 - Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
@@ -633,6 +639,7 @@ view-state
 view-codecs
 sobject-create
 sobject-update
+sobject-native
 scheduler-body
 activity-host-decode
 ```

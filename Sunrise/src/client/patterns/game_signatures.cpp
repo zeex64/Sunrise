@@ -109,6 +109,15 @@ constexpr std::string_view kSobjectUpdateEncoderText =
 constexpr auto kSobjectUpdateEncoder =
     signature<signature_length(kSobjectUpdateEncoderText)>(kSobjectUpdateEncoderText);
 
+// Matches the sole native sobject RSAT dependency-registration entry. Its fixed tag-table
+// normalization prefix is unique and receives the resolved RSAT directly in EDX.
+constexpr std::string_view kSobjectNativeRegistrationText =
+    "40 53 41 56 41 57 48 83 EC 40 8B C2 81 E2 FF 1F 00 00 C1 F8 0D 44 8B C8 "
+    "49 81 C9 00 00 FC 0F 0F B7 C0 49 C1 E9 12 4C 23 C8";
+/** Compiled pattern bytes of the native RSAT-registration signature above. */
+constexpr auto kSobjectNativeRegistration =
+    signature<signature_length(kSobjectNativeRegistrationText)>(kSobjectNativeRegistrationText);
+
 // Matches the membership-to-view synchronization pass. The fixed prologue is unique in the
 // current image and ends before the first position-dependent branch displacement.
 constexpr std::string_view kViewMembershipSyncText =
@@ -236,6 +245,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"view_slot_pump", kViewSlotPump},
     patterns::Pattern{"sobject_create_encoder", kSobjectCreateEncoder},
     patterns::Pattern{"sobject_update_encoder", kSobjectUpdateEncoder},
+    patterns::Pattern{"sobject_native_registration", kSobjectNativeRegistration},
     patterns::Pattern{"view_membership_sync", kViewMembershipSync},
     patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},
