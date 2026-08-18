@@ -158,7 +158,7 @@ void observe(std::uint64_t token, void* view) noexcept {
     const bool stateValid = inspect(view, state, codecs);
     const bool codecsValid = stateValid && codecs.registry != 0;
     if (stateValid && codecs.manager != 0) {
-        entity_slot_probe::observe_manager(reinterpret_cast<const void*>(codecs.manager));
+        entity_slot_probe::observe_view(token, view);
     }
     bool reportLookup = false;
     bool reportState = false;

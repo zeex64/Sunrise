@@ -20,12 +20,16 @@ constexpr std::size_t kEntityCapacity = 0x2000;
 constexpr std::size_t kBitsetWordCount = kEntityCapacity / 32;
 constexpr std::size_t kCandidateCapacity = 8;
 constexpr std::size_t kSeenSnapshotCapacity = 32;
+constexpr std::size_t kViewCaptureCapacity = 8;
 constexpr std::size_t kEntryBaseOffset = 0x114;
 constexpr std::size_t kEntryStride = 6;
 constexpr std::size_t kFreeBitsetOffset = 0xC118;
 constexpr std::size_t kOccupiedBitsetOffset = 0xC520;
 
 std::array<std::atomic_uint64_t, kSeenSnapshotCapacity> g_seenSnapshots{};
+SRWLOCK g_captureLock{SRWLOCK_INIT};
+std::array<ViewCapture, kViewCaptureCapacity> g_viewCaptures{};
+std::size_t g_captureCursor{};
 
 using Decoder = int(__fastcall*)(void*, void*, void*, void*, int, void*, int*);
 
@@ -147,18 +151,26 @@ void mix(std::uint64_t& hash, std::uint64_t value) noexcept {
 }
 
 /** Emits one bounded slot-map snapshot for a newly observed native entity manager. */
-void report(const Snapshot& snapshot, int result) noexcept {
+void report(const Snapshot& snapshot,
+            int result,
+            std::uint64_t token = 0,
+            std::uint64_t schedulerKey = 0,
+            std::uint8_t schedulerTag = 0) noexcept {
     std::array<char, 1024> line{};
     int written = std::snprintf(line.data(),
                                 line.size(),
                                 "ev=gameplay stage=entity-slots manager=%p namespace=%d "
-                                "free=%u occupied=%u available=%u result=%d",
+                                "free=%u occupied=%u available=%u result=%d token=0x%llX "
+                                "key=0x%llX tag=%u",
                                 static_cast<const void*>(snapshot.manager),
                                 snapshot.namespaceId,
                                 snapshot.freeCount,
                                 snapshot.occupiedCount,
                                 snapshot.availableCount,
-                                result);
+                                result,
+                                static_cast<unsigned long long>(token),
+                                static_cast<unsigned long long>(schedulerKey),
+                                static_cast<unsigned>(schedulerTag));
     if (written <= 0 || static_cast<std::size_t>(written) >= line.size()) {
         return;
     }
@@ -179,6 +191,27 @@ void report(const Snapshot& snapshot, int result) noexcept {
         used += static_cast<std::size_t>(written);
     }
     core::log::write(core::log::Channel::client, core::log::Level::info, {line.data(), used});
+}
+
+/** Publishes the newest safe-slot state for one native view token. */
+void publish(const ViewCapture& capture) noexcept {
+    AcquireSRWLockExclusive(&g_captureLock);
+    ViewCapture* destination = nullptr;
+    for (ViewCapture& current : g_viewCaptures) {
+        if (current.token == capture.token) {
+            destination = &current;
+            break;
+        }
+        if (destination == nullptr && current.token == 0) {
+            destination = &current;
+        }
+    }
+    if (destination == nullptr) {
+        destination = &g_viewCaptures[g_captureCursor % g_viewCaptures.size()];
+        ++g_captureCursor;
+    }
+    *destination = capture;
+    ReleaseSRWLockExclusive(&g_captureLock);
 }
 
 /** Preserves inbound entity-list decoding and reports the authoritative slot maps once. */
@@ -226,10 +259,80 @@ void observe_manager(const void* manager, int result) noexcept {
     }
 }
 
+void observe_view(std::uint64_t token, const void* view) noexcept {
+    if (token == 0 || view == nullptr) {
+        return;
+    }
+    const void* manager = nullptr;
+    std::uint64_t schedulerKey = 0;
+    std::uint8_t schedulerTag = 0;
+    __try {
+        const auto* const bytes = static_cast<const std::byte*>(view);
+        std::memcpy(&manager, bytes + 0xB8, sizeof manager);
+        const std::byte* identity = nullptr;
+        std::memcpy(&identity, bytes + 0x48, sizeof identity);
+        if (identity != nullptr) {
+            std::memcpy(&schedulerKey, identity + 0x20, sizeof schedulerKey);
+        }
+        if (manager != nullptr) {
+            const auto* const managerBytes = static_cast<const std::byte*>(manager);
+            std::memcpy(&schedulerTag, managerBytes + 0xD024, sizeof schedulerTag);
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return;
+    }
+
+    Snapshot snapshot{};
+    if (!inspect_manager(manager, snapshot)) {
+        return;
+    }
+    ViewCapture capture{};
+    capture.manager = manager;
+    capture.token = token;
+    capture.schedulerKey = schedulerKey;
+    capture.schedulerTag = schedulerTag;
+    capture.namespaceId = snapshot.namespaceId;
+    capture.freeCount = snapshot.freeCount;
+    capture.occupiedCount = snapshot.occupiedCount;
+    capture.availableCount = snapshot.availableCount;
+    if (snapshot.candidateCount != 0) {
+        const Candidate& candidate = snapshot.candidates[0];
+        capture.slot = candidate.slot;
+        capture.handleGeneration = candidate.handleGeneration;
+        capture.reservedGeneration = candidate.reservedGeneration;
+        capture.objectGeneration = candidate.objectGeneration;
+        capture.candidatePresent = true;
+    }
+    publish(capture);
+    if (record_once(snapshot)) {
+        report(snapshot, 0, token, schedulerKey, schedulerTag);
+    }
+}
+
+bool find(std::uint64_t token, ViewCapture& output) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    AcquireSRWLockShared(&g_captureLock);
+    bool found = false;
+    for (const ViewCapture& capture : g_viewCaptures) {
+        if (capture.token == token) {
+            output = capture;
+            found = true;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_captureLock);
+    return found;
+}
+
 void reset() noexcept {
     for (std::atomic_uint64_t& seen : g_seenSnapshots) {
         seen.store(0, std::memory_order_relaxed);
     }
+    AcquireSRWLockExclusive(&g_captureLock);
+    g_viewCaptures = {};
+    g_captureCursor = 0;
+    ReleaseSRWLockExclusive(&g_captureLock);
 }
 
 } // namespace sunrise::client::hooks::network::entity_slot_probe

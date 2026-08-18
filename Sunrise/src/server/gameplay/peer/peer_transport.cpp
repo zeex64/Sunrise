@@ -4,6 +4,7 @@
 
 #include <array>
 
+#include "../../../client/hooks/network/entity_slot_probe.h"
 #include "../../../middleware/crypto/random_bytes.h"
 #include "../../../middleware/encoding/bit_reader.h"
 #include "../../../middleware/encoding/bit_writer.h"
@@ -69,6 +70,14 @@ constexpr std::size_t kExternalProbeByteCapacity = 256;
  * sequences ahead of its window, so this host must not send faster than the peer does.
  */
 constexpr std::uint64_t kResendInterval = 250;
+/** First guarded native create is restricted to the EDZ activity view's observed namespace. */
+constexpr std::int32_t kFirstEntityNamespace = 2;
+/** Common placed EDZ NPC sobject RSAT selected from the installed scenario graph. */
+constexpr std::uint32_t kFirstEntityRsat = 0x80C4FEAD;
+/** A pristine slot's first native allocation advances object generation zero to two. */
+constexpr std::uint8_t kFirstObjectGeneration = 2;
+/** Package-backed tag discriminator used by schema 0x80800014. */
+constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
 
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
@@ -91,6 +100,20 @@ struct ExternalProbe {
     std::uint8_t schedulerTailBits{};
     bool schedulerSignatureUpdate{};
     bool schedulerSignatureValid{};
+};
+
+/** Fully guarded inputs for one server-authored create in one registered scheduler view. */
+struct EntityCreatePlan {
+    std::uint64_t token{};
+    std::uint64_t schedulerKey{};
+    std::uint32_t rsat{};
+    std::uint16_t slot{};
+    std::uint8_t schedulerTag{};
+    std::uint8_t handleGeneration{};
+    std::uint8_t objectGeneration{};
+    std::uint8_t viewIndex{};
+    std::int32_t namespaceId{-1};
+    bool present{};
 };
 
 /**
@@ -130,12 +153,10 @@ void probe_scheduler_signature(bits::Reader reader, ExternalProbe& output) noexc
     output.schedulerSignatureValid = true;
 }
 
-/**
- * Writes one signature update followed by the proven empty terminators for each registered view.
- */
+/** Writes the exact client scheduler signature as an update. */
 [[nodiscard]] bool
-write_empty_scheduler(bits::Writer& writer,
-                      const state::gameplay::SchedulerSignature& signature) noexcept {
+write_scheduler_signature(bits::Writer& writer,
+                          const state::gameplay::SchedulerSignature& signature) noexcept {
     if (!signature.present || signature.viewCount == 0
         || signature.viewCount > signature.views.size() || !writer.write(1, 1)
         || !writer.write(signature.header[0], 64) || !writer.write(signature.header[1], 64)
@@ -148,14 +169,108 @@ write_empty_scheduler(bits::Writer& writer,
             return false;
         }
     }
+    return true;
+}
+
+/** Writes the six proven empty handler terminators for one registered view. */
+[[nodiscard]] bool write_empty_scheduler_view(bits::Writer& writer) noexcept {
+    // Event end, mask/control end, entity auxiliary count, entity generation presence,
+    // entity end, and fixed-control absence, in scheduler handler order.
+    return writer.write(0, 1) && writer.write(0, 1) && writer.write(0, 1) && writer.write(0, 1)
+           && writer.write(1, 1) && writer.write(0, 1);
+}
+
+/** Writes one direct, create-only kind-0 sobject record into the entity handler. */
+[[nodiscard]] bool write_entity_create_view(bits::Writer& writer,
+                                            const EntityCreatePlan& plan) noexcept {
+    // Empty event and mask/control handlers, then the empty auxiliary-entity prelude.
+    if (!writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1)
+        || !writer.write(0, 1)
+        // Entity lane continues with a direct (non-anchor) 17-bit handle.
+        || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(plan.slot, 13)
+        || !writer.write(plan.handleGeneration, 4)
+        // Explicit flags: create only; no update, trailing flag, lifecycle state, or anchor.
+        || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(0, 1) || !writer.write(0, 1)
+        || !writer.write(0, 1)
+        || !writer.write(0, 1)
+        // Force the global/default spatial cell independently of the client's current cell.
+        || !writer.write(1, 1)
+        || !writer.write(0, 1)
+        // Kind-0 core: object generation, codec kind, installed RSAT schema, identity flag.
+        || !writer.write(plan.objectGeneration, 8) || !writer.write(0, 2)
+        || !writer.write(kInstalledTagDiscriminator, 6) || !writer.write(1, 1)
+        || !writer.write(plan.rsat, 32)
+        || !writer.write(0, 1)
+        // End entity lane and leave the fixed-control handler empty.
+        || !writer.write(1, 1) || !writer.write(0, 1)) {
+        return false;
+    }
+    return true;
+}
+
+/** Writes one signature update and either an empty or guarded create body for every view. */
+[[nodiscard]] bool write_scheduler(bits::Writer& writer,
+                                   const state::gameplay::SchedulerSignature& signature,
+                                   const EntityCreatePlan& plan) noexcept {
+    if (!write_scheduler_signature(writer, signature)) {
+        return false;
+    }
     for (std::size_t index = 0; index < signature.viewCount; ++index) {
-        // Event end, mask/control end, entity auxiliary count, entity generation presence,
-        // entity end, and fixed-control absence, in scheduler handler order.
-        if (!writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1)
-            || !writer.write(1, 1) || !writer.write(0, 1)) {
+        if (plan.present && index == plan.viewIndex) {
+            if (!write_entity_create_view(writer, plan)) {
+                return false;
+            }
+        } else if (!write_empty_scheduler_view(writer)) {
             return false;
         }
     }
+    return true;
+}
+
+/** Builds a create only when the bound token, scheduler entry, and pristine slot all agree. */
+[[nodiscard]] bool prepare_entity_create(const state::gameplay::PeerLink& peer,
+                                         EntityCreatePlan& output) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    if (!peer.view.bound || peer.view.token == 0 || !peer.schedulerSignature.present
+        || peer.schedulerSignature.viewCount == 0
+        || peer.schedulerSignature.viewCount > peer.schedulerSignature.views.size()) {
+        return false;
+    }
+
+    client::hooks::network::entity_slot_probe::ViewCapture capture{};
+    if (!client::hooks::network::entity_slot_probe::find(peer.view.token, capture)
+        || !capture.candidatePresent || capture.namespaceId != kFirstEntityNamespace
+        || capture.slot >= 0x2000 || capture.availableCount == 0 || capture.handleGeneration != 0
+        || capture.reservedGeneration != 0 || capture.objectGeneration != 0) {
+        return false;
+    }
+
+    std::size_t match = peer.schedulerSignature.views.size();
+    for (std::size_t index = 0; index < peer.schedulerSignature.viewCount; ++index) {
+        const state::gameplay::SchedulerSignatureView& view = peer.schedulerSignature.views[index];
+        if (view.key != capture.schedulerKey || view.tag != capture.schedulerTag) {
+            continue;
+        }
+        if (match != peer.schedulerSignature.views.size()) {
+            return false;
+        }
+        match = index;
+    }
+    if (match == peer.schedulerSignature.views.size()) {
+        return false;
+    }
+
+    output.token = capture.token;
+    output.schedulerKey = capture.schedulerKey;
+    output.schedulerTag = capture.schedulerTag;
+    output.rsat = kFirstEntityRsat;
+    output.slot = capture.slot;
+    output.handleGeneration = capture.handleGeneration;
+    output.objectGeneration = kFirstObjectGeneration;
+    output.viewIndex = static_cast<std::uint8_t>(match);
+    output.namespaceId = capture.namespaceId;
+    output.present = true;
     return true;
 }
 
@@ -890,7 +1005,8 @@ void consume_established(const state::gameplay::Endpoint& from,
  * @param peer Peer state copied under the lock before the send.
  * @return True when the packet left the endpoint.
  */
-[[nodiscard]] bool send_acknowledgement(const state::gameplay::PeerLink& peer) noexcept {
+[[nodiscard]] bool send_acknowledgement(const state::gameplay::PeerLink& peer,
+                                        const EntityCreatePlan& entityCreate) noexcept {
     wire::AckState ack{};
     ack.outboundHead = peer.outboundHead;
     ack.outboundHeadPresent = peer.outboundHeadPresent;
@@ -913,7 +1029,7 @@ void consume_established(const state::gameplay::Endpoint& from,
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)
         || !wire::write_empty_queue(writer)
         || !wire::write_external_status(writer, peer.view.bound, schedulerPresent)
-        || (schedulerPresent && !write_empty_scheduler(writer, peer.schedulerSignature))
+        || (schedulerPresent && !write_scheduler(writer, peer.schedulerSignature, entityCreate))
         || !writer.finish(size)) {
         return false;
     }
@@ -1003,6 +1119,9 @@ void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& si
     AcquireSRWLockExclusive(&g_lock);
     state::gameplay::PeerLink* peer = find_session_locked(sessionId);
     if (peer != nullptr) {
+        if (peer->view.token != signature.token) {
+            peer->entityCreateAttempted = false;
+        }
         peer->view = signature;
     }
     ReleaseSRWLockExclusive(&g_lock);
@@ -1033,6 +1152,7 @@ bool link_stage(std::uint64_t sessionId, state::gameplay::PeerStage& stage) noex
 /** Sends any owed acknowledgement. */
 void service(std::uint64_t now) noexcept {
     std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> owed{};
+    std::array<EntityCreatePlan, state::gameplay::kAssociationCapacity> entityCreates{};
     std::size_t count = 0;
     AcquireSRWLockExclusive(&g_lock);
     for (state::gameplay::PeerLink& peer : g_peers) {
@@ -1057,12 +1177,33 @@ void service(std::uint64_t now) noexcept {
             static_cast<std::uint16_t>((peer.outboundHead + 1) % kPacketSequenceModulus);
         peer.outboundHeadPresent = true;
         peer.lastTick = now;
+        if (!peer.entityCreateAttempted && prepare_entity_create(peer, entityCreates[count])) {
+            // Claim before releasing the lock so another service slice cannot duplicate it.
+            peer.entityCreateAttempted = true;
+        }
         owed[count] = peer;
         ++count;
     }
     ReleaseSRWLockExclusive(&g_lock);
     for (std::size_t index = 0; index < count; ++index) {
-        if (!send_acknowledgement(owed[index])) {
+        const bool sent = send_acknowledgement(owed[index], entityCreates[index]);
+        if (entityCreates[index].present) {
+            report(sent ? core::log::Level::info : core::log::Level::warn,
+                   "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
+                   "namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
+                   "rsat=0x%08X",
+                   sent ? "sent" : "fail",
+                   static_cast<unsigned long long>(entityCreates[index].token),
+                   entityCreates[index].namespaceId,
+                   static_cast<unsigned>(entityCreates[index].viewIndex),
+                   static_cast<unsigned long long>(entityCreates[index].schedulerKey),
+                   static_cast<unsigned>(entityCreates[index].schedulerTag),
+                   static_cast<unsigned>(entityCreates[index].slot),
+                   static_cast<unsigned>(entityCreates[index].handleGeneration),
+                   static_cast<unsigned>(entityCreates[index].objectGeneration),
+                   entityCreates[index].rsat);
+        }
+        if (!sent) {
             report(core::log::Level::debug, "ev=gameplay stage=ack result=fail");
         }
     }

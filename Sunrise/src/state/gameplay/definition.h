@@ -224,6 +224,8 @@ struct PeerLink {
     ViewSignature view{};
     /** Client scheduler signature. Empty scheduler output is refused until this is present. */
     SchedulerSignature schedulerSignature{};
+    /** One guarded server-authored entity create has been claimed for this bound view. */
+    bool entityCreateAttempted{};
     /** True while a received packet still has to be acknowledged. */
     bool acknowledgementOwed{};
     std::uint64_t lastTick{};

@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 3e8cf9df2696bc53dfd2548cc791fb745b2551c6b85a3a823a6b6bf270cd4759
+SHA-256 2af084ec13ab8be8a0ef3fa90b53ba8a49733b9ce9777b0efd992d178037a44a
 ```
 
 ## Confirmed high-level path
@@ -197,6 +197,26 @@ scheduler actually supplies the direct-entity lane, so it cannot discover a safe
 the first server-authored record. The probe now also observes the same authoritative manager
 through an existing native view (`view + 0xB8`) during message-40 lookup. This removes the circular
 dependency while leaving the inbound detour in place to validate the eventual record.
+
+The corrected probe then captured two live managers and their world-load transition:
+
+```text
+namespace=1 before world: free=149 occupied=1  first safe slot=1
+namespace=1 in world:     free=137 occupied=13 first safe slot=13
+namespace=2 bound view:   free=150 occupied=0  first safe slot=0
+```
+
+All reported candidates had an unclaimed descriptor and zero handle, reserved, and object
+generations. The EDZ activity view token `0x9EAA300100200003` is the namespace-2 manager and reached
+`result=bound`; slot zero is therefore the first authoritative candidate for that view. The
+namespace-1 transition independently validates that the free and occupied map offsets are real
+rather than constant padding.
+
+`FUN_1417A96D0` supplies the remaining scheduler-lane mapping. Registration stores the view key
+from `*(view + 0x48) + 0x20`, stores the tag from `*(view + 0xB8) + 0xD024`, and sorts both the
+scheduler-view records and signature entries by that same key. The probe now captures token, key,
+tag, namespace, and safe slot together. Sunrise refuses a create unless exactly one entry in the
+client's current scheduler signature matches the bound token's captured key and tag.
 
 This run also proves the scheduler signature is dynamic. It first sent an empty 131-bit update
 (the one-bit update gate plus a 130-bit zero-entry signature), then a valid 347-bit update with
@@ -462,6 +482,10 @@ The 78-bit record consists of lane-continue `0`, direct selector `1`, the 17-bit
 six explicit create-only flags, default-cell `1,0`, the 50-bit kind-0 core body, and lane-end `1`.
 If the current cell is independently proven to be `0xFFFF`, the unchanged-cell form is 285 bits.
 The compact single-bit flag form is update-only and cannot represent this create.
+
+For a dynamic signature count, the target view replaces its six-bit empty body with the 83-bit
+create body, adding 77 bits to the empty frame. The currently expected three-view form is therefore
+`365 + 77 = 442` bits.
 
 `FUN_14171E240` is the core outbound object-body encoder and `FUN_141718080` is its inbound mirror:
 
@@ -803,6 +827,8 @@ Client hooks now cover:
 - A bounded, read-only snapshot of each view or inbound decoder entity manager's 8,192-slot free
   and occupied maps, including the first eight slots whose descriptor is unclaimed and their three
   generation fields (`stage=entity-slots`).
+- A token-bound capture of the native scheduler key/tag and safe slot, used only when it uniquely
+  matches the client's current scheduler signature.
 - Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
@@ -837,23 +863,19 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Deploy the current diagnostic DLL and load EDZ free roam until `activity:in_world`.
-2. Capture `stage=entity-slots` and verify an authoritative client manager reports unclaimed slots
-   with free bit one, occupied bit zero, descriptor `-1`, handle generation zero, and object
-   generation zero before choosing a wire handle.
-3. Reconfirm the complete dynamic scheduler signature and registered count for that run. Size the
-   first frame from `130 + 72 * count`, not from a fixed one-view assumption.
-4. Select one of the 24 placed EDZ NPC RSATs only after correlating its object definition with an
-   ordinary combatant; prefer a common placement over a singleton or encounter controller.
-5. Send one guarded kind-0 create-only frame to the bound view using the captured signature, a
-   proven vacant handle, object generation two, and explicit default cell `1,0`.
-6. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
+1. Load EDZ free roam and remain in-world long enough for a nonzero scheduler signature update.
+2. Confirm `stage=entity-create-out result=sent` reports namespace 2, the uniquely matched
+   scheduler lane, pristine slot/generations, and RSAT `0x80C4FEAD`.
+3. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
    unread, over-read, generation, or occupied-slot conflict before attempting an update.
-7. Read `sobject-update` captures to identify which named components are present in an initial
+4. If the first decode only queues the RSAT dependency, add an acknowledgement-driven retry that
+   stops as soon as the decoder or occupied map confirms acceptance; do not blindly duplicate a
+   successful create.
+5. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-8. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+6. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-9. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+7. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
 
 ## Build and verification
@@ -886,6 +908,7 @@ sobject-create
 sobject-update
 sobject-native
 entity-create
+entity-create-out
 entity-slots
 scheduler-body
 scheduler-signature
