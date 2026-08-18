@@ -78,6 +78,8 @@ constexpr std::int32_t kFirstEntityNamespace = 2;
 constexpr std::uint32_t kFirstEntityRsat = 0x80C4FEAD;
 /** EDZ namespace 2 owns thirteen native objects before a server-authored slot is safe. */
 constexpr std::uint32_t kFirstEntityBaselineOccupied = 13;
+/** Only the first scheduler body's native boundary is proven for the guarded create probe. */
+constexpr std::size_t kFirstEntitySchedulerView = 0;
 /** A pristine slot's first native allocation advances object generation zero to two. */
 constexpr std::uint8_t kFirstObjectGeneration = 2;
 /** Package-backed tag discriminator used by schema 0x80800014. */
@@ -295,6 +297,12 @@ write_scheduler_signature(bits::Writer& writer,
         match = index;
     }
     if (match == capture.schedulerViewKeys.size()) {
+        return false;
+    }
+    // Handler bodies are serialized in scheduler order. A direct create in entry zero has reached
+    // the native sobject decoder, while attempts after a guessed empty preceding body have not.
+    // Keep the loader retry experiment on the one boundary established by runtime evidence.
+    if (match != kFirstEntitySchedulerView) {
         return false;
     }
 

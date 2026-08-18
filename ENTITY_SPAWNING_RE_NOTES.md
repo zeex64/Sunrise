@@ -925,6 +925,21 @@ several public-region joins and reached namespace-2 decode. Its only guarded ent
 `t=198430` and failed on the already-known unloaded `0x80C4FEAD` RSAT. The eventual stall began more
 than 17 seconds later, so neither that create record nor its decoder call caused this freeze.
 
+The post-watchdog run no longer froze and separated scheduler delivery from RSAT readiness. A create
+for token `0x9EAA300100200002` at logical scheduler entry zero reached `FUN_141718510`, consumed the
+expected 77 bits, and again queued unloaded RSAT `0x80C4FEAD`. By contrast, four nominal sends for
+token `0x9EAA30010020000A` targeted entry one and then entry two but never reached the create codec;
+the only immediate namespace-2 decode consumed one empty-list bit. The later 19-bit failures occurred
+during group-session teardown with the reader already past its loaded bits and are not evidence of a
+different create grammar.
+
+`FUN_1417B0D70` confirms that the scheduler writes each registered view's four handler bodies in
+logical order after the signature schema. Runtime evidence currently proves the entity boundary only
+for logical entry zero; the guessed empty body for a preceding view is not proven. The guarded probe
+now waits until namespace 2 is scheduler entry zero before starting its bounded retry sequence. This
+ensures every counted attempt can actually enter the native sobject decoder and give the RSAT loader
+time to service the queued dependency.
+
 The later freeze has a narrower boundary. A PUB448-to-PUB96 move preempted the previous transition,
 force-disconnected its still-leaving group, and successfully established the reused PUB96 session.
 The last native line at `t=215700` says it is queuing join-complete. Every successful join immediately
@@ -1006,8 +1021,9 @@ The current checkpoint includes work in:
    must no longer be required.
 5. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
-6. Confirm retry attempts retain the exact same token, slot, and handle generation while the
-   queued RSAT dependency has time to load.
+6. Confirm namespace 2 is logical scheduler entry zero for every `entity-create-out`, then confirm
+   all retry attempts retain the exact same token, slot, and handle generation and each produces a
+   77-bit `entity-list-decode` while the queued RSAT dependency has time to load.
 7. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
    unread, over-read, generation, or occupied-slot conflict before attempting an update.
 8. If `0x80C4FEAD` remains unloaded on all four settled-slot attempts, trace its package request
