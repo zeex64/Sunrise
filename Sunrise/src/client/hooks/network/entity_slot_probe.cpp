@@ -19,13 +19,13 @@ namespace {
 constexpr std::size_t kEntityCapacity = 0x2000;
 constexpr std::size_t kBitsetWordCount = kEntityCapacity / 32;
 constexpr std::size_t kCandidateCapacity = 8;
-constexpr std::size_t kSeenManagerCapacity = 4;
+constexpr std::size_t kSeenSnapshotCapacity = 32;
 constexpr std::size_t kEntryBaseOffset = 0x114;
 constexpr std::size_t kEntryStride = 6;
 constexpr std::size_t kFreeBitsetOffset = 0xC118;
 constexpr std::size_t kOccupiedBitsetOffset = 0xC520;
 
-std::array<std::atomic_uintptr_t, kSeenManagerCapacity> g_seenManagers{};
+std::array<std::atomic_uint64_t, kSeenSnapshotCapacity> g_seenSnapshots{};
 
 using Decoder = int(__fastcall*)(void*, void*, void*, void*, int, void*, int*);
 
@@ -54,42 +54,15 @@ struct Snapshot {
     return (value * 0x01010101U) >> 24U;
 }
 
-/** @return True only for the first snapshot of this native entity manager. */
-[[nodiscard]] bool record_once(const void* manager) noexcept {
-    const auto key = reinterpret_cast<std::uintptr_t>(manager);
-    if (key == 0) {
-        return false;
-    }
-    for (std::atomic_uintptr_t& seen : g_seenManagers) {
-        std::uintptr_t current = seen.load(std::memory_order_relaxed);
-        if (current == key) {
-            return false;
-        }
-        if (current == 0
-            && seen.compare_exchange_strong(
-                current, key, std::memory_order_relaxed, std::memory_order_relaxed)) {
-            return true;
-        }
-        if (current == key) {
-            return false;
-        }
-    }
-    return false;
-}
-
 /** Reads native free/occupied maps and pristine candidate generations without modifying them. */
-[[nodiscard]] bool inspect(const void* decoderContext, Snapshot& output) noexcept {
+[[nodiscard]] bool inspect_manager(const void* managerAddress, Snapshot& output) noexcept {
     output = {};
     output.namespaceId = -1;
-    if (decoderContext == nullptr) {
+    if (managerAddress == nullptr) {
         return false;
     }
     __try {
-        const auto* const context = static_cast<const std::byte*>(decoderContext);
-        output.manager = *reinterpret_cast<const std::byte* const*>(context + 0x10);
-        if (output.manager == nullptr) {
-            return false;
-        }
+        output.manager = static_cast<const std::byte*>(managerAddress);
         const auto* const provider = *reinterpret_cast<const std::byte* const*>(output.manager + 8);
         if (provider != nullptr) {
             std::memcpy(&output.namespaceId, provider + 8, sizeof output.namespaceId);
@@ -129,6 +102,48 @@ struct Snapshot {
         output.namespaceId = -1;
         return false;
     }
+}
+
+/** FNV-1a keeps manager state snapshots bounded without retaining native pointers to compare. */
+void mix(std::uint64_t& hash, std::uint64_t value) noexcept {
+    for (std::size_t index = 0; index < sizeof value; ++index) {
+        hash ^= static_cast<std::uint8_t>(value >> (index * 8U));
+        hash *= 1099511628211ULL;
+    }
+}
+
+/** @return True only for the first observation of this exact slot-map snapshot. */
+[[nodiscard]] bool record_once(const Snapshot& snapshot) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    mix(hash, reinterpret_cast<std::uintptr_t>(snapshot.manager));
+    mix(hash, static_cast<std::uint32_t>(snapshot.namespaceId));
+    mix(hash, snapshot.freeCount);
+    mix(hash, snapshot.occupiedCount);
+    mix(hash, snapshot.availableCount);
+    for (const Candidate& candidate : snapshot.candidates) {
+        mix(hash, candidate.slot);
+        mix(hash, candidate.handleGeneration);
+        mix(hash, candidate.reservedGeneration);
+        mix(hash, candidate.objectGeneration);
+    }
+    if (hash == 0) {
+        hash = 1;
+    }
+    for (std::atomic_uint64_t& seen : g_seenSnapshots) {
+        std::uint64_t current = seen.load(std::memory_order_relaxed);
+        if (current == hash) {
+            return false;
+        }
+        if (current == 0
+            && seen.compare_exchange_strong(
+                current, hash, std::memory_order_relaxed, std::memory_order_relaxed)) {
+            return true;
+        }
+        if (current == hash) {
+            return false;
+        }
+    }
+    return false;
 }
 
 /** Emits one bounded slot-map snapshot for a newly observed native entity manager. */
@@ -182,9 +197,15 @@ __declspec(noinline) int __fastcall decode_list(void* context,
         if (call != nullptr) {
             result = call(context, view, control, reader, capacity, records, count);
         }
-        Snapshot snapshot{};
-        if (lease.accepting && inspect(context, snapshot) && record_once(snapshot.manager)) {
-            report(snapshot, result);
+        if (lease.accepting && context != nullptr) {
+            const void* manager = nullptr;
+            __try {
+                const auto* const bytes = static_cast<const std::byte*>(context);
+                std::memcpy(&manager, bytes + 0x10, sizeof manager);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                manager = nullptr;
+            }
+            observe_manager(manager, result);
         }
     } __finally {
         coordinator::g_callEgress();
@@ -198,8 +219,15 @@ void* decoder_entry_point() noexcept {
     return reinterpret_cast<void*>(&decode_list);
 }
 
+void observe_manager(const void* manager, int result) noexcept {
+    Snapshot snapshot{};
+    if (inspect_manager(manager, snapshot) && record_once(snapshot)) {
+        report(snapshot, result);
+    }
+}
+
 void reset() noexcept {
-    for (std::atomic_uintptr_t& seen : g_seenManagers) {
+    for (std::atomic_uint64_t& seen : g_seenSnapshots) {
         seen.store(0, std::memory_order_relaxed);
     }
 }

@@ -10,6 +10,7 @@
 
 #include "../../../core/logging/log.h"
 #include "coordinator/network_call_coordinator.h"
+#include "entity_slot_probe.h"
 #include "platform.h"
 
 namespace sunrise::client::hooks::network::view_message_probe {
@@ -156,6 +157,9 @@ void observe(std::uint64_t token, void* view) noexcept {
     CodecState codecs{};
     const bool stateValid = inspect(view, state, codecs);
     const bool codecsValid = stateValid && codecs.registry != 0;
+    if (stateValid && codecs.manager != 0) {
+        entity_slot_probe::observe_manager(reinterpret_cast<const void*>(codecs.manager));
+    }
     bool reportLookup = false;
     bool reportState = false;
     bool reportCodecs = false;

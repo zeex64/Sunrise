@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 ebd039466429d7b5ed63a222eec4401f13ad58e598aad0e1c232de8538597c88
+SHA-256 3e8cf9df2696bc53dfd2548cc791fb745b2551c6b85a3a823a6b6bf270cd4759
 ```
 
 ## Confirmed high-level path
@@ -190,6 +190,13 @@ The live codec registry exactly matched the four functions recovered in Ghidra. 
 `entity-create`, `sobject-create`, or `sobject-update` event occurred, however. The missing enemies
 are therefore not evidence of a failed session or view: Sunrise has not yet published an entity
 record.
+
+The first `entity-slots` build attached its inbound decoder detour successfully but produced no
+snapshot. This is a useful negative result: `FUN_141718510` is not entered until the remote
+scheduler actually supplies the direct-entity lane, so it cannot discover a safe handle before
+the first server-authored record. The probe now also observes the same authoritative manager
+through an existing native view (`view + 0xB8`) during message-40 lookup. This removes the circular
+dependency while leaving the inbound detour in place to validate the eventual record.
 
 This run also proves the scheduler signature is dynamic. It first sent an empty 131-bit update
 (the one-bit update gate plus a 130-bit zero-entry signature), then a valid 347-bit update with
@@ -793,9 +800,9 @@ Client hooks now cover:
   context and exact body bit delta (`stage=entity-create`).
 - The first native RSAT dependency registration observed for up to 4096 distinct tags, before any
   dependency on a functioning replication view (`stage=sobject-native`).
-- A bounded, read-only snapshot of each inbound entity manager's 8,192-slot free and occupied
-  maps, including the first eight slots whose descriptor is unclaimed and their three generation
-  fields (`stage=entity-slots`).
+- A bounded, read-only snapshot of each view or inbound decoder entity manager's 8,192-slot free
+  and occupied maps, including the first eight slots whose descriptor is unclaimed and their three
+  generation fields (`stage=entity-slots`).
 - Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
