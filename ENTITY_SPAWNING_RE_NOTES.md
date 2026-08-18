@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 be3bb5c1e849220b130e05a72d924d17587aaa947109b3f08b18b0d445d895b6
+SHA-256 5a75000e19a7e512b061a889305680b5eccad970b546c41287464acea0d7098e
 ```
 
 ## Confirmed high-level path
@@ -871,6 +871,13 @@ generation. Every retry revalidates the native pristine candidate. If the slot i
 occupied, or recycled, its first-candidate identity changes and retries stop rather than advancing
 to a different slot.
 
+The first retry run exposed a separate zone-load race. Creates for namespace 2 began at pristine
+slot 0 while the activity view was still empty. Native EDZ initialization then populated slots
+0 through 12, so the exact-slot safety check correctly stopped each retry sequence before its
+fourth attempt. Sunrise now waits until the namespace-2 occupied map reaches the observed EDZ
+baseline of 13 objects before sending the first guarded create. This keeps the probe on the first
+post-baseline candidate, normally slot 13, instead of competing with native zone setup.
+
 ## Instrumentation added
 
 Client hooks now cover:
@@ -926,26 +933,21 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Confirm the network hook group reports `scheduler_signature_encoder result=ok` and the first
-   signature update produces `stage=scheduler-native-signature` with a positive bounded bit count.
-2. Load EDZ free roam and remain in-world for at least 60 seconds so a namespace-2 activity view
-   overlaps a captured scheduler schema value.
-3. Confirm `stage=entity-view` reports the logical scheduler count, matching 16-byte signature,
-   and a unique entry equal to the bound namespace-2 token/key/tag.
-4. Confirm `stage=scheduler-signature` reports the native-measured boundary rather than the old
-   false 131/347-bit layout.
-5. Confirm `stage=entity-create-out result=sent` reports namespace 2, that uniquely matched lane,
-   pristine slot/generations, and RSAT `0x80C4FEAD`.
-6. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
+1. Load EDZ free roam, enter one zone, and remain there while namespace 2 finishes its native
+   baseline population.
+2. Confirm the first `stage=entity-create-out` now reports pristine slot 13 (or the first slot
+   after an occupied count of at least 13), never transient slot 0.
+3. Confirm retry attempts retain the exact same token, slot, and handle generation while the
+   queued RSAT dependency has time to load.
+4. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
    unread, over-read, generation, or occupied-slot conflict before attempting an update.
-7. If the first decode only queues the RSAT dependency, add an acknowledgement-driven retry that
-   stops as soon as the decoder or occupied map confirms acceptance; do not blindly duplicate a
-   successful create.
-8. Read `sobject-update` captures to identify which named components are present in an initial
+5. If `0x80C4FEAD` remains unloaded on all four settled-slot attempts, trace its package request
+   after `FUN_140A020E0`; do not substitute a native RSAT until its gameplay meaning is known.
+6. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-9. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+7. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-10. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+8. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
 
 ## Build and verification
