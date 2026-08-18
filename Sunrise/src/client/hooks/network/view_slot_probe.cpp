@@ -28,8 +28,15 @@ constexpr std::size_t kViewKeyOffset = 0x68;
 /** FUN_1416BB2B0 embeds the native replication scheduler in the manager. */
 constexpr std::size_t kSchedulerOffset = 0x5498;
 constexpr std::size_t kSchedulerLocalSignatureOffset = 0x10;
+constexpr std::size_t kSchedulerLocalSignatureViewCountOffset = 0x20;
+constexpr std::size_t kSchedulerLocalSignatureViewsOffset = 0x28;
 constexpr std::size_t kSchedulerRemoteSignatureOffset = 0x58;
-constexpr std::size_t kSchedulerViewCountOffset = 0xC0;
+constexpr std::size_t kSchedulerRemoteSignatureViewCountOffset = 0x68;
+constexpr std::size_t kSchedulerRemoteSignatureViewsOffset = 0x70;
+constexpr std::size_t kSchedulerSignatureViewCapacity = 3;
+constexpr std::size_t kSchedulerSignatureViewStride = 0x10;
+constexpr std::size_t kSchedulerSignatureViewTagOffset = 8;
+constexpr std::size_t kSchedulerRegisteredViewCountOffset = 0xC0;
 constexpr std::size_t kSchedulerSignatureFlagsOffset = 0x1DC;
 /** Distinct snapshots suppress the per-frame manager pump without hiding state changes. */
 constexpr std::size_t kSeenCapacity = 96;
@@ -49,12 +56,24 @@ struct SlotSnapshot {
     std::uint64_t firstViewKey{};
 };
 
+/** One entry appended to the scheduler's 128-bit signature header for a registered view. */
+struct SignatureViewSnapshot {
+    std::uint64_t key{};
+    std::uint8_t tag{};
+};
+
 struct Snapshot {
     const void* manager{};
     std::int32_t state{-1};
-    std::int32_t schedulerViewCount{-1};
+    std::int32_t schedulerRegisteredViewCount{-1};
     std::array<std::uint32_t, 4> schedulerLocalSignature{};
+    std::int32_t schedulerLocalSignatureViewCount{-1};
+    std::array<SignatureViewSnapshot, kSchedulerSignatureViewCapacity>
+        schedulerLocalSignatureViews{};
     std::array<std::uint32_t, 4> schedulerRemoteSignature{};
+    std::int32_t schedulerRemoteSignatureViewCount{-1};
+    std::array<SignatureViewSnapshot, kSchedulerSignatureViewCapacity>
+        schedulerRemoteSignatureViews{};
     std::uint16_t schedulerSignatureFlags{};
     std::array<SlotSnapshot, kSlotCount> slots{};
 };
@@ -70,14 +89,34 @@ struct Snapshot {
         output.manager = managerAddress;
         output.state = *reinterpret_cast<const std::int32_t*>(manager + 8);
         const auto* const scheduler = manager + kSchedulerOffset;
-        output.schedulerViewCount =
-            *reinterpret_cast<const std::int32_t*>(scheduler + kSchedulerViewCountOffset);
+        output.schedulerRegisteredViewCount =
+            *reinterpret_cast<const std::int32_t*>(scheduler + kSchedulerRegisteredViewCountOffset);
         std::memcpy(output.schedulerLocalSignature.data(),
                     scheduler + kSchedulerLocalSignatureOffset,
                     sizeof output.schedulerLocalSignature);
+        output.schedulerLocalSignatureViewCount = *reinterpret_cast<const std::int32_t*>(
+            scheduler + kSchedulerLocalSignatureViewCountOffset);
+        for (std::size_t index = 0; index < kSchedulerSignatureViewCapacity; ++index) {
+            const auto* const entry = scheduler + kSchedulerLocalSignatureViewsOffset
+                                      + index * kSchedulerSignatureViewStride;
+            output.schedulerLocalSignatureViews[index].key =
+                *reinterpret_cast<const std::uint64_t*>(entry);
+            output.schedulerLocalSignatureViews[index].tag =
+                *reinterpret_cast<const std::uint8_t*>(entry + kSchedulerSignatureViewTagOffset);
+        }
         std::memcpy(output.schedulerRemoteSignature.data(),
                     scheduler + kSchedulerRemoteSignatureOffset,
                     sizeof output.schedulerRemoteSignature);
+        output.schedulerRemoteSignatureViewCount = *reinterpret_cast<const std::int32_t*>(
+            scheduler + kSchedulerRemoteSignatureViewCountOffset);
+        for (std::size_t index = 0; index < kSchedulerSignatureViewCapacity; ++index) {
+            const auto* const entry = scheduler + kSchedulerRemoteSignatureViewsOffset
+                                      + index * kSchedulerSignatureViewStride;
+            output.schedulerRemoteSignatureViews[index].key =
+                *reinterpret_cast<const std::uint64_t*>(entry);
+            output.schedulerRemoteSignatureViews[index].tag =
+                *reinterpret_cast<const std::uint8_t*>(entry + kSchedulerSignatureViewTagOffset);
+        }
         output.schedulerSignatureFlags =
             *reinterpret_cast<const std::uint16_t*>(scheduler + kSchedulerSignatureFlagsOffset);
         for (std::size_t index = 0; index < output.slots.size(); ++index) {
@@ -125,12 +164,22 @@ void mix(std::uint64_t& hash, std::uint64_t value) noexcept {
     std::uint64_t hash = 1469598103934665603ULL;
     mix(hash, reinterpret_cast<std::uintptr_t>(snapshot.manager));
     mix(hash, static_cast<std::uint32_t>(snapshot.state));
-    mix(hash, static_cast<std::uint32_t>(snapshot.schedulerViewCount));
+    mix(hash, static_cast<std::uint32_t>(snapshot.schedulerRegisteredViewCount));
     for (const std::uint32_t word : snapshot.schedulerLocalSignature) {
         mix(hash, word);
     }
+    mix(hash, static_cast<std::uint32_t>(snapshot.schedulerLocalSignatureViewCount));
+    for (const SignatureViewSnapshot& view : snapshot.schedulerLocalSignatureViews) {
+        mix(hash, view.key);
+        mix(hash, view.tag);
+    }
     for (const std::uint32_t word : snapshot.schedulerRemoteSignature) {
         mix(hash, word);
+    }
+    mix(hash, static_cast<std::uint32_t>(snapshot.schedulerRemoteSignatureViewCount));
+    for (const SignatureViewSnapshot& view : snapshot.schedulerRemoteSignatureViews) {
+        mix(hash, view.key);
+        mix(hash, view.tag);
     }
     mix(hash, snapshot.schedulerSignatureFlags);
     for (const SlotSnapshot& slot : snapshot.slots) {
@@ -179,58 +228,74 @@ __declspec(noinline) void __fastcall pump_body(void* manager) noexcept {
             readable = inspect(manager, snapshot);
         }
         if (readable && record_once(snapshot)) {
-            std::array<char, 1024> line{};
+            std::array<char, 1536> line{};
             const SlotSnapshot& slot0 = snapshot.slots[0];
             const SlotSnapshot& slot1 = snapshot.slots[1];
             const SlotSnapshot& slot2 = snapshot.slots[2];
-            const int written =
-                std::snprintf(line.data(),
-                              line.size(),
-                              "ev=gameplay stage=view-slots manager=%p state=%d "
-                              "s0[family=%d id10=0x%llX id18=0x%llX token=0x%llX sync=%p "
-                              "views=%u first=%p key=0x%llX] "
-                              "s1[family=%d id10=0x%llX id18=0x%llX token=0x%llX sync=%p "
-                              "views=%u first=%p key=0x%llX] "
-                              "s2[family=%d id10=0x%llX id18=0x%llX token=0x%llX sync=%p "
-                              "views=%u first=%p key=0x%llX] "
-                              "scheduler[views=%d local=%08X%08X%08X%08X remote=%08X%08X%08X%08X "
-                              "flags=0x%04X]",
-                              snapshot.manager,
-                              snapshot.state,
-                              slot0.family,
-                              static_cast<unsigned long long>(slot0.id10),
-                              static_cast<unsigned long long>(slot0.id18),
-                              static_cast<unsigned long long>(slot0.token),
-                              slot0.syncContext,
-                              slot0.viewCount,
-                              slot0.firstView,
-                              static_cast<unsigned long long>(slot0.firstViewKey),
-                              slot1.family,
-                              static_cast<unsigned long long>(slot1.id10),
-                              static_cast<unsigned long long>(slot1.id18),
-                              static_cast<unsigned long long>(slot1.token),
-                              slot1.syncContext,
-                              slot1.viewCount,
-                              slot1.firstView,
-                              static_cast<unsigned long long>(slot1.firstViewKey),
-                              slot2.family,
-                              static_cast<unsigned long long>(slot2.id10),
-                              static_cast<unsigned long long>(slot2.id18),
-                              static_cast<unsigned long long>(slot2.token),
-                              slot2.syncContext,
-                              slot2.viewCount,
-                              slot2.firstView,
-                              static_cast<unsigned long long>(slot2.firstViewKey),
-                              snapshot.schedulerViewCount,
-                              snapshot.schedulerLocalSignature[0],
-                              snapshot.schedulerLocalSignature[1],
-                              snapshot.schedulerLocalSignature[2],
-                              snapshot.schedulerLocalSignature[3],
-                              snapshot.schedulerRemoteSignature[0],
-                              snapshot.schedulerRemoteSignature[1],
-                              snapshot.schedulerRemoteSignature[2],
-                              snapshot.schedulerRemoteSignature[3],
-                              static_cast<unsigned>(snapshot.schedulerSignatureFlags));
+            const int written = std::snprintf(
+                line.data(),
+                line.size(),
+                "ev=gameplay stage=view-slots manager=%p state=%d "
+                "s0[family=%d id10=0x%llX id18=0x%llX token=0x%llX sync=%p "
+                "views=%u first=%p key=0x%llX] "
+                "s1[family=%d id10=0x%llX id18=0x%llX token=0x%llX sync=%p "
+                "views=%u first=%p key=0x%llX] "
+                "s2[family=%d id10=0x%llX id18=0x%llX token=0x%llX sync=%p "
+                "views=%u first=%p key=0x%llX] "
+                "scheduler[views=%d local=%08X%08X%08X%08X lcount=%d "
+                "l0=0x%llX/%u l1=0x%llX/%u l2=0x%llX/%u "
+                "remote=%08X%08X%08X%08X rcount=%d "
+                "r0=0x%llX/%u r1=0x%llX/%u r2=0x%llX/%u flags=0x%04X]",
+                snapshot.manager,
+                snapshot.state,
+                slot0.family,
+                static_cast<unsigned long long>(slot0.id10),
+                static_cast<unsigned long long>(slot0.id18),
+                static_cast<unsigned long long>(slot0.token),
+                slot0.syncContext,
+                slot0.viewCount,
+                slot0.firstView,
+                static_cast<unsigned long long>(slot0.firstViewKey),
+                slot1.family,
+                static_cast<unsigned long long>(slot1.id10),
+                static_cast<unsigned long long>(slot1.id18),
+                static_cast<unsigned long long>(slot1.token),
+                slot1.syncContext,
+                slot1.viewCount,
+                slot1.firstView,
+                static_cast<unsigned long long>(slot1.firstViewKey),
+                slot2.family,
+                static_cast<unsigned long long>(slot2.id10),
+                static_cast<unsigned long long>(slot2.id18),
+                static_cast<unsigned long long>(slot2.token),
+                slot2.syncContext,
+                slot2.viewCount,
+                slot2.firstView,
+                static_cast<unsigned long long>(slot2.firstViewKey),
+                snapshot.schedulerRegisteredViewCount,
+                snapshot.schedulerLocalSignature[0],
+                snapshot.schedulerLocalSignature[1],
+                snapshot.schedulerLocalSignature[2],
+                snapshot.schedulerLocalSignature[3],
+                snapshot.schedulerLocalSignatureViewCount,
+                static_cast<unsigned long long>(snapshot.schedulerLocalSignatureViews[0].key),
+                static_cast<unsigned>(snapshot.schedulerLocalSignatureViews[0].tag),
+                static_cast<unsigned long long>(snapshot.schedulerLocalSignatureViews[1].key),
+                static_cast<unsigned>(snapshot.schedulerLocalSignatureViews[1].tag),
+                static_cast<unsigned long long>(snapshot.schedulerLocalSignatureViews[2].key),
+                static_cast<unsigned>(snapshot.schedulerLocalSignatureViews[2].tag),
+                snapshot.schedulerRemoteSignature[0],
+                snapshot.schedulerRemoteSignature[1],
+                snapshot.schedulerRemoteSignature[2],
+                snapshot.schedulerRemoteSignature[3],
+                snapshot.schedulerRemoteSignatureViewCount,
+                static_cast<unsigned long long>(snapshot.schedulerRemoteSignatureViews[0].key),
+                static_cast<unsigned>(snapshot.schedulerRemoteSignatureViews[0].tag),
+                static_cast<unsigned long long>(snapshot.schedulerRemoteSignatureViews[1].key),
+                static_cast<unsigned>(snapshot.schedulerRemoteSignatureViews[1].tag),
+                static_cast<unsigned long long>(snapshot.schedulerRemoteSignatureViews[2].key),
+                static_cast<unsigned>(snapshot.schedulerRemoteSignatureViews[2].tag),
+                static_cast<unsigned>(snapshot.schedulerSignatureFlags));
             if (written > 0) {
                 core::log::write(core::log::Channel::client,
                                  core::log::Level::info,

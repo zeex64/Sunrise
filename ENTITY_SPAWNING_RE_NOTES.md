@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 8d43fe8feb13813625319a74c4dc4c69ecf335c3d08340999d2189d9c7be595a
+SHA-256 3b28d9b36ab25c882699021c0e540d15d39e3062918ecbdffcc6c9a6c1281b96
 ```
 
 ## Confirmed high-level path
@@ -223,6 +223,17 @@ The established slot-0 NetAddr remains:
 7F00000100790000000000000000000000000000000000000000000000007F00000100790000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
 ```
 
+The final available log was captured with the pre-fix DLL. It repeatedly shows the exact receptor
+failure the new state machine removes:
+
+```text
+client ... local=2 local_index=0 remote=1
+server ... result=invalid-stage local=1 remote=0 got=2 index=-1 token=...002
+```
+
+It does not contain `view-codecs` or the expanded scheduler fields, so it is diagnostic evidence
+for the fix rather than a runtime test of the new build.
+
 ## Endpoint clarification
 
 The `activity-host` gameplay parameter now publishes the gameplay endpoint (`30976`) instead of the
@@ -281,6 +292,25 @@ has observed bodies from 105 to more than 1500 bits, commonly beginning with val
 `01C8`, `026C`, and `1830`. These are useful captures, but they are pre-bind scheduling traffic and
 not yet evidence of an accepted server-authored entity.
 
+The signature object is larger than its 128-bit header. `FUN_1417A96D0`, `FUN_1417B0D70`, and
+`FUN_1417A8CE0` establish this scheduler-relative layout:
+
+```text
++0x10  local signature object (0x48 bytes)
+  +00  128-bit signature header
+  +10  signed per-view entry count
+  +18  three 0x10-byte entries: 64-bit view key, 8-bit tag, 7 bytes padding
++0x58  remote signature object (same 0x48-byte layout)
++0xC0  registered scheduler-view count
++0x1DC signature dirty/state flags
+```
+
+Registration appends the view key and tag to the local object. The outbound scheduler writes schema
+`0x80806AEA` whenever its signature-update bit is set; the inbound scheduler decodes the same schema
+into the remote object and then compares the complete header, count, entry key, and entry tag. A
+server cannot establish compatibility by echoing only the 128-bit header. The `view-slots` probe
+now logs both counts and all three local/remote entries in addition to the headers.
+
 The empty-stream terminators are also recovered from the four inbound decoders:
 
 - Event lane (`FUN_141718AE0`): a zero presence bit ends the stream.
@@ -289,10 +319,12 @@ The empty-stream terminators are also recovered from the four inbound decoders:
   generation; `FUN_141718510` then uses a one bit as its no-more-records sentinel.
 - Fixed control lane (`FUN_141718CB0`): a zero presence bit means no object.
 
-Therefore a known-signature, no-record scheduler body costs one signature-update bit plus six bits
-per registered view. The remaining prerequisite is knowing the client's registered-view count and
-current scheduler signature. The `view-slots` probe now reads those directly from manager
-`+0x5498`, logging the scheduler view count, local/remote 128-bit signatures, and signature flags.
+Therefore the minimum known-signature, no-record scheduler body costs one signature-update bit plus
+six bits per registered view. A view can additionally publish one auxiliary entity index and an
+8-bit generation in the entity prelude even when it schedules no entity record. The remaining
+prerequisite is knowing the client's registered-view count and current scheduler signature. The
+`view-slots` probe now reads those directly from manager `+0x5498`, logging the scheduler view
+count, local/remote 128-bit signatures, and signature flags.
 
 ### Entity record grammar
 
@@ -325,6 +357,18 @@ generation/variant value, and, for one lifecycle form, a signed 16-bit nested-bo
 The remaining static question is the concrete 2-bit codec kind and creation schema used by an AI
 enemy. That must be recovered before Sunrise can construct a valid first create record.
 
+The create-body encoder is now tied directly to the scheduler's entity collector rather than a
+separate transport:
+
+- `FUN_14170B660` walks dirty replicated objects and builds the scheduler's create/update entries.
+- A create-pending object calls `FUN_1417084B0`, which packages `FUN_1417003C0`'s kind, entity id,
+  0x400-bit authority/presence mask, optional anchor, and codec `+0x58` payload.
+- An update-pending object calls `FUN_141708C40` and the codec's update path.
+- `FUN_1417085C0` and `FUN_1416FF790` are the matching create-body receive path. They validate the
+  kind and entity id before calling codec `+0x60` and committing the object.
+- The collector explicitly warns and schedules a baseline when creation is pending without an
+  update, matching the baseline behavior already found in `FUN_14171E240`.
+
 The codec registry layout is now confirmed by `FUN_1416F6590` and `FUN_1416EE180`:
 
 ```text
@@ -332,6 +376,8 @@ The codec registry layout is now confirmed by `FUN_1416F6590` and `FUN_1416EE180
 +0x08  codec pointer 0
 +0x10  codec pointer 1
 +0x18  per-family entity-handler registrations begin
++0x28  signed event-codec count
++0x30  per-family event-codec pointers
 ```
 
 Although the wire reserves two bits, the runtime validates a kind against the registry count before
@@ -351,7 +397,8 @@ Client hooks now cover:
 - View-message lookup and message-40 routing.
 - Native message-40 error, local/remote stage, index, signature, compatibility, and open state.
 - Live replicated-object codec count, vtable, create, and update entry points.
-- View-slot manager state plus scheduler view count/signatures/flags.
+- View-slot manager state plus scheduler view count, complete local/remote signature objects, and
+  flags.
 - Membership-to-view synchronization predicates.
 - Type-12 native wire decoder bit consumption.
 - Fully decoded type-12 membership snapshots.
@@ -387,8 +434,9 @@ The current checkpoint includes work in:
    index `0`, and echoes stages 2 through 5.
 2. Confirm the server reports `stage=view result=bound` and the external probe reports
    `view=1 gate=1`.
-3. Read the new `view-slots ... scheduler[...]` fields and confirm the no-record frame is exactly
-   `1 + 6 * views` bits when the signature-update flag is clear.
+3. Read the new `view-slots ... scheduler[...]` fields, including `lcount`/`rcount` and their
+   key/tag entries, then separate the `1 + 6 * views` minimum frame from any auxiliary
+   entity-index/generation prelude bits.
 4. Use `view-codecs`/`view-codec` to resolve the two registered object classes, then identify the
    AI enemy class and its vtable `+0x58` creation schema.
 5. Add a scheduler writer only after an empty frame and one create record can be encoded without
