@@ -857,6 +857,20 @@ the combined handler prefix contained one extra zero immediately before the enti
 now emits three zero prefix bits instead of four for both empty and create views, moving the direct
 selector to the exact native boundary without changing the proven 78-bit entity record.
 
+The next run reached the intended codec boundary. The first namespace-2 create consumed 77 bits
+before `FUN_141718510` returned result 2, and the client emitted the decisive diagnostic:
+`sobject rsat tag 0x80c4fead not loaded, can't decode this packet`. This proves the selector,
+17-bit handle, explicit flags, default-cell prefix, generation, kind, and 40-bit sobject payload
+all reached the native sobject decoder. The missing 78th bit is the entity-lane terminator, which
+the decoder does not reach after the codec rejects the unloaded resource.
+
+`FUN_1417266B0` calls `FUN_140A020E0` before testing the tag with `FUN_140A01C70`; the first
+decode therefore queues the RSAT even though that packet cannot complete. Sunrise now makes at
+most four attempts, two seconds apart, against the exact same view token, slot, and handle
+generation. Every retry revalidates the native pristine candidate. If the slot is accepted,
+occupied, or recycled, its first-candidate identity changes and retries stop rather than advancing
+to a different slot.
+
 ## Instrumentation added
 
 Client hooks now cover:

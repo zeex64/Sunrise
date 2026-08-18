@@ -229,8 +229,14 @@ struct PeerLink {
     ViewSignature view{};
     /** Client scheduler signature. Empty scheduler output is refused until this is present. */
     SchedulerSignature schedulerSignature{};
-    /** One guarded server-authored entity create has been claimed for this bound view. */
-    bool entityCreateAttempted{};
+    /** Bound view token and pristine slot selected by the first guarded entity-create attempt. */
+    std::uint64_t entityCreateToken{};
+    std::uint16_t entityCreateSlot{};
+    std::uint8_t entityCreateHandleGeneration{};
+    /** Bounded attempts made against that exact token/slot while its RSAT becomes resident. */
+    std::uint8_t entityCreateAttempts{};
+    /** Tick the most recent guarded create attempt left at. */
+    std::uint64_t lastEntityCreate{};
     /** True while a received packet still has to be acknowledged. */
     bool acknowledgementOwed{};
     std::uint64_t lastTick{};

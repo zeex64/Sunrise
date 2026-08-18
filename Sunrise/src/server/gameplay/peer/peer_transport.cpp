@@ -80,6 +80,10 @@ constexpr std::uint32_t kFirstEntityRsat = 0x80C4FEAD;
 constexpr std::uint8_t kFirstObjectGeneration = 2;
 /** Package-backed tag discriminator used by schema 0x80800014. */
 constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
+/** A failed decode queues the RSAT; retry the exact same slot after loader service has run. */
+constexpr std::uint64_t kEntityCreateRetryInterval = 2000;
+/** Keeps resource-readiness retries bounded even when the selected RSAT cannot load. */
+constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
 
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
@@ -1188,7 +1192,11 @@ void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& si
     state::gameplay::PeerLink* peer = find_session_locked(sessionId);
     if (peer != nullptr) {
         if (peer->view.token != signature.token) {
-            peer->entityCreateAttempted = false;
+            peer->entityCreateToken = 0;
+            peer->entityCreateSlot = 0;
+            peer->entityCreateHandleGeneration = 0;
+            peer->entityCreateAttempts = 0;
+            peer->lastEntityCreate = 0;
         }
         peer->view = signature;
     }
@@ -1227,7 +1235,10 @@ void service(std::uint64_t now) noexcept {
         // An unacknowledged send queue keeps the packet going out until the peer confirms it.
         // Every packet burns one sequence, so the resend is paced.
         const bool resendDue = peer.outbound.count != 0 && now - peer.lastSend >= kResendInterval;
-        const bool due = peer.acknowledgementOwed || resendDue;
+        const bool entityRetryDue = peer.entityCreateAttempts != 0
+                                    && peer.entityCreateAttempts < kEntityCreateAttemptLimit
+                                    && now - peer.lastEntityCreate >= kEntityCreateRetryInterval;
+        const bool due = peer.acknowledgementOwed || resendDue || entityRetryDue;
         if (peer.stage == state::gameplay::PeerStage::absent || !due) {
             continue;
         }
@@ -1246,9 +1257,25 @@ void service(std::uint64_t now) noexcept {
         peer.outboundHeadPresent = true;
         peer.lastTick = now;
         (void)synchronise_scheduler_layout(peer);
-        if (!peer.entityCreateAttempted && prepare_entity_create(peer, entityCreates[count])) {
-            // Claim before releasing the lock so another service slice cannot duplicate it.
-            peer.entityCreateAttempted = true;
+        EntityCreatePlan candidate{};
+        const bool prepared = prepare_entity_create(peer, candidate);
+        const bool firstAttempt = peer.entityCreateAttempts == 0;
+        const bool sameAttempt = entityRetryDue && prepared
+                                 && candidate.token == peer.entityCreateToken
+                                 && candidate.slot == peer.entityCreateSlot
+                                 && candidate.handleGeneration == peer.entityCreateHandleGeneration;
+        if (prepared && (firstAttempt || sameAttempt)) {
+            if (firstAttempt) {
+                peer.entityCreateToken = candidate.token;
+                peer.entityCreateSlot = candidate.slot;
+                peer.entityCreateHandleGeneration = candidate.handleGeneration;
+            }
+            ++peer.entityCreateAttempts;
+            peer.lastEntityCreate = now;
+            entityCreates[count] = candidate;
+        } else if (entityRetryDue) {
+            // A changed first candidate means the selected slot was consumed or recycled.
+            peer.entityCreateAttempts = kEntityCreateAttemptLimit;
         }
         owed[count] = peer;
         ++count;
@@ -1259,10 +1286,11 @@ void service(std::uint64_t now) noexcept {
         if (entityCreates[index].present) {
             report(sent ? core::log::Level::info : core::log::Level::warn,
                    "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
-                   "namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
+                   "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
                    "rsat=0x%08X",
                    sent ? "sent" : "fail",
                    static_cast<unsigned long long>(entityCreates[index].token),
+                   static_cast<unsigned>(owed[index].entityCreateAttempts),
                    entityCreates[index].namespaceId,
                    static_cast<unsigned>(entityCreates[index].viewIndex),
                    static_cast<unsigned long long>(entityCreates[index].schedulerKey),
