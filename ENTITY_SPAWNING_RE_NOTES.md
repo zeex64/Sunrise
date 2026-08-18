@@ -817,16 +817,23 @@ replaces the old need to reconstruct a potentially 1500-bit native scheduler fra
 64-bit prefix words; it is read-only and is emitted only after the server considers the view
 accepted and the client declares a scheduler body.
 
-The same copied-reader path now measures a present signature-update prefix as
-`stage=scheduler-signature`, including the two-bit count and bounded diagnostic 64/8-bit slices.
-It runs even before the view is accepted so an early one-shot client signature is not lost; it
-still does not consume the live packet reader. Those slices are diagnostic wire values, not the
-logical native keys.
+The copied-reader path originally treated the bits after schema `0x80806AEA` as a two-bit view
+count followed by 64/8-bit view entries. The 2026-08-18 run disproved that layout: while the native
+scheduler held one logical view, that parser reported three entries and values unrelated to any
+session token. The create gate correctly refused to emit an object.
 
-The exact encoded signature prefix is also persisted on the sending peer. After that peer's native
-view is bound and its signature count is nonzero, outgoing acknowledgements replay those captured
-bits verbatim, followed by the lane bodies. Logical lane selection comes independently from the
-native scheduler object.
+Ghidra confirms why. `FUN_1417B0D70` writes one dirty/update bit and, when set, calls
+`FUN_1404C78B0(schema=0x80806AEA, value=scheduler+0x10, writer, mode=1)`. The logical count at
+`scheduler+0x20` and entries at `scheduler+0x28` are not fields in that schema; handler output
+begins immediately after the variable-length schema value. The apparent count was therefore the
+first two handler bits.
+
+The client now hooks only the generic schema wrapper, filters for `0x80806AEA` in output mode, and
+measures the exact native writer bit delta as `stage=scheduler-native-signature`. The server uses
+that observed delta to retain the dirty bit plus exactly one encoded schema value. It pairs those
+wire bits with the native logical count/key/tag list only when the retained 16-byte value matches
+the current scheduler value. This keeps variable-length encoding and logical lane identity
+separate and prevents stale signatures from selecting a recycled view.
 
 ## Instrumentation added
 
@@ -845,7 +852,10 @@ Client hooks now cover:
   and occupied maps, including the first eight slots whose descriptor is unclaimed and their three
   generation fields (`stage=entity-slots`).
 - A token-bound capture of the native scheduler's logical count/key/tag list and safe slot, used
-  only when the target has one unique logical lane (`stage=entity-view`).
+  only when the target has one unique logical lane; it now includes the full 16-byte local
+  signature value (`stage=entity-view`).
+- The exact bit delta of native schema `0x80806AEA` output plus its 16-byte input value
+  (`stage=scheduler-native-signature`).
 - Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
@@ -880,22 +890,26 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ free roam and remain in-world for at least 60 seconds so the delayed nonzero scheduler
-   signature update is not missed during an activity-view recycle.
-2. Confirm `stage=entity-view` reports the logical scheduler count and a unique entry equal to the
-   bound namespace-2 token/key/tag.
-3. Confirm `stage=entity-create-out result=sent` reports namespace 2, that uniquely matched lane,
+1. Confirm the network hook group reports `scheduler_signature_encoder result=ok` and the first
+   signature update produces `stage=scheduler-native-signature` with a positive bounded bit count.
+2. Load EDZ free roam and remain in-world for at least 60 seconds so a namespace-2 activity view
+   overlaps a captured scheduler schema value.
+3. Confirm `stage=entity-view` reports the logical scheduler count, matching 16-byte signature,
+   and a unique entry equal to the bound namespace-2 token/key/tag.
+4. Confirm `stage=scheduler-signature` reports the native-measured boundary rather than the old
+   false 131/347-bit layout.
+5. Confirm `stage=entity-create-out result=sent` reports namespace 2, that uniquely matched lane,
    pristine slot/generations, and RSAT `0x80C4FEAD`.
-4. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
+6. Verify the client accepts the record through `FUN_141718510`/`FUN_1417085C0` and reports no
    unread, over-read, generation, or occupied-slot conflict before attempting an update.
-5. If the first decode only queues the RSAT dependency, add an acknowledgement-driven retry that
+7. If the first decode only queues the RSAT dependency, add an acknowledgement-driven retry that
    stops as soon as the decoder or occupied map confirms acceptance; do not blindly duplicate a
    successful create.
-6. Read `sobject-update` captures to identify which named components are present in an initial
+8. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-7. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+9. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-8. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+10. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
 
 ## Build and verification
@@ -933,5 +947,6 @@ entity-slots
 entity-view
 scheduler-body
 scheduler-signature
+scheduler-native-signature
 activity-host-decode
 ```

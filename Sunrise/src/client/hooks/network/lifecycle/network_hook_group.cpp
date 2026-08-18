@@ -31,6 +31,7 @@ constexpr std::array<const char*, kHandleCount> kSlotNames{
     "view_signature_refresh",
     "view_message_lookup",
     "view_slot_pump",
+    "scheduler_signature_encoder",
     "sobject_create_encoder",
     "sobject_update_encoder",
     "sobject_native_registration",

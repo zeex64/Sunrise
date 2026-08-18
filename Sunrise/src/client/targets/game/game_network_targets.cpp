@@ -57,6 +57,8 @@ bool derive(std::span<const patterns::ImageRange> image,
         matches[index(patterns::game::Id::viewSignatureRefresh)].address;
     resolved.viewMessageLookup = matches[index(patterns::game::Id::viewMessageLookup)].address;
     resolved.viewSlotPump = matches[index(patterns::game::Id::viewSlotPump)].address;
+    resolved.schedulerSignatureEncoder =
+        matches[index(patterns::game::Id::schedulerSignatureEncoder)].address;
     resolved.sobjectCreateEncoder =
         matches[index(patterns::game::Id::sobjectCreateEncoder)].address;
     resolved.sobjectUpdateEncoder =

@@ -3,8 +3,10 @@
 #include <Windows.h>
 
 #include <array>
+#include <cstring>
 
 #include "../../../client/hooks/network/entity_slot_probe.h"
+#include "../../../client/hooks/network/scheduler_signature_probe.h"
 #include "../../../middleware/crypto/random_bytes.h"
 #include "../../../middleware/encoding/bit_reader.h"
 #include "../../../middleware/encoding/bit_writer.h"
@@ -117,9 +119,9 @@ struct EntityCreatePlan {
 };
 
 /**
- * Measures schema 0x80806AEA's fixed-width scheduler-signature prefix from a copied reader.
- * Its 64-bit entry slices are encoded schema values, not the native logical view keys. Logical
- * keys are captured from the scheduler object itself. No live reader or replication state moves.
+ * Measures schema 0x80806AEA with the bit count observed around the native encoder call.
+ * The schema is variable-length and does not contain the scheduler's logical view list. No live
+ * reader or replication state moves.
  */
 void probe_scheduler_signature(bits::Reader reader, ExternalProbe& output) noexcept {
     const std::size_t before = reader.remaining_bits();
@@ -134,20 +136,14 @@ void probe_scheduler_signature(bits::Reader reader, ExternalProbe& output) noexc
         return;
     }
 
-    std::uint64_t count = 0;
-    if (!reader.read(64, output.schedulerSignature.header[0])
-        || !reader.read(64, output.schedulerSignature.header[1]) || !reader.read(2, count)
-        || count > output.schedulerSignature.views.size()) {
+    client::hooks::network::scheduler_signature_probe::Capture native{};
+    if (!client::hooks::network::scheduler_signature_probe::latest(native) || native.bitCount == 0
+        || native.bitCount > reader.remaining_bits()
+        || native.bitCount + 1 > output.schedulerSignature.wire.size() * kByteBits
+        || !reader.skip(native.bitCount)) {
         return;
     }
-    output.schedulerSignature.viewCount = static_cast<std::uint8_t>(count);
-    for (std::size_t index = 0; index < count; ++index) {
-        std::uint64_t tag = 0;
-        if (!reader.read(64, output.schedulerSignature.views[index].key) || !reader.read(8, tag)) {
-            return;
-        }
-        output.schedulerSignature.views[index].tag = static_cast<std::uint8_t>(tag);
-    }
+    output.schedulerSignature.value = native.value;
     output.schedulerSignatureBits = before - reader.remaining_bits();
     output.schedulerSignature.present = true;
     output.schedulerSignatureValid = true;
@@ -273,6 +269,7 @@ write_scheduler_signature(bits::Writer& writer,
     }
 
     if (!capture.schedulerSignatureValid
+        || capture.schedulerSignature != peer.schedulerSignature.value
         || capture.schedulerViewCount != peer.schedulerSignature.viewCount
         || capture.schedulerKey != capture.token || peer.schedulerSignature.wireBits == 0) {
         return false;
@@ -302,6 +299,29 @@ write_scheduler_signature(bits::Writer& writer,
     output.viewIndex = static_cast<std::uint8_t>(match);
     output.namespaceId = capture.namespaceId;
     output.present = true;
+    return true;
+}
+
+/** Pairs an exact schema encoding with the current native logical view order. */
+[[nodiscard]] bool synchronise_scheduler_layout(state::gameplay::PeerLink& peer) noexcept {
+    peer.schedulerSignature.viewCount = 0;
+    peer.schedulerSignature.views = {};
+    if (!peer.view.bound || peer.view.token == 0 || !peer.schedulerSignature.present) {
+        return false;
+    }
+
+    client::hooks::network::entity_slot_probe::ViewCapture capture{};
+    if (!client::hooks::network::entity_slot_probe::find(peer.view.token, capture)
+        || !capture.schedulerSignatureValid || capture.schedulerViewCount == 0
+        || capture.schedulerViewCount > peer.schedulerSignature.views.size()
+        || capture.schedulerSignature != peer.schedulerSignature.value) {
+        return false;
+    }
+    peer.schedulerSignature.viewCount = capture.schedulerViewCount;
+    for (std::size_t index = 0; index < capture.schedulerViewCount; ++index) {
+        peer.schedulerSignature.views[index].key = capture.schedulerViewKeys[index];
+        peer.schedulerSignature.views[index].tag = capture.schedulerViewTags[index];
+    }
     return true;
 }
 
@@ -982,14 +1002,21 @@ void consume_established(const state::gameplay::Endpoint& from,
                    schedulerHex.data());
         }
         if (external.status.schedulerPresent && external.schedulerSignatureUpdate) {
+            std::uint64_t signatureFirst = 0;
+            std::uint64_t signatureSecond = 0;
+            std::memcpy(
+                &signatureFirst, external.schedulerSignature.value.data(), sizeof signatureFirst);
+            std::memcpy(&signatureSecond,
+                        external.schedulerSignature.value.data() + sizeof signatureFirst,
+                        sizeof signatureSecond);
             report(core::log::Level::info,
                    "ev=gameplay stage=scheduler-signature valid=%u bits=%zu "
-                   "header=%016llX%016llX count=%u "
+                   "value=%016llX%016llX count=%u "
                    "e0=0x%016llX/%u e1=0x%016llX/%u e2=0x%016llX/%u",
                    external.schedulerSignatureValid ? 1U : 0U,
                    external.schedulerSignatureBits,
-                   static_cast<unsigned long long>(external.schedulerSignature.header[0]),
-                   static_cast<unsigned long long>(external.schedulerSignature.header[1]),
+                   static_cast<unsigned long long>(signatureFirst),
+                   static_cast<unsigned long long>(signatureSecond),
                    static_cast<unsigned>(external.schedulerSignature.viewCount),
                    static_cast<unsigned long long>(external.schedulerSignature.views[0].key),
                    static_cast<unsigned>(external.schedulerSignature.views[0].tag),
@@ -1216,6 +1243,7 @@ void service(std::uint64_t now) noexcept {
             static_cast<std::uint16_t>((peer.outboundHead + 1) % kPacketSequenceModulus);
         peer.outboundHeadPresent = true;
         peer.lastTick = now;
+        (void)synchronise_scheduler_layout(peer);
         if (!peer.entityCreateAttempted && prepare_entity_create(peer, entityCreates[count])) {
             // Claim before releasing the lock so another service slice cannot duplicate it.
             peer.entityCreateAttempted = true;

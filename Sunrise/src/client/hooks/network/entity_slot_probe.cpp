@@ -269,6 +269,7 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
     std::uint64_t schedulerKey = 0;
     std::uint8_t schedulerTag = 0;
     std::int32_t schedulerViewCount = -1;
+    std::array<std::byte, 16> schedulerSignature{};
     std::array<std::uint64_t, ViewCapture::kSchedulerViewCapacity> schedulerViewKeys{};
     std::array<std::uint8_t, ViewCapture::kSchedulerViewCapacity> schedulerViewTags{};
     __try {
@@ -287,6 +288,7 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
         std::memcpy(&schedulerOwner, bytes + 0x68, sizeof schedulerOwner);
         if (schedulerOwner != nullptr) {
             const auto* const scheduler = schedulerOwner + 0x38;
+            std::memcpy(schedulerSignature.data(), scheduler + 0x10, schedulerSignature.size());
             std::memcpy(&schedulerViewCount, scheduler + 0x20, sizeof schedulerViewCount);
             if (schedulerViewCount >= 0
                 && schedulerViewCount
@@ -333,6 +335,7 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
     if (schedulerViewCount >= 0
         && schedulerViewCount <= static_cast<std::int32_t>(capture.schedulerViewKeys.size())) {
         capture.schedulerViewCount = static_cast<std::uint8_t>(schedulerViewCount);
+        capture.schedulerSignature = schedulerSignature;
         capture.schedulerViewKeys = schedulerViewKeys;
         capture.schedulerViewTags = schedulerViewTags;
         capture.schedulerSignatureValid = true;
@@ -342,18 +345,27 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
         report(snapshot, 0, token, schedulerKey, schedulerTag);
     }
     if (changed) {
+        std::uint64_t signatureFirst = 0;
+        std::uint64_t signatureSecond = 0;
+        std::memcpy(&signatureFirst, capture.schedulerSignature.data(), sizeof signatureFirst);
+        std::memcpy(&signatureSecond,
+                    capture.schedulerSignature.data() + sizeof signatureFirst,
+                    sizeof signatureSecond);
         std::array<char, 512> line{};
         const int written = std::snprintf(
             line.data(),
             line.size(),
             "ev=gameplay stage=entity-view token=0x%llX key=0x%llX tag=%u namespace=%d "
-            "signature=%u count=%u e0=0x%llX/%u e1=0x%llX/%u e2=0x%llX/%u "
+            "signature=%u value=%016llX%016llX count=%u "
+            "e0=0x%llX/%u e1=0x%llX/%u e2=0x%llX/%u "
             "candidate=%u slot=%u hgen=%u rgen=%u ogen=%u",
             static_cast<unsigned long long>(capture.token),
             static_cast<unsigned long long>(capture.schedulerKey),
             static_cast<unsigned>(capture.schedulerTag),
             capture.namespaceId,
             capture.schedulerSignatureValid ? 1U : 0U,
+            static_cast<unsigned long long>(signatureFirst),
+            static_cast<unsigned long long>(signatureSecond),
             static_cast<unsigned>(capture.schedulerViewCount),
             static_cast<unsigned long long>(capture.schedulerViewKeys[0]),
             static_cast<unsigned>(capture.schedulerViewTags[0]),

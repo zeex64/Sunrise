@@ -7,6 +7,7 @@
 #include "../investment/investment_derived_rebuild.h"
 #include "../platform.h"
 #include "../runtime.h"
+#include "../scheduler_signature_probe.h"
 #include "../sobject_create_probe.h"
 #include "../sobject_native_probe.h"
 #include "../sobject_update_probe.h"
@@ -140,6 +141,7 @@ bool uninstall() noexcept {
     if (removed) {
         entity_create_probe::reset();
         entity_slot_probe::reset();
+        scheduler_signature_probe::reset();
         sobject_create_probe::reset();
         sobject_native_probe::reset();
         sobject_update_probe::reset();

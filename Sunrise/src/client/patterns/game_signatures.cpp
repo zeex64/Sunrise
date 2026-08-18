@@ -91,6 +91,16 @@ constexpr std::string_view kViewSlotPumpText = "40 55 56 48 83 EC 38 83 79 08 01
 /** Compiled pattern bytes of the signature text above. */
 constexpr auto kViewSlotPump = signature<signature_length(kViewSlotPumpText)>(kViewSlotPumpText);
 
+// Matches the generic schema encoder wrapper used for scheduler signature schema 0x80806AEA.
+// Its own tiny body is common, so the following function's fixed 0x160-byte prologue makes this
+// entry unique without retaining the wrapper's position-dependent call displacement.
+constexpr std::string_view kSchedulerSignatureEncoderText =
+    "48 83 EC 28 E8 ? ? ? ? B0 01 48 83 C4 28 C3 48 89 5C 24 08 55 56 57 41 56 41 57 "
+    "48 81 EC 60 01 00 00";
+/** Compiled pattern bytes of the signature-encoder signature above. */
+constexpr auto kSchedulerSignatureEncoder =
+    signature<signature_length(kSchedulerSignatureEncoderText)>(kSchedulerSignatureEncoderText);
+
 // Matches kind 0's sobject creation encoder. The fixed tail is the trailing create boolean's
 // bit-writer fast path; together with the schema call and saved arguments it is unique.
 constexpr std::string_view kSobjectCreateEncoderText =
@@ -261,6 +271,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"view_signature_refresh", kViewSignatureRefresh},
     patterns::Pattern{"view_message_lookup", kViewMessageLookup},
     patterns::Pattern{"view_slot_pump", kViewSlotPump},
+    patterns::Pattern{"scheduler_signature_encoder", kSchedulerSignatureEncoder},
     patterns::Pattern{"sobject_create_encoder", kSobjectCreateEncoder},
     patterns::Pattern{"sobject_update_encoder", kSobjectUpdateEncoder},
     patterns::Pattern{"sobject_native_registration", kSobjectNativeRegistration},

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace sunrise::client::hooks::network::entity_slot_probe {
@@ -22,6 +23,7 @@ struct ViewCapture {
     std::uint8_t reservedGeneration{};
     std::uint8_t objectGeneration{};
     std::uint8_t schedulerViewCount{};
+    std::array<std::byte, 16> schedulerSignature{};
     std::array<std::uint64_t, kSchedulerViewCapacity> schedulerViewKeys{};
     std::array<std::uint8_t, kSchedulerViewCapacity> schedulerViewTags{};
     bool candidatePresent{};
