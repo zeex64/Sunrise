@@ -2034,6 +2034,22 @@ EDZ player position `(509.15094, 30.129612, 74.3163147)`, the exact X+3 wire is 
 exact 132 bits with the accepted Vandal create; it does not infer the count from the 55 serialized
 descriptor records.
 
+That combined Simulated Vandal create/update did not reach either codec body. Both bounded attempts
+returned `result=2 count=0` after the 19-bit entity-handle boundary, produced no `entity-record`,
+and left namespace occupancy at 13. Repeated pending entity-list entries then contributed 78 corrupt
+reads and a four-second receive timeout before attempt three. The correct correction is staged
+creation followed by a later update, not additional combined retries.
+
+The broader entity-name entry `0x80C187BD` is a stronger EDZ Fallen target than the activity-specific
+Simulated Vandal. It is class `0x80809C0F`, lives in `w64_sandbox_020c_5.pkg`, and is named plain
+`vandal` as well as many real variants such as Assault Vandal, Resilient Vandal, and Dusk Walker
+Mechanic. Its decoded 47,540-byte definition stores `0x815B204B` at serialized offset `+0x88`.
+Tag `0x815B204B` is a 1,792-byte class `0x80809BB6` resource in
+`w64_sandbox_06d9_6.pkg` and points back to `0x80C187BD` at its own `+0x08`. It is therefore the
+exact shared-Vandal sobject RSAT. Its serialized descriptor count is 53, so even the Simulated
+Vandal's measured 132-bit body cannot be reused. The next bounded build sends shared RSAT
+`0x815B204B` create-only, then uses the injected baseline to measure that resource's own update.
+
 The final old-RSAT component probe also clarified what not to add. Parent encoded in 49 bits and
 stream-source in 18 bits, while marking the first RSAT-defined field dirty raised the game's
 guarded `dirty bit inconsistency detected` assertion. The second RSAT bit produced only the clean
@@ -2091,15 +2107,15 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the transform-bearing Simulated Vandal RSAT `0x815B5422` once in the initial EDZ zone
-   without moving. Confirm attempt two consumes 209 bits, returns one record with flags `0x0003`,
-   preserves update size 8,892, and advances namespace occupancy from 13 to 14 without either
-   missing-update assertion.
-2. Check visually three units along X from the captured initial EDZ position. If the Vandal still
-   does not render, distinguish lifecycle/stream registration from the already-proven definition,
-   RSAT, allocation, and transform layers before changing the payload again.
-3. If the object renders but has no AI, capture or implement the kind-1 squad/member relationship;
-   sobject allocation alone need not start behavior.
+1. Run shared Vandal RSAT `0x815B204B` create-only once in the initial EDZ zone without moving.
+   Confirm the bounded retry returns one 77-bit record, capture its derived 16-byte create profile,
+   and record its native clean and transform update widths.
+2. Implement a two-stage publication: first allow the create-only record to occupy the exact
+   selected slot, then send one update-only shortcut for that same handle after the occupancy bit
+   confirms acceptance. Do not combine the resource-loading create and large update again.
+3. Check visually at the measured nearby-player position. If the object renders but has no AI,
+   capture or implement the kind-1 squad/member relationship; sobject allocation alone need not
+   start behavior.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.

@@ -145,19 +145,27 @@ The first live nearby-placement run was accepted but remained invisible:
   `C01440009A941F109724294A1F400000` followed by four zero bits.
 - The next build carries that exact update with the Vandal create. The create-only missing-update
   assertions are no longer expected.
+- The combined Simulated Vandal create/update was not accepted: both attempts returned result 2
+  after the 19-bit handle boundary, no record was produced, occupancy remained 13, and the channel
+  later timed out with 78 corrupt reads. Creation and update now need separate packets.
+- The shared name-map definition `0x80C187BD` is a better real-Fallen target. Its definition
+  `+0x88` links to class-`0x80809BB6` RSAT `0x815B204B`, which points back at `+0x08`. It backs
+  plain `vandal` plus many actual Vandal variants and lives in the shared sandbox packages.
+- Because shared RSAT `0x815B204B` has 53 serialized descriptors rather than the Simulated
+  Vandal's 55, the next build profiles it with a create-only record before sending any update.
 
 ## Immediate plan
 
-### 1. Validate the transform-bearing Simulated Vandal
+### 1. Validate the shared Vandal create profile
 
-The current build selects RSAT `0x815B5422` and publishes its exact 132-bit native transform at the
-captured player position plus three units on X. It still emits only one entity and retains the
-existing bounded loader retry behavior. The predicted accepted record is 209 bits with flags
-`0x0003`, update size 8,892, transform dirty, and no missing-update assertions.
+The current build selects shared Vandal RSAT `0x815B204B`, enables its spatial layout, and sends no
+update. It emits only one entity and retains the bounded loader retry behavior. The expected output
+is a 77-bit create-only record whose injected baseline reveals this RSAT's derived scratch size,
+profile value, clean width, and transform width.
 
 ### 2. Publish one bounded position
 
-After validating the Vandal transform, recover:
+After validating the shared Vandal profile, recover:
 
 - world transform and position;
 - parent relationship;
@@ -166,9 +174,10 @@ After validating the Vandal transform, recover:
 - the initial native update and dirty-component masks;
 - whether a kind-1 squad relationship is additionally required.
 
-Check the captured nearby-player position for rendering or registration evidence. If allocation and
-transform succeed but nothing renders, investigate lifecycle and stream registration before adding
-component fields. If it renders without behavior, the next boundary is the squad/member relation.
+Publish the exact shared-Vandal transform as a separate update-only record after the create's slot
+occupancy is observed. If allocation and transform succeed but nothing renders, investigate
+lifecycle and stream registration. If it renders without behavior, the next boundary is the
+squad/member relation.
 
 ### 3. Complete safe scheduler support
 
@@ -203,10 +212,11 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code sends Simulated Vandal sobject RSAT `0x815B5422` with its exact 132-bit
-  nearby-player transform, inherits the active view's spatial cell, and retains bounded retries.
+- Current working code sends shared Vandal sobject RSAT `0x815B204B` create-only, inherits the
+  active view's spatial cell, and retains bounded retries. Its update will be staged separately
+  after this RSAT's native profile is captured.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `cc56ab1604286e7911fab927a7ef59b82a752b55e36845d23fe3e3f1bdbe7a45`
+- DLL SHA-256: `3593c28509548fce568d0bad89b57e01eb1486bd788d2c65a336005547cc18ad`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

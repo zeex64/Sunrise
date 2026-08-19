@@ -72,8 +72,8 @@ constexpr std::size_t kExternalProbeByteCapacity = 256;
  * sequences ahead of its window, so this host must not send faster than the peer does.
  */
 constexpr std::uint64_t kResendInterval = 250;
-/** Simulated Vandal sobject RSAT linked by definition 0x815B5420 at serialized offset +0x88. */
-constexpr std::uint32_t kFirstEntityRsat = 0x815B5422;
+/** Shared Vandal sobject RSAT linked by definition 0x80C187BD at serialized offset +0x88. */
+constexpr std::uint32_t kFirstEntityRsat = 0x815B204B;
 /** The first EDZ entity view owns thirteen native objects before a server-authored slot is safe. */
 constexpr std::uint32_t kFirstEntityBaselineOccupied = 13;
 /** A pristine slot's first native allocation advances object generation zero to two. */
@@ -92,18 +92,6 @@ constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
 constexpr std::uint8_t kProvenSchedulerViewCount = 1;
 /** One-view scheduler wire is its update bit plus schema 0x80806AEA's 202-bit body. */
 constexpr std::uint16_t kProvenSchedulerWireBits = 203;
-/**
- * Native Simulated Vandal update for the captured EDZ player position plus three world units on
- * X. The encoder flushed these 128 bits and retained four additional zero bits pending.
- */
-constexpr std::array<std::uint8_t, 16> kFirstEntityTransformUpdatePrefix{
-    0xC0, 0x14, 0x40, 0x00, 0x9A, 0x94, 0x1F, 0x10,
-    0x97, 0x24, 0x29, 0x4A, 0x1F, 0x40, 0x00, 0x00,
-};
-constexpr std::uint8_t kFirstEntityTransformUpdateTailBits = 4;
-constexpr std::size_t kFirstEntityTransformUpdateBits =
-    kFirstEntityTransformUpdatePrefix.size() * kByteBits
-    + kFirstEntityTransformUpdateTailBits;
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
@@ -359,17 +347,11 @@ write_scheduler_signature(bits::Writer& writer,
            && writer.write(0, 1);
 }
 
-/** Replays the exact native nearby-player Simulated Vandal update captured by the private probe. */
-[[nodiscard]] bool write_first_entity_transform_update(bits::Writer& writer) noexcept {
-    for (const std::uint8_t value : kFirstEntityTransformUpdatePrefix) {
-        if (!writer.write(value, kByteBits)) {
-            return false;
-        }
-    }
-    return writer.write(0, kFirstEntityTransformUpdateTailBits);
-}
-
-/** Writes one direct kind-0 Simulated Vandal create and its native transform update. */
+/**
+ * Writes one direct kind-0 shared Vandal create without an update. Its RSAT differs from the
+ * measured Simulated Vandal resource, so the native baseline must establish the new update shape
+ * before a separate transform update is safe.
+ */
 [[nodiscard]] bool write_entity_create_view(bits::Writer& writer,
                                             const EntityCreatePlan& plan) noexcept {
     // Trace only the bounded native decoder calls that follow this guarded server emission.
@@ -381,8 +363,8 @@ write_scheduler_signature(bits::Writer& writer,
         // Entity lane continues with a direct (non-anchor) 17-bit handle.
         || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(plan.slot, 13)
         || !writer.write(plan.handleGeneration, 4)
-        // Explicit flags: create plus update; no remove, lifecycle state, or anchor.
-        || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(1, 1) || !writer.write(0, 1)
+        // Explicit flags: create only; no update, remove, lifecycle state, or anchor.
+        || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(0, 1) || !writer.write(0, 1)
         || !writer.write(0, 1)
         || !writer.write(0, 1)
         // Inherit the active view's current spatial cell. The explicit 1,0 branch means 0xFFFF
@@ -392,9 +374,8 @@ write_scheduler_signature(bits::Writer& writer,
         || !writer.write(plan.objectGeneration, 8) || !writer.write(0, 2)
         || !writer.write(kInstalledTagDiscriminator, 6) || !writer.write(1, 1)
         || !writer.write(plan.rsat, 32)
-        // Enable the named spatial layout. Its exact 132-bit Vandal update follows immediately.
+        // Enable the named spatial layout so the injected native baseline exposes its exact shape.
         || !writer.write(1, 1)
-        || !write_first_entity_transform_update(writer)
         // End entity lane and leave the fixed-control handler empty.
         || !writer.write(1, 1) || !writer.write(0, 1)) {
         return false;
@@ -1886,7 +1867,7 @@ void service(std::uint64_t now) noexcept {
             report(sent ? core::log::Level::info : core::log::Level::warn,
                    "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
                    "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
-                   "rsat=0x%08X cell=inherited update=transform-player-x3 update_bits=%zu "
+                   "rsat=0x%08X cell=inherited update=none update_bits=0 "
                    "bootstrap=%u",
                    sent ? "sent" : "fail",
                    static_cast<unsigned long long>(entityCreates[index].token),
@@ -1899,7 +1880,6 @@ void service(std::uint64_t now) noexcept {
                    static_cast<unsigned>(entityCreates[index].handleGeneration),
                    static_cast<unsigned>(entityCreates[index].objectGeneration),
                    entityCreates[index].rsat,
-                   kFirstEntityTransformUpdateBits,
                    entityCreates[index].bootstrapScheduler ? 1U : 0U);
         }
         if (!sent) {
