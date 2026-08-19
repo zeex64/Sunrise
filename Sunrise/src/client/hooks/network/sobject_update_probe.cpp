@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -21,8 +22,17 @@ constexpr std::size_t kCreateBufferSize = 0x10;
 constexpr std::size_t kMaskCaptureSize = 0x10;
 constexpr std::size_t kSeenCapacity = 32;
 constexpr std::size_t kFlushedCaptureCapacity = 64;
+/** Named component scratch ends at 0x84 and the RSAT-defined region is 16-byte aligned. */
+constexpr std::size_t kNamedComponentRsatOffset = 0x90;
+/** Private component storage used only while asking the native encoder to measure a shape. */
+constexpr std::size_t kSyntheticComponentCapacity = 0x200;
+/** More than enough room for an all-clean component-presence update. */
+constexpr std::size_t kSyntheticWireCapacity = 0x100;
+/** Native update contexts extend through the diagnostic byte at +0x54. */
+constexpr std::size_t kSyntheticContextSize = 0x60;
 
 std::array<std::atomic_uint64_t, kSeenCapacity> g_seen{};
+std::atomic_bool g_decodedRecordProbed{};
 
 using Encoder = std::uint64_t(__fastcall*)(void*, const void*);
 
@@ -34,6 +44,27 @@ struct WriterSnapshot {
     std::uint32_t pendingBits{};
     const std::byte* cursor{};
 };
+
+/** Exact native bit-writer fields used by the sobject update encoder. */
+struct NativeWriter {
+    std::byte* begin{};
+    std::byte* end{};
+    std::uint64_t reserved10{};
+    std::uint64_t reserved18{};
+    std::int32_t flushedBits{};
+    std::int32_t totalBits{};
+    std::uint64_t accumulator{};
+    std::uint32_t pendingBits{};
+    std::uint32_t reserved34{};
+    std::byte* cursor{};
+};
+
+static_assert(offsetof(NativeWriter, flushedBits) == 0x20);
+static_assert(offsetof(NativeWriter, totalBits) == 0x24);
+static_assert(offsetof(NativeWriter, accumulator) == 0x28);
+static_assert(offsetof(NativeWriter, pendingBits) == 0x30);
+static_assert(offsetof(NativeWriter, cursor) == 0x38);
+static_assert(sizeof(NativeWriter) == 0x40);
 
 /** Stable, shallow fields read from the kind-0 update context before native encoding. */
 struct UpdateSnapshot {
@@ -142,6 +173,97 @@ void hex(std::span<const std::byte> input, std::span<char> output) noexcept {
         output[index * 2 + 1] = kDigits[value & 0x0F];
     }
     output[count * 2] = '\0';
+}
+
+/** Writes one pointer into the known native update-context layout. */
+void set_context_pointer(std::span<std::byte> context,
+                         std::size_t offset,
+                         const void* value) noexcept {
+    std::memcpy(context.data() + offset, &value, sizeof value);
+}
+
+/**
+ * Runs the game's own update encoder against private copies and reports its exact bit result.
+ * The dirty and sent masks keep the decoded mask's native metadata but contain no dirty fields.
+ */
+void encode_synthetic_variant(const char* variant,
+                              std::span<const std::byte, kCreateBufferSize> create,
+                              std::span<const std::byte> component,
+                              std::span<const std::byte, kMaskCaptureSize> mask) noexcept {
+    alignas(16) std::array<std::byte, kSyntheticWireCapacity> wire{};
+    alignas(16) std::array<std::byte, kMaskCaptureSize> dirty{};
+    alignas(16) std::array<std::byte, kMaskCaptureSize> sent{};
+    alignas(16) std::array<std::byte, kSyntheticContextSize> context{};
+    std::copy(mask.begin(), mask.end(), dirty.begin());
+    std::copy(mask.begin(), mask.end(), sent.begin());
+    // The first eight bytes are the inline bits for this 64-entry mask. Preserve only its shape.
+    std::fill_n(dirty.begin(), sizeof(std::uint64_t), std::byte{});
+    std::fill_n(sent.begin(), sizeof(std::uint64_t), std::byte{});
+
+    NativeWriter writer{};
+    writer.begin = wire.data();
+    writer.end = wire.data() + wire.size();
+    writer.cursor = wire.data();
+    set_context_pointer(context, 0x08, dirty.data());
+    set_context_pointer(context, 0x10, sent.data());
+    set_context_pointer(context, 0x20, create.data());
+    set_context_pointer(context, 0x30, component.data());
+    set_context_pointer(context, 0x48, &writer);
+
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(
+        lease, HookSlot::sobjectUpdateEncoder, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<Encoder>(lease.original);
+    std::uint64_t result = 0;
+    bool faulted = false;
+    __try {
+        if (lease.accepting && call != nullptr) {
+            result = call(nullptr, context.data());
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        faulted = true;
+    }
+    coordinator::g_callEgress();
+
+    std::size_t flushed = 0;
+    const auto begin = reinterpret_cast<std::uintptr_t>(writer.begin);
+    const auto cursor = reinterpret_cast<std::uintptr_t>(writer.cursor);
+    const auto end = reinterpret_cast<std::uintptr_t>(writer.end);
+    if (begin != 0 && cursor >= begin && cursor <= end) {
+        flushed = static_cast<std::size_t>(cursor - begin);
+    }
+    std::array<char, kSyntheticWireCapacity * 2 + 1> wireHex{};
+    hex(std::span<const std::byte>{wire.data(), flushed}, wireHex);
+    std::uint32_t metadata = 0;
+    std::memcpy(&metadata, dirty.data() + sizeof(std::uint64_t), sizeof metadata);
+    std::uint32_t rsat = 0;
+    std::memcpy(&rsat, create.data(), sizeof rsat);
+    const unsigned trailing = std::to_integer<unsigned>(create[4]) & 1U;
+
+    std::array<char, core::log::kLineCapacity> line{};
+    const int written = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=gameplay stage=sobject-native-update-probe variant=%s result=%llu fault=%u "
+        "rsat=0x%08X flag=%u mask_meta=0x%08X bits=%d flushed=%d pending=%u "
+        "accum=0x%016llX bytes=%zu hex=%s",
+        variant,
+        static_cast<unsigned long long>(result),
+        faulted ? 1U : 0U,
+        rsat,
+        trailing,
+        metadata,
+        writer.totalBits,
+        writer.flushedBits,
+        static_cast<unsigned>(writer.pendingBits),
+        static_cast<unsigned long long>(writer.accumulator),
+        flushed,
+        wireHex.data());
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         faulted ? core::log::Level::warn : core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
 }
 
 /** Copies bytes flushed by the update call when its cursor movement is bounded and readable. */
@@ -255,10 +377,40 @@ void* encoder_entry_point() noexcept {
     return reinterpret_cast<void*>(&encode_body);
 }
 
+void probe_decoded_record(std::span<const std::byte> create,
+                          std::span<const std::byte> update,
+                          std::span<const std::byte> mask) noexcept {
+    if (create.size() != kCreateBufferSize || update.empty()
+        || update.size() > kSyntheticComponentCapacity - kNamedComponentRsatOffset
+        || mask.size() != kMaskCaptureSize
+        || g_decodedRecordProbed.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+
+    std::array<std::byte, kCreateBufferSize> plainCreate{};
+    std::array<std::byte, kCreateBufferSize> spatialCreate{};
+    std::array<std::byte, kMaskCaptureSize> nativeMask{};
+    alignas(16) std::array<std::byte, kSyntheticComponentCapacity> plainComponent{};
+    alignas(16) std::array<std::byte, kSyntheticComponentCapacity> spatialComponent{};
+    std::copy(create.begin(), create.end(), plainCreate.begin());
+    spatialCreate = plainCreate;
+    std::copy(mask.begin(), mask.end(), nativeMask.begin());
+    std::copy(update.begin(), update.end(), plainComponent.begin());
+    std::copy(update.begin(), update.end(), spatialComponent.begin() + kNamedComponentRsatOffset);
+
+    // Flag zero starts the RSAT-defined scratch at component offset zero. Flag one reserves the
+    // transform, parent, and stream-source regions and moves that same scratch to aligned +0x90.
+    plainCreate[4] &= std::byte{0xFE};
+    spatialCreate[4] |= std::byte{0x01};
+    encode_synthetic_variant("plain-clean", plainCreate, plainComponent, nativeMask);
+    encode_synthetic_variant("spatial-clean", spatialCreate, spatialComponent, nativeMask);
+}
+
 void reset() noexcept {
     for (std::atomic_uint64_t& seen : g_seen) {
         seen.store(0, std::memory_order_relaxed);
     }
+    g_decodedRecordProbed.store(false, std::memory_order_relaxed);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_update_probe

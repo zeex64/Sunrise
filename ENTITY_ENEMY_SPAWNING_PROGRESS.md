@@ -17,16 +17,16 @@ squads, and encounters before publishing native objects through the replication 
 | --- | --- |
 | Gameplay session and views | Working and substantially stabilized |
 | Replication scheduler | One-view layout understood; the 203-bit framing correction is validated |
-| Native entity creation | A complete 78-bit entity record has previously allocated an object and advanced occupancy |
-| Entity placement and updates | Not decoded yet |
+| Native entity creation | A stationary 78-bit create now allocates an object reliably after one resource-load retry |
+| Entity placement and updates | Named-component order and scratch offsets are known; exact wire payload remains to be captured |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
 
 ## Confirmed progress
 
 - Native view creation, token lookup, message-40 staging, and entity-slot discovery work.
 - Account/SOID handling that caused the old stationary disconnect was fixed.
-- The client has accepted a server-authored kind-0 sobject once, advancing its native object
-  manager from 14 to 15 occupied objects.
+- The latest stationary EDZ run accepted a server-authored kind-0 sobject and advanced namespace 1
+  from 13 to 14 occupied objects. Player movement is no longer required to expose the create path.
 - RSAT `0x80C4FEAD` reaches the client loader, and bounded retries work.
 - Stage-four bootstrap and cached retries were added so stationary creation does not have to wait
   for an unrelated zone transition.
@@ -40,49 +40,45 @@ squads, and encounters before publishing native objects through the replication 
 
 ## Latest runtime checkpoint
 
-The first run of commit `01bbf118` validated the scheduler-boundary correction:
+The run of commit `b46dabce` completed the stationary-create milestone:
 
-- The native one-view schema measured 202 bits and the captured wire measured the expected 203
-  bits.
-- When the scheduler expanded to two views, the native schema measured 274 bits and the complete
-  update measured 275 bits.
-- The erroneous scheduler-signature log on almost every incoming packet disappeared.
-- No `entity-create-out` was emitted in this run.
-- Namespace 1 reached its required 13-object baseline at `t=77537`, with slot 13 available.
-- The scheduler layouts matched with one view, but reliable control records repeatedly reset the
-  settle window. A second scheduler view appeared before a create could leave, and the guarded
-  one-view writer correctly suppressed the unsupported two-view body.
-- The later increase from 13 to 14 occupied objects is not proof of a server-created entity because
-  no matching `entity-create-out` or `entity-record` occurred.
-- An intermediate channel report contained `32 ok`, `782 discard-expected`, and `4 corrupt`, but
-  there was no four-second gameplay timeout. The process continued exchanging valid gameplay and
-  BAP traffic through at least `t=210805`.
-- Identity 1 decoded with `selector=0` and completed `route=local`. Identity 2 decoded with
-  `selector=1` and completed `route=authored`. This directly confirms that the primary activity is
-  missing its authored selector; the authored constructor itself can run for another identity.
+- Namespace 1 reached its 13-object native baseline at `t=102579`; slot 13 was pristine.
+- The one-view scheduler used the validated 203-bit wire and the create gate reached ready after
+  retaining 133 ms of settle age while reliable control work drained.
+- Attempt 1 left at `t=102943`. The client consumed 77 bits, queued unloaded RSAT `0x80C4FEAD`,
+  and returned the expected retry result.
+- Attempt 2 left at `t=104946`. The decoder returned `result=0 count=1` after 78 bits and emitted
+  a complete `entity-record` for entity `0x0010000D`.
+- The kind-0 create codec accepted `ADFEC480000000004900000006000000`, then namespace occupancy
+  advanced from 13 to 14 at `t=104979`. This is direct proof that the object was allocated.
+- The create buffer's trailing flag is zero. Ghidra confirms that this makes the update codec skip
+  the named `transform`, `parent`, and `stream-source` components and decode only the RSAT-defined
+  suffix. That explains why allocation did not produce a visible enemy.
+- There was no four-second gameplay timeout. An intermediate report did count 75 corrupt reads,
+  so packet hygiene remains under observation, but valid gameplay and BAP traffic continued.
+- The route logs are now interpreted correctly: identity 1 is the locally created posse and is
+  expected to use the local constructor; identity 2 is the public group join and successfully uses
+  the authored/remote constructor. Forcing identity 1 to the other branch is not the next step.
 
 ## Immediate plan
 
-### 1. Make the stationary create window reliable
+### 1. Recover the native update body without guessing
 
-- Preserve the settle age while an otherwise unchanged candidate waits behind reliable control
-  records. A create remains forbidden until the queue is acknowledged and empty.
-- Permit the guarded create as soon as the already-validated identity, baseline, candidate slot,
-  generations, one-view scheduler, and matching remote layout are simultaneously valid.
-- Do not relax the one-view restriction or send scheduler bodies during two-view transitions.
+The current build adds a read-only native re-encoding probe. After the next successful decoded
+record, it passes private copies to the game's own update encoder twice:
 
-Expected proof:
+- `plain-clean`: create flag zero, so RSAT-defined update scratch begins at offset zero;
+- `spatial-clean`: create flag one, with transform/parent/stream-source scratch reserved and the
+  same RSAT scratch moved to aligned offset `0x90`.
 
-- `scheduler-signature bits=203` appears only on genuine one-view updates.
-- `entity-create-out` occurs in the initial EDZ zone without player movement.
-- The first decode may return `result=2` while the RSAT loads.
-- A bounded retry eventually produces `count=1` and `stage=entity-record`.
-- Packet corruption does not accumulate and the gameplay channel remains connected.
+Both variants use an empty dirty mask and publish nothing. Their bit counts and bytes will identify
+the exact presence-bit boundary before any live transform is attempted.
 
-### 2. Decode the native entity update body
+Expected log stage: `sobject-native-update-probe`.
 
-After reliable object acceptance, use the existing `entity-record`, `sobject-create`, and
-`sobject-update` captures to recover:
+### 2. Publish a minimal spatial update
+
+After validating the native probe output:
 
 - world transform and position;
 - parent relationship;
@@ -91,8 +87,9 @@ After reliable object acceptance, use the existing `entity-record`, `sobject-cre
 - the initial native update and dirty-component masks;
 - whether a kind-1 squad relationship is additionally required.
 
-This milestone should make the allocated entity visible and placeable. It may still be a passive
-object rather than a functioning enemy.
+First send a create-plus-update whose named presence bits are all clear, then use the native encoder
+to generate an identity transform with only the transform dirty bit set. Keep retries bounded and
+do not hand-author compressed transform fields.
 
 ### 3. Complete safe scheduler support
 
@@ -103,11 +100,11 @@ object rather than a functioning enemy.
 
 ### 4. Start the authored enemy pipeline
 
-- Capture the identity-1 `activity-route-record` and its route selector.
-- Determine whether the client takes `route=local` or `route=authored`.
-- If it incorrectly selects the local route, reconstruct the missing complete authored descriptor.
-- Validate the selected activity-mode definition and confirm that the authored initializer and
-  downstream director return successfully.
+- Keep the already-correct local-posse and remote-public session constructors unchanged.
+- Trace which activity-host state publication starts the server-authored director after the client
+  has selected EDZ definition `0x0109ED6B` and enabled activity type 6.
+- Identify the missing server lifecycle/selection data between the working public group join and
+  encounter evaluation; the generic network-session route selector is not that content switch.
 - Use archived EDZ scenario `80B2F00A` and simple encounter `80B2F02A` as validation references,
   not as substitutes for live runtime RSAT values.
 
@@ -124,9 +121,27 @@ Once the director evaluates an encounter and creates native squad/member objects
 
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
-- Current code also retains a validated candidate's settle age behind reliable control records.
+- Stationary-create base: `b46dabce fix: retain entity settle age across control records`
+- Current working code adds the private native update re-encoding probe described above.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `0a38dbe9827f38700cf19237c9ab8b71ef7376076bce7fc89778a736b4bc9d35`
+- DLL SHA-256: `677570e2b90985323fd4eec09ba966c3f7e928807f0cb3cfe19eca024b63be8f`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.
+
+## Assessment of upstream commit `b8ccfb9b`
+
+The shared commit is useful as architecture, but it does not duplicate or replace this wire work:
+
+- its generic external codec accurately documents the create/update/remove envelope and will be a
+  useful refactoring target later;
+- the header explicitly says the codec has no caller yet;
+- its scriptless payload callbacks accept only kind-0 and emit zero payload bits;
+- `gameplay_external_body` and `server_default_entity` are disabled by default;
+- its start-activity parser stops at the unresolved nested selection record;
+- its physics host models future simulation, authority, and replication planning, but it does not
+  encode Destiny's RSAT, transform, parent, stream-source, squad, or enemy payloads.
+
+Cherry-picking the commit wholesale would mix a large independent architecture change into a
+validated runtime path without supplying the missing native payload. Reuse should be selective,
+after the exact client codec is recovered.

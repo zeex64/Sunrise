@@ -12,6 +12,7 @@
 #include "../../../core/logging/log.h"
 #include "coordinator/network_call_coordinator.h"
 #include "platform.h"
+#include "sobject_update_probe.h"
 
 namespace sunrise::client::hooks::network::entity_slot_probe {
 namespace {
@@ -172,6 +173,9 @@ void report_decoded_record(const void* recordsAddress, int count) noexcept {
                          core::log::Level::info,
                          {line.data(), static_cast<std::size_t>(written)});
     }
+    sobject_update_probe::probe_decoded_record({snapshot.create.data(), snapshot.createCopied},
+                                               {snapshot.update.data(), snapshot.updateCopied},
+                                               {snapshot.mask.data(), snapshot.mask.size()});
 }
 
 /** Reads the native reader without changing its cursor or accumulator. */

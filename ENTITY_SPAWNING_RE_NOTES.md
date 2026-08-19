@@ -1794,10 +1794,82 @@ the queue is outstanding and retains settle age only while the token, slot, gene
 and local/remote one-view layouts continue to agree. Transmission remains blocked until the reliable
 queue is acknowledged and empty, so no entity body can overtake topology records.
 
-The same run also resolved the authored-route branch. Identity 1's complete 0xA8 activity-start
-record had `selector=0` and completed the local constructor, while identity 2 had `selector=1` and
-completed the authored constructor. The missing enemy director is therefore tied to the primary
-activity record selecting the local route, not a universal failure of `FUN_141773200`.
+The same run also resolved the two observed session-constructor branches, but the later chronology
+corrects the initial interpretation. Identity 1's complete 0xA8 record has `selector=0` and creates
+the local `posse` activity session. Identity 2 has `selector=1` and creates the remote public
+`group_target` join. Both constructors return successfully, and those branches match their session
+roles. This selector is not evidence that the EDZ content director chose local instead of authored
+execution, so forcing identity 1 to `FUN_141773200` would be an unsupported and likely harmful
+change.
+
+### Stationary namespace-1 allocation
+
+Commit `b46dabce` completed the stationary-create milestone in the initial EDZ zone. Namespace 1
+reached 13 occupied native objects at `t=102579`, exposing pristine slot 13. The proven one-view
+scheduler carried 203 bits, local and remote layouts agreed, and the create gate reached ready at
+`t=102943` after retaining 133 ms of candidate settle age while reliable control records drained.
+
+Attempt one left at `t=102943`. The client consumed 77 bits, reported that RSAT `0x80C4FEAD` was not
+loaded, and returned result 2. Attempt two left at `t=104946`; the decoder consumed 78 bits and
+returned `result=0 count=1`. Its complete record was:
+
+```text
+entity=0x0010000D flags=0x0001
+create_size=16
+create=ADFEC480000000004900000006000000
+update_size=73
+mask=00000000000000000040000000000000
+update=000000000000000000000000000000000000000000000000000000000000803F00000000000000000000000000000000C59D1C81FF00FFFF0000000000000000000000000000000000
+```
+
+The kind-0 create codec accepted the RSAT in 40 bits, and namespace 1 advanced from 13 to 14
+occupied objects at `t=104979`, with slot 14 becoming the next candidate. This is direct allocation
+proof and no movement was required.
+
+The object is not visible. The create buffer's byte at +4 has trailing flag zero. Ghidra confirms
+that `FUN_141724fd0` tests this byte before calling the three named component decoders:
+
+- `FUN_141720780`: transform schema `0x80809F75`;
+- `FUN_1417203c0`: parent schema `0x8080949B`;
+- `FUN_1417201e0`: stream-source schema `0x8080949A`.
+
+With flag zero, all three are skipped and only `FUN_140A00970` decodes the RSAT-defined suffix.
+The encoder `FUN_141725140` is the exact inverse. Static schema metadata places transform scratch
+at `+0x00`, parent after `+0x20`, stream-source at aligned `+0x70`, and the RSAT-defined scratch at
+aligned `+0x90` when named components are enabled.
+
+The current diagnostic build uses those proven offsets without changing a live record. After one
+successful decode it gives private copies to the native update encoder with an all-clear dirty mask:
+once with the create flag clear and once with the flag set and the RSAT scratch moved to `+0x90`.
+The `sobject-native-update-probe` lines will provide exact native bit counts, flushed bytes, pending
+bits, and accumulator values for the plain and spatial-capable empty update shapes. Nothing from
+this probe is published to the gameplay channel.
+
+An intermediate channel report counted `14 ok, 290 discard-expected, 75 corrupt`, but there was no
+four-second gameplay timeout. Valid gameplay and BAP traffic continued. The activity-host failure
+at `t=173667` followed an activity-host change, and the later failures at shutdown were ordinary
+session teardown; neither coincided with the accepted create.
+
+### Comparison with upstream commit b8ccfb9b
+
+The shared `b8ccfb9b80f072ae76cd84491d00c7310cd76287` commit is a large independent physics-host and
+replication architecture change, not an implementation of the native sobject payload now under
+test. Its generic external codec is useful because it formalizes the channel-2 entity envelope:
+13-bit slot plus four-bit incarnation, explicit create/update/remove/lifecycle/anchor flags, raw
+bubble handling, and type-specific baseline/update callbacks.
+
+It does not close the remaining boundary:
+
+- `external_entity_codec.h` says its four entry points have no caller yet;
+- the world coordinator's scriptless callbacks accept only kind-0 and emit no payload bits;
+- the corresponding feature gates are disabled by default;
+- the physics host models simulation and replication planning but never encodes RSAT-defined,
+  transform, parent, stream-source, squad, or enemy data;
+- its start-activity parser deliberately stops at the unresolved nested selection tail.
+
+The envelope implementation can be reused selectively after the real type payload is proven.
+Cherry-picking the full commit now would combine 273 files of unrelated architecture with the
+working scheduler path while still leaving the exact native payload empty.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -1850,84 +1922,35 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-Immediate stationary EDZ run:
-
-- Confirm the zero request logs `stage=translate result=paired source=activity-host`, with a
-  nonzero SOID distinct from the local account and normally equal to the newest public region
-  session. A nonzero platform identity must still log `source=account` and map to the local SOID.
-- `stage=account-soid-publish` should change to `h0=2 h1=2 nonzero=2`, with two distinct source
-  entries. Any `2/1`, duplicate SOIDs, or immediate return to `1/1` rejects the translation.
-- In `stage=account-soids`, require two distinct target SOIDs and find the host SOID in a
-  `cN[...]` connection summary. It must advance to the same live state as the local target. If the
-  host target remains state 1 or has no matching connection, stop the run within 20 seconds; there
-  is no reason to wait for the 91-second expiry.
-- If both targets remain live, stay in the initial zone for at least two minutes. There must be no
-  account timer countdown, peer-subscription validation failure, or world cleanup/disconnect.
-- Capture the expanded `view-readiness` line for token `...002`. Compare `active_count` and the
-  first eight `active=` slots with the public manager's `entity-slots occupied=` count. Determine
-  which baseline/create acknowledgment is supposed to clear slot 0.
-- `membership-native-profile` is not expected in a solo run. Retain the hook for a future real
-  multi-peer capture; do not wait on it now.
-- The run may stop after several `account-soids` samples and one expanded pending readiness line.
-
-1. Load EDZ and confirm revision 2 still consumes 30,992 bits while the `PUB80.80` citizen join is
-   pending, but descriptor-bearing keepalives do not repeat every pump. The first delivered body
-   should report the PUB80 group with `group_published=1`, `group_settled=0`, and `ready=0` until
-   both view bind and `activityhost result=queued`. Exactly one later body should report `settle=1`
-   and subsequent bodies should retain `group_settled=1`. There must be no ambassador-zero abort.
-2. Reproduce a public-zone handoff in which the older view finishes after the newer one. The late
-   completion may retire the old group once, but it must not generate a rapid stream of
-   `reason=region` revisions or make the new group's `group_settled` value regress.
-3. Confirm a transition is never stopped and its target group gracefully left before the matching
-   server `activityhost result=queued`. There must be no immediate same-region transition restart,
-   `previous target group session was not yet disconnected`, or duplicate managed-session warning.
-   Re-enter a previously visited public region as part of this check: it must receive a new
-   descriptor-bearing membership and must not spin through same-region transition tokens.
-4. If `network_update` stalls again, read the first `stage=network-hitch` line. The new
-   `managed=active/entered/returned/thread` fields distinguish a stall inside `FUN_14175E520` from
-   another child of `network_update`.
-5. Cross one EDZ public-zone boundary and confirm multi-view transitions now keep the channel alive:
-   scheduler output should disappear while `scheduler[views=2]`, reliable reports should remain at
-   `drop=0`, and no four-second `channel-manager-connected-timeout` should follow.
-6. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
-   `restart=1`, followed by ordinary stages 1 through 5. If local and remote both pause at stage 4,
-   confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
-7. Remain in the initial zone while its first entity namespace finishes native baseline
-   population; movement must no longer be required and the namespace does not have to equal 2.
-   The expected first send is namespace 1 with `bootstrap=1` before PUBLIC TARGET adds a second
-   scheduler view.
-8. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
-   directly, without waiting for unrelated BAP or zone-transition traffic.
-9. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
-   and that its `entity-view` local and remote layouts are identical immediately beforehand.
-10. Use the captured `stage=entity-record` from the successful 78-bit create to identify the
-   baseline update buffer's transform, parent, stream-source, and RSAT-defined regions.
-11. Read `sobject-update` captures to identify which named components are present in an initial
-   native update and separate their bit spans from the RSAT-defined suffix.
-12. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
-   successfully created enemy.
-13. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
-   sobject is accepted; do not assume the squad codec can create the underlying native squad.
-14. On the next EDZ load, capture all `stage=activity-route-record` and `stage=activity-route`
-   lines. The record line now includes bounded fields `f00..a3` and the complete 0xA8 `bytes=`
-   exemplar needed to populate parameter 13. Identity 1 with `selector=0 route=local` proves the
-   decoded start record chose the wrong branch. A nonzero selector followed by
-   `route=authored called` without `ok` localizes a stall inside its native initializer;
-   `route=authored result=ok` moves the next boundary downstream to authored component/director
-   startup.
-15. Capture one `stage=activity-mode`, its following
-   `stage=activity-mode-definition`, and the distinct `stage=activity-type` pairs. Compare
-   `source`, `destination`, and `element` with service 6's `from_activity=8`, `activity=8`, and absent
-   `element=-1`. A failed definition, implausible index, or disabled type is the first direct
-   evidence of an incomplete global-state descriptor; a successful definition plus enabled type
-   means the missing director startup is downstream.
-16. Validate the authored-content paper's identity-1 mode switch at runtime, then locate
-   or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
-   and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
-17. If a retail packet comparison becomes available, first verify that the pcap itself contains
-   the UDP gameplay datagrams. Capture on the game PC before launch and retain the initial
-   handshake plus the first zone load; a NetDuma connection-table export provides only counters
-   and cannot be used to recover entity framing.
+1. Run the current build once in the initial EDZ zone without moving. Confirm the existing bounded
+   create reaches `result=0 count=1`, then capture both `stage=sobject-native-update-probe` lines.
+   `plain-clean` must complete without a fault. `spatial-clean` should complete with exactly three
+   additional named-component presence bits before the same RSAT-defined suffix.
+2. Reconstruct both probe bitstreams from their flushed bytes, pending-bit count, and accumulator.
+   Add a create-plus-update experiment using only the native-produced all-clean update. This first
+   validates the outer create+update flag and payload boundary; it should not be expected to render.
+3. Extend the private native probe with an identity transform and only the transform dirty bit set.
+   Keep parent and stream-source absent. Publish the native-produced payload only after its encoder
+   result, mask advancement, and bit count are internally consistent.
+4. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
+   passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
+   required by actual enemies; object allocation alone does not start AI.
+5. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
+   suppressing scheduler output during two-view transitions, and treat any four-second timeout or
+   new corrupt-read burst as a framing regression.
+6. Trace the activity-host lifecycle after the already-successful EDZ mode selection
+   (`definition=0x0109ED6B`, activity type 6) and public remote-session constructor. Identify which
+   missing host state or server publication starts director/encounter evaluation. Do not modify the
+   correct local-posse versus remote-public route selectors.
+7. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
+   squad `0x80B2E9A2` only to validate authored relationships. None is interchangeable with the
+   runtime sobject RSAT field.
+8. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
+   exact native body. Its physics host and activity receipts can then become useful downstream,
+   after visible entity replication is proven.
+9. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
+   before activity launch through initial zone load. The existing NetDuma file contains counters,
+   not entity packets.
 
 ## Build and verification
 
