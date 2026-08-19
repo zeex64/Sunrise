@@ -1738,6 +1738,17 @@ signature became valid at `t=67691`, but the next region queued control records 
 only about 134 ms. The pristine-only settle interval is therefore 100 ms; every identity, baseline,
 slot, generation, signature, scheduler-layout, and settled-control guard remains unchanged.
 
+The next run validated that sequence without movement. Token `0x9EAA300100200002` published
+`replication-ready` at stage four, its remote one-view scheduler converged, the gate settled for
+133 ms, and the first create left at `t=67858` for namespace 1 slot 13. Native consumed 77 bits and
+returned result 2, while retail named the remaining condition directly: RSAT `0x80C4FEAD` was not
+loaded and the packet could not yet decode. The intended two-second retry never left because a new
+local overlap view changed the scheduler to multi-view; the old retry path re-synchronized to that
+unsupported local layout and jumped to the attempt limit. The client remote scheduler remained the
+same accepted one-view token throughout. The selected create now caches that exact one-view wire
+signature and validates the unchanged token, candidate slot/generations, remote signature, remote
+view count, key, and tag before each bounded retry. It does not publish a multi-view layout.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only

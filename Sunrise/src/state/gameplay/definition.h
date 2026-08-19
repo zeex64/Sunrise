@@ -229,6 +229,8 @@ struct PeerLink {
     std::array<ViewSignature, kSessionsPerLink> views{};
     /** Client scheduler signature. Empty scheduler output is refused until this is present. */
     SchedulerSignature schedulerSignature{};
+    /** Exact one-view scheduler snapshot retained for retries of the selected create. */
+    SchedulerSignature entityCreateScheduler{};
     /** Bound view token and pristine slot selected by the first guarded entity-create attempt. */
     std::uint64_t entityCreateToken{};
     std::uint16_t entityCreateSlot{};

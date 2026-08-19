@@ -519,6 +519,53 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
+/**
+ * Rebuilds the exact selected create against the one-view layout the client already accepted.
+ * Local overlap views may appear while the RSAT loads, but the client's remote scheduler remains
+ * on this cached layout until this host successfully sends a different signature.
+ */
+[[nodiscard]] bool prepare_entity_retry(const state::gameplay::PeerLink& peer,
+                                        const SelectedReplicationView& selected,
+                                        EntityCreatePlan& output) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    const state::gameplay::SchedulerSignature& scheduler = peer.entityCreateScheduler;
+    if (peer.entityCreateAttempts == 0 || peer.entityCreateToken == 0 || !selected.present
+        || selected.signature.token != peer.entityCreateToken || !selected.capturePresent
+        || !scheduler.present || scheduler.viewCount != kProvenSchedulerViewCount
+        || scheduler.wireBits == 0) {
+        return false;
+    }
+
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
+    if (!capture.candidatePresent || capture.namespaceId < 0 || capture.availableCount == 0
+        || capture.schedulerKey != capture.token || capture.token != peer.entityCreateToken
+        || capture.slot != peer.entityCreateSlot
+        || capture.handleGeneration != peer.entityCreateHandleGeneration
+        || capture.reservedGeneration != 0 || capture.objectGeneration != 0
+        || !capture.schedulerRemoteSignatureValid
+        || capture.schedulerRemoteSignature != scheduler.value
+        || capture.schedulerRemoteViewCount != scheduler.viewCount
+        || capture.schedulerRemoteViewKeys[0] != scheduler.views[0].key
+        || capture.schedulerRemoteViewTags[0] != scheduler.views[0].tag
+        || scheduler.views[0].key != capture.schedulerKey
+        || scheduler.views[0].tag != capture.schedulerTag) {
+        return false;
+    }
+
+    output.token = capture.token;
+    output.schedulerKey = capture.schedulerKey;
+    output.schedulerTag = capture.schedulerTag;
+    output.rsat = kFirstEntityRsat;
+    output.slot = capture.slot;
+    output.handleGeneration = capture.handleGeneration;
+    output.objectGeneration = kFirstObjectGeneration;
+    output.viewIndex = 0;
+    output.namespaceId = capture.namespaceId;
+    output.present = true;
+    return true;
+}
+
 /** Captures one diagnostic without moving any native or peer state. Callers hold the peer lock. */
 [[nodiscard]] EntityCreateGateReport
 capture_entity_create_gate(const state::gameplay::PeerLink& peer,
@@ -1562,6 +1609,7 @@ bool remote_address(std::uint64_t sessionId,
 
 /** Clears the retry state when the selected per-session replication view changes. */
 static void reset_entity_create(state::gameplay::PeerLink& peer) noexcept {
+    peer.entityCreateScheduler = {};
     peer.entityCreateToken = 0;
     peer.entityCreateSlot = 0;
     peer.entityCreateHandleGeneration = 0;
@@ -1736,9 +1784,7 @@ void service(std::uint64_t now) noexcept {
         peer.outboundHeadPresent = true;
         peer.lastTick = now;
         if (!firstAttempt) {
-            (void)synchronise_scheduler_layout(peer, selected);
-            EntityCreateGate retryGate = EntityCreateGate::attempted;
-            prepared = prepare_entity_create(peer, selected, candidate, retryGate);
+            prepared = prepare_entity_retry(peer, selected, candidate);
         }
         const bool sameAttempt = entityRetryDue && prepared
                                  && candidate.token == peer.entityCreateToken
@@ -1746,6 +1792,7 @@ void service(std::uint64_t now) noexcept {
                                  && candidate.handleGeneration == peer.entityCreateHandleGeneration;
         if (entityFirstDue || sameAttempt) {
             if (firstAttempt) {
+                peer.entityCreateScheduler = peer.schedulerSignature;
                 peer.entityCreateToken = candidate.token;
                 peer.entityCreateSlot = candidate.slot;
                 peer.entityCreateHandleGeneration = candidate.handleGeneration;
@@ -1758,6 +1805,9 @@ void service(std::uint64_t now) noexcept {
             peer.entityCreateAttempts = kEntityCreateAttemptLimit;
         }
         owed[count] = peer;
+        if (entityCreates[count].present) {
+            owed[count].schedulerSignature = peer.entityCreateScheduler;
+        }
         ++count;
     }
     ReleaseSRWLockExclusive(&g_lock);
