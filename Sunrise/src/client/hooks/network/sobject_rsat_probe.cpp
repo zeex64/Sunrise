@@ -11,6 +11,7 @@
 
 #include "../../../core/logging/log.h"
 #include "../../../state/gameplay/definition.h"
+#include "sobject_update_probe.h"
 
 namespace sunrise::client::hooks::network::sobject_rsat_probe {
 namespace {
@@ -37,6 +38,7 @@ using Ready = bool(__fastcall*)(std::uint32_t);
 std::atomic_uintptr_t g_queue{};
 std::atomic_uintptr_t g_ready{};
 std::atomic<State> g_state{State::unresolved};
+std::atomic_bool g_updateReady{};
 std::atomic_flag g_polling = ATOMIC_FLAG_INIT;
 
 /** Reports only state transitions, so the hot view lookup does not generate repeated lines. */
@@ -104,9 +106,9 @@ resolve(const void* decoderAddress, std::uintptr_t& queue, std::uintptr_t& ready
 } // namespace
 
 void poll_first_entity(const void* createDecoder) noexcept {
-    if (g_state.load(std::memory_order_acquire) == State::ready
-        || g_state.load(std::memory_order_relaxed) == State::fault
-        || g_polling.test_and_set(std::memory_order_acquire)) {
+    const State current = g_state.load(std::memory_order_acquire);
+    if ((current == State::ready && g_updateReady.load(std::memory_order_acquire))
+        || current == State::fault || g_polling.test_and_set(std::memory_order_acquire)) {
         return;
     }
 
@@ -130,7 +132,13 @@ void poll_first_entity(const void* createDecoder) noexcept {
         }
         if (reinterpret_cast<Ready>(ready)(state::gameplay::kFirstEntityRsat)) {
             g_state.store(State::ready, std::memory_order_release);
-            report("ready");
+            if (current != State::ready) {
+                report("ready");
+            }
+            if (sobject_update_probe::prime_first_entity_update(
+                    state::gameplay::kFirstEntityRsat)) {
+                g_updateReady.store(true, std::memory_order_release);
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_state.store(State::fault, std::memory_order_release);
@@ -140,13 +148,15 @@ void poll_first_entity(const void* createDecoder) noexcept {
 }
 
 bool first_entity_ready() noexcept {
-    return g_state.load(std::memory_order_acquire) == State::ready;
+    return g_state.load(std::memory_order_acquire) == State::ready
+           && g_updateReady.load(std::memory_order_acquire);
 }
 
 void reset() noexcept {
     g_queue.store(0, std::memory_order_relaxed);
     g_ready.store(0, std::memory_order_relaxed);
     g_state.store(State::unresolved, std::memory_order_relaxed);
+    g_updateReady.store(false, std::memory_order_relaxed);
     g_polling.clear(std::memory_order_relaxed);
 }
 

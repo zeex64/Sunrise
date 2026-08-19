@@ -2293,6 +2293,24 @@ transform, which the following tick sends as an update-only record to the same s
 for the occupancy probe to publish. Both send-time checks fail closed as soon as root token
 `...0001` expands the local scheduler.
 
+That first pre-ACK run decoded the current-view create successfully. At `t=80823`, namespace 2
+consumed 86 entity bits and produced entity `0x00200000`, cell `0x000B`, flags `0x0001`, with the
+accepted shared-Vandal profile `4B205B8101000000AC2200005C000000`. Slot 0 was occupied by
+`t=80856`, and the private native encode recovered the exact 130-bit player-X+3 transform. The
+server sent the update-only record at `t=80856`; the root membership added token `...0001` to the
+local scheduler during the same tick, however, and no third handler epoch or update record ran.
+There was also no target-RSAT native registration or glue dispatch for the create-only slot. Thus
+the correct current view and cell now accept allocation, but the split update still loses the
+scheduler race before native construction. The later interval contained one corrupt read and zero
+lost outgoing packets.
+
+The current candidate pre-encodes the update before the two-view window. Once RSAT `0x815B204B` is
+resident and a player position exists, it invokes the already-proven native update encoder against
+the exact accepted create profile, identity transform baseline, and observed mask metadata
+`0x00004000`. Readiness now requires the retained output to be exactly 130 bits. The first Basin
+record consumes that capture as a combined create/update and marks the staged follow-up complete,
+so root-view registration cannot split the creation from its transform.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2344,15 +2362,16 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ, transition once from Town into Basin, then wait. Require the 287-bit empty probe's
-   complete ten-call epoch. The create should leave on the next service tick, before its direct
-   transport ACK arrives.
+1. Load EDZ, transition once from Town into Basin, then wait. Require the preload variant to produce
+   130 bits, followed by the 287-bit empty probe's complete ten-call epoch. The atomic create should
+   leave on the next service tick, before its direct transport ACK arrives.
 2. Require the first `entity-create-out` on token `...0003`, namespace 2, view 1, slot 0, region 24,
    bubble 3, cell 11. Confirm its complete handler epoch, decoded cell `0x000B`, target registration,
    glue-table `status=bound`, and occupancy.
-3. If the native baseline yields the current 130-bit update in time, require an
-   `entity-update-out` for the same slot 0/token/view/cell and a decoded nearby transform. Neither
-   two-view send retries.
+3. Require `update=inline update_bits=130 combined=1`, a 216-bit entity-list decode, flags
+   `0x0003`, the intended nearby transform, target native registration, and a bound glue-table
+   postcondition. No separate `entity-update-out` is expected and the two-view create does not
+   retry.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
    biped's parent, stream-source, and RSAT suffix before changing the payload. Do not guess them.
 5. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
@@ -2386,7 +2405,11 @@ Committed as `2abfb562 test: create Vandal in current Basin view`.
 
 Current pre-ACK Basin Release candidate SHA-256:
 `a9afb46a3bd8e273f7346f312c333fcef18d61f2985bec692e157e922db5d3d6`.
-Committed as `test: use proven two-view window for Vandal` (this checkpoint).
+Committed as `12968ec2 test: use proven two-view window for Vandal`.
+
+Current atomic Basin Release candidate SHA-256:
+`cba76fa8b262b02ff4453560ae5f7456ad00715f09db318bbf524f10fd76a9c2`.
+Committed as `test: atomically create current-view Vandal` (this checkpoint).
 
 After manual deployment, inspect:
 

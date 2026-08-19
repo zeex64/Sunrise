@@ -30,6 +30,12 @@ void probe_decoded_record(std::span<const std::byte> create,
                           std::span<const std::byte> update,
                           std::span<const std::byte> mask) noexcept;
 
+/**
+ * Encodes the proven shared-Vandal spatial template at player X+3 before its first create.
+ * @return True only when the native encoder produced the exact retained 130-bit update.
+ */
+[[nodiscard]] bool prime_first_entity_update(std::uint32_t rsat) noexcept;
+
 /** Moves out the exact nearby-player update captured for `rsat`; each capture is consumed once. */
 [[nodiscard]] bool take_nearby_player_update(std::uint32_t rsat,
                                              NearbyUpdateCapture& output) noexcept;

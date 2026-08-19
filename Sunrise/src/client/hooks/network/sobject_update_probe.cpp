@@ -37,6 +37,7 @@ constexpr std::size_t kTransformSecondFloat4Offset = 0x10;
 
 std::array<std::atomic_uint64_t, kSeenCapacity> g_seen{};
 std::atomic_bool g_decodedRecordProbed{};
+std::atomic_bool g_preloadAttempted{};
 SRWLOCK g_nearbyUpdateLock{SRWLOCK_INIT};
 NearbyUpdateCapture g_nearbyUpdate{};
 
@@ -543,6 +544,78 @@ void probe_decoded_record(std::span<const std::byte> create,
     }
 }
 
+/** @return True when the requested retained native update is already available. */
+[[nodiscard]] bool nearby_update_present(std::uint32_t rsat) noexcept {
+    AcquireSRWLockShared(&g_nearbyUpdateLock);
+    const bool present =
+        g_nearbyUpdate.present && g_nearbyUpdate.rsat == rsat && g_nearbyUpdate.bitCount == 130;
+    ReleaseSRWLockShared(&g_nearbyUpdateLock);
+    return present;
+}
+
+bool prime_first_entity_update(std::uint32_t rsat) noexcept {
+    constexpr std::uint32_t kSharedVandalRsat = 0x815B204B;
+    constexpr std::uint16_t kSharedVandalUpdateBits = 130;
+    if (rsat != kSharedVandalRsat) {
+        return false;
+    }
+    if (nearby_update_present(rsat)) {
+        return true;
+    }
+
+    const player::position::Snapshot player = player::position::snapshot();
+    if (!player.present || g_preloadAttempted.exchange(true, std::memory_order_relaxed)) {
+        return false;
+    }
+
+    // Exact accepted shared-Vandal profile from the namespace-2 Basin record. The native mask's
+    // inline bits are clean and +0x08 retains the observed 0x4000 schema metadata.
+    constexpr std::array<std::byte, kCreateBufferSize> kCreate{
+        std::byte{0x4B},
+        std::byte{0x20},
+        std::byte{0x5B},
+        std::byte{0x81},
+        std::byte{0x01},
+        std::byte{0x00},
+        std::byte{0x00},
+        std::byte{0x00},
+        std::byte{0xAC},
+        std::byte{0x22},
+        std::byte{0x00},
+        std::byte{0x00},
+        std::byte{0x5C},
+        std::byte{0x00},
+        std::byte{0x00},
+        std::byte{0x00},
+    };
+    alignas(16) std::array<std::byte, kSyntheticComponentCapacity> component{};
+    alignas(16) std::array<std::byte, kMaskCaptureSize> mask{};
+    constexpr std::uint32_t kMaskMetadata = 0x00004000;
+    std::memcpy(mask.data() + sizeof(std::uint64_t), &kMaskMetadata, sizeof kMaskMetadata);
+
+    // The accepted zero baseline is an identity transform with translation in the second float4.
+    bool valid = set_component_float(component, 0x0C, 1.0F);
+    constexpr float kNearbyOffset = 3.0F;
+    for (std::size_t axis = 0; axis < player.position.size(); ++axis) {
+        const float value = player.position[axis] + (axis == 0 ? kNearbyOffset : 0.0F);
+        valid = valid
+                && set_component_float(
+                    component, kTransformSecondFloat4Offset + axis * sizeof(float), value);
+    }
+    if (!valid) {
+        return false;
+    }
+
+    encode_synthetic_variant(
+        "spatial-transform-player-x3-preload", kCreate, component, mask, 0, true);
+    return nearby_update_present(rsat) && [&]() noexcept {
+        AcquireSRWLockShared(&g_nearbyUpdateLock);
+        const bool exact = g_nearbyUpdate.bitCount == kSharedVandalUpdateBits;
+        ReleaseSRWLockShared(&g_nearbyUpdateLock);
+        return exact;
+    }();
+}
+
 bool take_nearby_player_update(std::uint32_t rsat, NearbyUpdateCapture& output) noexcept {
     output = {};
     AcquireSRWLockExclusive(&g_nearbyUpdateLock);
@@ -560,6 +633,7 @@ void reset() noexcept {
         seen.store(0, std::memory_order_relaxed);
     }
     g_decodedRecordProbed.store(false, std::memory_order_relaxed);
+    g_preloadAttempted.store(false, std::memory_order_relaxed);
     AcquireSRWLockExclusive(&g_nearbyUpdateLock);
     g_nearbyUpdate = {};
     ReleaseSRWLockExclusive(&g_nearbyUpdateLock);

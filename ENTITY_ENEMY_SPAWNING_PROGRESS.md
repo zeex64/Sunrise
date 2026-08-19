@@ -274,26 +274,40 @@ The slot-14 atomic run then completed the current wire milestone:
   ten-call epoch yields the native 130-bit nearby transform, the next tick sends an update-only
   record to the same slot. Both packets recheck the live layout at send time and fail closed after
   root token `...0001` joins.
+- That pre-ACK create succeeded at `t=80823`. Namespace 2 decoded entity `0x00200000`, cell 11,
+  flags `0x0001` after exactly 86 bits, and slot 0 became occupied. The decoded baseline produced
+  the exact 130-bit player-X+3 transform. The separate update left at `t=80856`, but the root
+  membership expanded the live local scheduler from two views to three on that same tick. No third
+  handler epoch or update record followed. The create-only slot also produced no target native
+  registration or glue bind, so this run still had no renderable Vandal. The later health interval
+  reported one corrupt read without packet loss.
+- The new candidate removes the second packet. After RSAT residency and player-position readiness,
+  it asks the game's native encoder to prebuild the transform from the exact accepted shared-Vandal
+  profile (`4B205B8101000000AC2200005C000000`), identity baseline, and observed mask metadata
+  `0x00004000`. The entity gate opens only if this produces exactly 130 bits. The first Basin create
+  then carries that update atomically and suppresses the staged follow-up.
 
 ## Immediate plan
 
-### 1. Test the pre-ACK current-Basin create
+### 1. Test the atomic current-Basin create
 
-- Load EDZ, transition from Town to Basin once, and wait. First require the already-proven 287-bit
-  probe and complete ten-call handler trace. The create should now leave on the next service tick,
+- Load EDZ, transition from Town to Basin once, and wait. First require
+  `variant=spatial-transform-player-x3-preload` with `bits=130`, then the already-proven 287-bit
+  probe and complete ten-call handler trace. The create should leave on the next service tick,
   before the probe's transport acknowledgement.
 - The next `entity-create-out` must name token `...0003`, namespace 2, view 1, slot 0, region 24,
-  bubble 3, and cell 11. Any old token, namespace 1, or cell 145 is a hard regression.
-- Require the create packet's ten-call handler epoch, `entity-record cell=0x000B flags=0x0001`, a
+  bubble 3, cell 11, `update=inline`, `update_bits=130`, and `combined=1`. Any old token,
+  namespace 1, or cell 145 is a hard regression.
+- Require the create packet's ten-call handler epoch, `entity-record cell=0x000B flags=0x0003`, a
   target-RSAT registration, `sobject-bind-dispatch status=bound`, and slot-0 occupancy.
 
-### 2. Observe the immediate nearby transform
+### 2. Observe the nearby Vandal
 
-- If the baseline produces the 130-bit native nearby-player update before the live local layout
-  changes, expect `entity-update-out` for the same slot 0 and `update_bits=130`.
-- Require the update record on entity slot 0 with cell `0x000B`, the intended nearby transform,
-  target registration, and a completed glue-table bind. There are no two-view retries if either
-  bounded send fails.
+- The decoded atomic record must retain the intended player-X+3 transform and add no
+  missing-update assertion. There is no `entity-update-out` in this build.
+- If target native registration and `sobject-bind-dispatch status=bound` occur but the object is
+  still invisible, the remaining issue is downstream render/stream-source state rather than
+  scheduler timing, cell ownership, update atomicity, or glue binding.
 
 ### 3. Resolve rendering, then AI
 
@@ -333,7 +347,8 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Current-view probe base: `c3332f69 test: validate current EDZ replication view`.
 - Two-view tail proof: `83cf6b0c test: isolate two-view scheduler tails`.
 - Previous bounded spawn test: `2abfb562 test: create Vandal in current Basin view`.
-- Current pre-ACK Basin test: `test: use proven two-view window for Vandal` (this checkpoint).
+- Pre-ACK Basin test: `12968ec2 test: use proven two-view window for Vandal`.
+- Current atomic Basin test: `test: atomically create current-view Vandal` (this checkpoint).
 - The tested path preloads shared Vandal RSAT `0x815B204B`, sends the 86-bit slot-13 staged control,
   then sends the 216-bit slot-14 atomic create/update with map-global cell `0x91` and the exact
   native nearby-player transform. Both allocate; neither is visible.
@@ -350,6 +365,8 @@ Once the director evaluates an encounter and creates native squad/member objects
   `69ceeaee5d60b92091f97331ee0d21f2bd92d9185b5661e6ebcaf48de5fb096d`.
 - The current pre-ACK Basin Release candidate has SHA-256
   `a9afb46a3bd8e273f7346f312c333fcef18d61f2985bec692e157e922db5d3d6`.
+- The current atomic Basin Release candidate has SHA-256
+  `cba76fa8b262b02ff4453560ae5f7456ad00715f09db318bbf524f10fd76a9c2`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

@@ -939,6 +939,14 @@ write_scheduler_signature(bits::Writer& writer,
         return false;
     }
 
+    client::hooks::network::sobject_update_probe::NearbyUpdateCapture update{};
+    if (!client::hooks::network::sobject_update_probe::take_nearby_player_update(
+            state::gameplay::kFirstEntityRsat, update)
+        || update.bitCount != kFirstEntityUpdateBits) {
+        gate = EntityCreateGate::rsat;
+        return false;
+    }
+
     output.token = capture.token;
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;
@@ -948,6 +956,9 @@ write_scheduler_signature(bits::Writer& writer,
     output.objectGeneration = kFirstObjectGeneration;
     output.viewIndex = static_cast<std::uint8_t>(match);
     output.namespaceId = capture.namespaceId;
+    output.updateWire = update.wire;
+    output.updateBits = update.bitCount;
+    output.combinedCreate = true;
     output.present = true;
     gate = EntityCreateGate::ready;
     return true;
@@ -2573,6 +2584,9 @@ void service(std::uint64_t now) noexcept {
                 peer.entityCreateToken = candidate.token;
                 peer.entityCreateSlot = candidate.slot;
                 peer.entityCreateHandleGeneration = candidate.handleGeneration;
+                if (candidate.combinedCreate) {
+                    peer.entityFollowupSent = true;
+                }
             }
             ++peer.entityCreateAttempts;
             peer.lastEntityCreate = now;
