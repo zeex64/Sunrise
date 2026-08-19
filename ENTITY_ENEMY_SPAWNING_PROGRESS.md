@@ -17,8 +17,8 @@ squads, and encounters before publishing native objects through the replication 
 | --- | --- |
 | Gameplay session and views | Working and substantially stabilized |
 | Replication scheduler | One-view layout understood; the 203-bit framing correction is validated |
-| Native entity creation | A stationary 78-bit create now allocates an object reliably after one resource-load retry |
-| Entity placement and updates | Default transform wire recovered; transform-bearing create is ready for runtime validation |
+| Native entity creation | A stationary create allocates reliably; exact Simulated Vandal RSAT `0x815B5422` is now selected |
+| Entity placement and updates | Old-RSAT transform is proven; Vandal-specific component tail must now be measured |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
 
 ## Confirmed progress
@@ -127,22 +127,29 @@ The first live nearby-placement run was accepted but remained invisible:
   selects global/default cell `0xFFFF`, while a zero bit inherits the active view's current cell.
 - Current-cell inheritance decoded successfully after the predicted 189 bits, but the active view
   context itself supplied `cell=0xFFFF`; the object remained invisible and no assert occurred.
-- The next build privately probes the four remaining valid component bits: parent, stream source,
-  and the two RSAT-defined fields. These probes do not alter the accepted live object.
+- Parent and stream-source private probes encoded successfully in 49 and 18 bits. Marking the first
+  old-RSAT field dirty raised a guarded `dirty bit inconsistency detected` assertion, while the
+  second produced no payload beyond the five clean presence bits. This is not evidence that either
+  field should be sent.
+- Package decoding then linked the name-map definition `0x815B5420` (`Simulated Vandal`, class
+  `0x80809C0F`) to `0x815B5422` at definition offset `+0x88`. The latter is class `0x80809BB6`,
+  points back to `0x815B5420` at `+0x08`, and is therefore the exact create-wire RSAT.
+- The Vandal RSAT carries 55 serialized component descriptors versus 2 in the old RSAT. The old
+  112-bit transform update cannot frame that suffix safely. The next build sends one bounded
+  Vandal create with no update and logs its native derived create profile.
 
 ## Immediate plan
 
-### 1. Validate the first nearby visible placement
+### 1. Validate the Simulated Vandal create profile
 
-The current build publishes the exact native `player X + 3` transform captured above and inherits
-the active view's spatial cell. The predicted record is 189 bits with flags `0x0003`, a 217-byte
-update scratch, and transform dirty. It also asks the native encoder to measure each remaining
-component against a private copy of that scratch. It still emits only one entity and retains the
-existing bounded loader retry behavior.
+The current build selects RSAT `0x815B5422`, preserves the spatial create flag, and deliberately
+publishes no update. It still emits only one entity and retains the existing bounded loader retry
+behavior. The expected evidence is an attempt-one resource queue followed by one accepted
+create-only record whose `+0x08/+0x0C` fields reveal the Vandal's derived scratch layout.
 
 ### 2. Publish one bounded position
 
-After validating the transform probe output, recover:
+After validating the Vandal create profile, recover:
 
 - world transform and position;
 - parent relationship;
@@ -151,9 +158,9 @@ After validating the transform probe output, recover:
 - the initial native update and dirty-component masks;
 - whether a kind-1 squad relationship is additionally required.
 
-Confirm whether RSAT `0x80C4FEAD` becomes visible at the captured location. If it allocates but does
-not render, inspect the decoded transform and object lifecycle/component requirements before trying
-another RSAT. Keep retries bounded and do not hand-author compressed transform fields.
+Measure the Vandal's all-clean and transform-dirty body through the native encoder, then place it at
+the already-proven nearby-player position. Keep retries bounded and do not append the old RSAT's
+two-field suffix to the Vandal's 55-component profile.
 
 ### 3. Complete safe scheduler support
 
@@ -188,11 +195,11 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code publishes the exact 112-bit native transform for the captured point three
-  units beside the player, inherits the active view's spatial cell, and privately probes component
-  dirty bits 1 through 4.
+- Current working code sends one create-only Simulated Vandal sobject RSAT `0x815B5422`, inherits
+  the active view's spatial cell, and retains bounded load retries. It does not yet publish a
+  Vandal update.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `18d3a0771a86c774e7d87078be74b3a1f46d48dd0c7b91d3636e26d799018b7c`
+- DLL SHA-256: `05eac5a5d28369ec15f8cf433479957ed9dfef76f00bbd0cdc669279f32d823b`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

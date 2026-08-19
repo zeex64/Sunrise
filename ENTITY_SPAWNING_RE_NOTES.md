@@ -2002,6 +2002,28 @@ installed replication-schema asset tag. Their value is as package-graph anchors:
 squad/member definition with a known name, recover the enclosing squad and spawn-rule records, then
 capture or derive the corresponding runtime squad and sobject RSAT sequence.
 
+The Simulated Vandal entry closes that package boundary directly. `0x815B5420` resolves to package
+`0x06DA`, entry `0x1420` in `w64_activities_06da_5.pkg`. Its package class is `0x80809C0F`, and
+the decoded 49,236-byte definition stores `0x815B5422` at serialized offset `+0x88`. Entry
+`0x815B5422` is class `0x80809BB6`, is 1,856 bytes, and points back to definition `0x815B5420` at
+its own offset `+0x08`. Therefore `0x815B5422` is the exact sobject RSAT corresponding to the
+entity-name map's `Simulated Vandal`; `0x815B5420` itself must not be placed on the create wire.
+
+This RSAT is structurally much larger than the old `0x80C4FEAD` probe. Its serialized component
+count at `+0x30` is 55, versus 2 for the old 160-byte RSAT. Ghidra `FUN_140A00AA0` confirms that
+the native update codec iterates the RSAT runtime descriptor table and emits component-presence
+decisions from that table. The old 112-bit transform body consequently cannot be reused: it ends
+after two RSAT-defined clean fields and would leave the Vandal decoder inside its component tail.
+The next bounded build sends the Vandal create without an update, preserving the spatial create
+flag. A successful native decode will expose the Vandal-derived byte and bit layout in the existing
+16-byte `entity-record` create capture before any new update body is published.
+
+The final old-RSAT component probe also clarified what not to add. Parent encoded in 49 bits and
+stream-source in 18 bits, while marking the first RSAT-defined field dirty raised the game's
+guarded `dirty bit inconsistency detected` assertion. The second RSAT bit produced only the clean
+five-bit body. These results do not identify missing default data and are not carried into the
+Vandal experiment; the one-shot non-transform dirty probes have been removed.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2053,15 +2075,14 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the remaining-component probe once in the initial EDZ zone without moving. Confirm the
-   `spatial-parent-decoded`, `spatial-stream-source-decoded`, `spatial-rsat-field0-decoded`, and
-   `spatial-rsat-field1-decoded` lines all return without faults and capture their exact wires.
-2. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
-   passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
-   required by actual enemies; object allocation alone does not start AI.
-3. Use the native probe results to construct one bounded initial update containing the required
-   default RSAT fields. Add lifecycle or a separate squad record only if those fields still do not
-   make the sobject visible.
+1. Run the create-only Simulated Vandal RSAT `0x815B5422` once in the initial EDZ zone without
+   moving. Confirm the first attempt queues the resource, a bounded retry returns one decoded
+   record, and the record's 16-byte create profile contains stable derived `+0x08/+0x0C` values.
+2. Use that accepted Vandal profile and the native private encoder to measure its all-clean and
+   transform-bearing updates. Do not reuse the old RSAT's two-field suffix.
+3. Publish one Vandal transform at the captured nearby-player position only after its complete
+   native component tail is known. If the object renders but has no AI, capture or implement the
+   kind-1 squad/member relationship; sobject allocation alone need not start behavior.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.

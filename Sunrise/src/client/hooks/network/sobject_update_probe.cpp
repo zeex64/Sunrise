@@ -458,23 +458,6 @@ void probe_decoded_record(std::span<const std::byte> create,
     encode_synthetic_variant(
         "spatial-transform-decoded", spatialCreate, spatialComponent, nativeMask, 0);
 
-    // Ghidra shows exactly five top-level component presence decisions for this RSAT: transform,
-    // parent, stream-source, then two RSAT-defined fields. Probe each non-transform bit against
-    // the private decoded scratch so the next live payload can be assembled from native wire.
-    constexpr std::array<const char*, 4> kRemainingComponentVariants{
-        "spatial-parent-decoded",
-        "spatial-stream-source-decoded",
-        "spatial-rsat-field0-decoded",
-        "spatial-rsat-field1-decoded",
-    };
-    for (std::size_t index = 0; index < kRemainingComponentVariants.size(); ++index) {
-        encode_synthetic_variant(kRemainingComponentVariants[index],
-                                 spatialCreate,
-                                 spatialComponent,
-                                 nativeMask,
-                                 static_cast<std::int32_t>(index + 1));
-    }
-
     // Perturb each element of the transform's second float4 independently. These private calls
     // identify translation/auxiliary fields and recover exact native wire without touching the
     // object that the live decoder just accepted.
