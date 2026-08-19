@@ -161,6 +161,13 @@ The first live nearby-placement run was accepted but remained invisible:
 - Slot 13 became occupied, proving allocation. The same run later timed out with 65 corrupt reads,
   so the next build stops all create retries at that exact occupancy bit and sends only one staged
   update after a 500 ms settle period.
+- The first two-stage run exposed an earlier timing failure instead: the create left two
+  milliseconds after the world became fully enabled, while another public-region join began. Both
+  attempts stopped after the 19-bit handle, slot 13 stayed clear, and the channel accumulated 63
+  corrupt reads before recovery.
+- The create gate had retained its 100 ms pristine-bootstrap timer after remote scheduler
+  convergence. Bootstrap output now seeds only the empty scheduler. Convergence resets the timer,
+  and an entity create requires a fresh 500 ms of the fully agreed one-view layout.
 
 ## Immediate plan
 
@@ -225,7 +232,7 @@ Once the director evaluates an encounter and creates native squad/member objects
   active view's spatial cell, confirms the exact occupied slot, and then sends one native-encoded
   nearby-player update-only record after a 500 ms settle interval.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `4734b7ea45996b694da50ec6051aee69ffddea8be2ee5def450d3ebceca37894`
+- DLL SHA-256: `0b1fc18f1eb2785279967b5a2fa2572c7cf3ebbb8ef1fde2a0b157a562b5be6d`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

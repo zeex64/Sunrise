@@ -2077,6 +2077,19 @@ queue, and sends one update-only shortcut for that same handle. The update bytes
 the game encoder in the current run, so they follow the current player position instead of a
 hard-coded prior coordinate. Scheduler output remains absent from ordinary acknowledgements.
 
+The first two-stage test did not reach that update. Both create-only attempts returned `result=2`
+after the 19-bit entity handle and slot 13 remained clear (`occupied_low=0x00001FFF`). The first
+attempt left only two milliseconds after the retail world changed from initial instantiation to
+fully enabled, while the next public-region citizen join was also beginning. It accumulated 63
+corrupt reads before that gameplay channel reset; a later replacement channel reported zero.
+
+The server gate exposed a deterministic timing flaw: it latched the 100 ms bootstrap interval when
+the remote scheduler was still pristine, then retained that short interval after the remote layout
+became the agreed one-view signature. A create could therefore leave immediately at scheduler
+convergence during a world transition. Bootstrap now only seeds an empty scheduler body. Changing
+from pristine to agreed resets the candidate timer, and no entity body may leave until the agreed
+layout remains stable for a fresh 500 ms with an empty reliable-control queue.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only

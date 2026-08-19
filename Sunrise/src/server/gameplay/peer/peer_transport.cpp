@@ -89,8 +89,6 @@ constexpr std::uint64_t kEntityUpdateReadyInterval = 500;
 constexpr std::uint16_t kFirstEntityUpdateBits = 130;
 /** Reject a scheduler layout that only agrees for one transition sample. */
 constexpr std::uint64_t kEntityCreateReadyInterval = 500;
-/** A pristine one-view layout is stable for only ~134 ms before the next regional control burst. */
-constexpr std::uint64_t kEntityCreateBootstrapReadyInterval = 100;
 /** Keeps resource-readiness retries bounded even when the selected RSAT cannot load. */
 constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
 /** Runtime currently proves complete inbound acceptance only for one registered scheduler view. */
@@ -1878,19 +1876,18 @@ void service(std::uint64_t now) noexcept {
             } else {
                 if (peer.entityCreateReadyToken != candidate.token
                     || peer.entityCreateReadySlot != candidate.slot
-                    || peer.entityCreateReadyHandleGeneration != candidate.handleGeneration) {
+                    || peer.entityCreateReadyHandleGeneration != candidate.handleGeneration
+                    || peer.entityCreateReadyBootstrap != candidate.bootstrapScheduler) {
                     peer.entityCreateReadyToken = candidate.token;
                     peer.entityCreateReadySlot = candidate.slot;
                     peer.entityCreateReadyHandleGeneration = candidate.handleGeneration;
                     peer.entityCreateReadyBootstrap = candidate.bootstrapScheduler;
                     peer.entityCreateReadySince = now;
                 }
-                const auto readyInterval = peer.entityCreateReadyBootstrap
-                                               ? kEntityCreateBootstrapReadyInterval
-                                               : kEntityCreateReadyInterval;
                 if (!controlQueueSettled) {
                     gate = EntityCreateGate::controlQueue;
-                } else if (now - peer.entityCreateReadySince < readyInterval) {
+                } else if (candidate.bootstrapScheduler
+                           || now - peer.entityCreateReadySince < kEntityCreateReadyInterval) {
                     gate = EntityCreateGate::settling;
                 } else {
                     prepared = true;
