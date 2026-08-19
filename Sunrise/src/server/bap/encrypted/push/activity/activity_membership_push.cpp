@@ -154,29 +154,29 @@ bool append_membership_notification(Scratch& scratch,
     return encoded;
 }
 
-/** Records the region named by a transaction-staged citizen descriptor. */
-void stage_advertised_region(Session& session, std::int32_t region) noexcept {
+/** Records a region retired by a transaction-staged membership body. */
+void stage_settled_region(Session& session, std::int32_t region) noexcept {
     if (region < 0) {
         return;
     }
-    session.activityAdvertisedRegionStaged = region;
-    session.activityAdvertisedRegionStagedPresent = true;
+    session.activitySettledRegionStaged = region;
+    session.activitySettledRegionStagedPresent = true;
 }
 
-/** Publishes the transaction-staged advertised region after its frame reaches the caller. */
-void commit_staged_advertised_region(Session& session) noexcept {
-    if (!session.activityAdvertisedRegionStagedPresent) {
+/** Publishes the transaction-staged settled region after its frame reaches the caller. */
+void commit_staged_settled_region(Session& session) noexcept {
+    if (!session.activitySettledRegionStagedPresent) {
         return;
     }
-    session.activityAdvertisedRegion = session.activityAdvertisedRegionStaged;
-    session.activityAdvertisedRegionStaged = 0;
-    session.activityAdvertisedRegionStagedPresent = false;
+    session.activitySettledRegion = session.activitySettledRegionStaged;
+    session.activitySettledRegionStaged = 0;
+    session.activitySettledRegionStagedPresent = false;
 }
 
-/** Drops the transaction-staged advertised region with its discarded frame. */
-void discard_staged_advertised_region(Session& session) noexcept {
-    session.activityAdvertisedRegionStaged = 0;
-    session.activityAdvertisedRegionStagedPresent = false;
+/** Drops the transaction-staged settled region with its discarded frame. */
+void discard_staged_settled_region(Session& session) noexcept {
+    session.activitySettledRegionStaged = 0;
+    session.activitySettledRegionStagedPresent = false;
 }
 
 } // namespace sunrise::server::bap::encrypted::push::activity

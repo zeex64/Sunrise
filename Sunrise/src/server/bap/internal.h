@@ -90,15 +90,15 @@ struct Session {
      */
     bool activityJoinedForeignSession{};
     /**
-     * Region the last delivered citizen advertisement named. -1 until one has gone out.
-     * It moves only on a frame that reached the client and carried a descriptor. Anything else
-     * leaves the region-change trigger armed for the next poll.
+     * Region whose citizen advertisement was safely retired after its gameplay view bound.
+     * -1 until then. The descriptor remains present in every root membership refresh while the
+     * client is joining; remembering the region after settlement prevents a same-region replay.
      */
-    std::int32_t activityAdvertisedRegion{-1};
-    /** Region named by a transaction-staged citizen descriptor, committed after caller delivery. */
-    std::int32_t activityAdvertisedRegionStaged{};
-    /** True while a transaction owns a citizen-advertisement publication to settle. */
-    bool activityAdvertisedRegionStagedPresent{};
+    std::int32_t activitySettledRegion{-1};
+    /** Region retired by a transaction-staged membership, committed after caller delivery. */
+    std::int32_t activitySettledRegionStaged{};
+    /** True while a transaction owns a settled-region publication to commit. */
+    bool activitySettledRegionStagedPresent{};
     /** Gameplay group already mirrored into the root membership's remote slot. */
     std::uint64_t activityReflectedGroupSession{};
     /**

@@ -31,13 +31,13 @@ append_membership_notification(Scratch& scratch,
                                std::span<std::byte> response,
                                std::size_t& written) noexcept;
 
-/** Records the region named by a transaction-staged citizen descriptor. */
-void stage_advertised_region(Session& session, std::int32_t region) noexcept;
+/** Records a region retired by a transaction-staged membership body. */
+void stage_settled_region(Session& session, std::int32_t region) noexcept;
 
-/** Publishes the transaction-staged advertised region after its frame reaches the caller. */
-void commit_staged_advertised_region(Session& session) noexcept;
+/** Publishes the transaction-staged settled region after its frame reaches the caller. */
+void commit_staged_settled_region(Session& session) noexcept;
 
-/** Drops the transaction-staged advertised region with its discarded frame. */
-void discard_staged_advertised_region(Session& session) noexcept;
+/** Drops the transaction-staged settled region with its discarded frame. */
+void discard_staged_settled_region(Session& session) noexcept;
 
 } // namespace sunrise::server::bap::encrypted::push::activity

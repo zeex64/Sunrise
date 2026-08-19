@@ -1244,14 +1244,27 @@ the duplicate-identifier path is below managed-session pump `FUN_14175E520`; it 
 sender, which emitted nothing in that run.
 
 The server bug was that `includeCitizenAdvertisement` also selected root-versus-foreign membership.
-Every root refresh consequently rebuilt the descriptor even when the region had already received
-it. Membership serialization now has two independent decisions: root records always retain their
-root identity and admitted gameplay-host reflection, while the citizen descriptor appears only when
-the planned region differs from the last region actually delivered. Transaction paths stage that
-region and publish it only after State commit and the caller copy succeed; discarded frames re-arm
-it. Keepalive publication uses the same one-shot rule. Session wiping now explicitly restores the
-`-1` sentinel, because `SecureZeroMemory` bypassed the member initializer and could otherwise make
-valid region zero look pre-advertised.
+Every root refresh consequently rebuilt the descriptor even after the region join had completed.
+Membership serialization now has two independent decisions: root records always retain their root
+identity and admitted gameplay-host reflection, while the citizen descriptor has its own lifecycle.
+
+The first one-shot implementation retired that descriptor as soon as its first frame reached the
+client. The next EDZ run proved that boundary was too early. Revision 1 consumed 30,992 bits and
+started the `PUB80.80` citizen join; the service-8 identity refresh arrived before the join settled,
+and revision 2 consumed only 29,968 bits. The client interpreted the absent 1,024-bit descriptor as
+the ambassador switching to `00000000:00000000`, aborted the join, and timed out entering the
+prologue filler. This is why the run remained in orbit/loading even though the initial descriptor
+was correct and used the captured 716-bit `edz_freeroam` activity selection.
+
+The marker now means **settled**, not merely **sent**. Every root membership revision continues to
+carry the citizen descriptor until `group::view_accepted` reports that the native gameplay view is
+bound. The first membership after that gate omits the descriptor and records the settled region only
+after the frame reaches the caller. Remembering the settled region prevents the old same-region
+replay even if the group row is later released. Transaction and keepalive publication use the same
+three-state lifecycle: advertise while joining, retire after view bind, retain the retired marker.
+Session wiping explicitly restores the `-1` sentinel because `SecureZeroMemory` bypasses the member
+initializer and region zero is valid. Keepalive diagnostics expose `citizen`, `settle`, and `settled`
+so the next run can prove each transition.
 
 ## Source areas changed
 
@@ -1268,33 +1281,37 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Reproduce a busy public-zone handoff and confirm the client never starts a second transition to
+1. Load EDZ and confirm revision 2 still consumes 30,992 bits while the `PUB80.80` citizen join is
+   pending. There must be no `ambassador is now advertising '00000000:00000000'` abort. After both
+   native view sides bind, one keepalive should report `settle=1`, then later lines should retain
+   `settled=80` without replaying the descriptor.
+2. Reproduce a busy public-zone handoff and confirm the client never starts a second transition to
    the same region/session after `leaving session gracefully`; there must be no duplicate managed
    session warning and every queued join-complete must advance to `sending initial join-complete`.
-2. If `network_update` stalls again, read the first `stage=network-hitch` line. The new
+3. If `network_update` stalls again, read the first `stage=network-hitch` line. The new
    `managed=active/entered/returned/thread` fields distinguish a stall inside `FUN_14175E520` from
    another child of `network_update`.
-3. Cross one EDZ public-zone boundary and confirm multi-view transitions now keep the channel alive:
+4. Cross one EDZ public-zone boundary and confirm multi-view transitions now keep the channel alive:
    scheduler output should disappear while `scheduler[views=2]`, reliable reports should remain at
    `drop=0`, and no four-second `channel-manager-connected-timeout` should follow.
-4. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
+5. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
    `restart=1`, followed by ordinary stages 1 through 5. If local and remote both pause at stage 4,
    confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
-5. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
+6. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
    must no longer be required.
-6. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
+7. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
-7. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
+8. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
    and that its `entity-view` local and remote layouts are identical immediately beforehand.
-8. Use the captured `stage=entity-record` from the successful 78-bit create to identify the
+9. Use the captured `stage=entity-record` from the successful 78-bit create to identify the
    baseline update buffer's transform, parent, stream-source, and RSAT-defined regions.
-9. Read `sobject-update` captures to identify which named components are present in an initial
+10. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-10. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+11. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-11. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+12. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
-12. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
+13. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
     or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
     and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
 

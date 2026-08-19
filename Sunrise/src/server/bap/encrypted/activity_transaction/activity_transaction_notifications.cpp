@@ -2,6 +2,8 @@
 
 #include "../../../../core/logging/log.h"
 #include "../../../gameplay/gameplay_advertisement.h"
+#include "../../../gameplay/group/group_host.h"
+#include "../../../gameplay/group/group_host_sessions.h"
 #include "../push/activity/activity_arrival.h"
 #include "../push/activity/activity_global_state_push.h"
 #include "../push/activity/activity_membership_push.h"
@@ -38,6 +40,7 @@ struct MembershipPublication final {
     std::int32_t region{-1};
     bool root{};
     bool includesCitizenAdvertisement{};
+    bool settlesCitizenAdvertisement{};
 };
 
 /** Resolves whether this transaction still owes a citizen advertisement for its planned region. */
@@ -51,15 +54,20 @@ membership_publication(const Session& session,
     }
     publication.region =
         push::activity::planned_region(activity.membershipMutation, activity.sessionId).index;
-    publication.includesCitizenAdvertisement =
-        publication.region >= 0 && publication.region != session.activityAdvertisedRegion;
+    if (publication.region < 0 || publication.region == session.activitySettledRegion) {
+        return publication;
+    }
+    const std::uint64_t groupSession =
+        server::gameplay::group::advertised_group_session(publication.region);
+    publication.settlesCitizenAdvertisement = server::gameplay::group::view_accepted(groupSession);
+    publication.includesCitizenAdvertisement = !publication.settlesCitizenAdvertisement;
     return publication;
 }
 
 /**
- * Appends one membership body without replaying a citizen descriptor already delivered for the
- * same region. A newly named region is staged on the connection until the enclosing transaction
- * and caller copy both succeed.
+ * Appends one membership body. The citizen descriptor remains in every revision until the native
+ * gameplay view is bound; the first descriptor-free revision then retires the region after the
+ * enclosing transaction and caller copy both succeed.
  */
 [[nodiscard]] bool stage_membership(Session& session,
                                     Scratch& scratch,
@@ -87,8 +95,8 @@ membership_publication(const Session& session,
                                                        nonce,
                                                        response,
                                                        written);
-    if (staged && publication.includesCitizenAdvertisement) {
-        push::activity::stage_advertised_region(session, publication.region);
+    if (staged && publication.settlesCitizenAdvertisement) {
+        push::activity::stage_settled_region(session, publication.region);
     }
     return staged;
 }
