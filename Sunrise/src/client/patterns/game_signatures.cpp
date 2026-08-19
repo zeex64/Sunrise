@@ -219,6 +219,15 @@ constexpr std::string_view kActivityHostConnectionStateText =
 constexpr auto kActivityHostConnectionState =
     signature<signature_length(kActivityHostConnectionStateText)>(kActivityHostConnectionStateText);
 
+// Matches the native activity-start record lookup used by the managed-session pump. The complete
+// nonvolatile save plus its obfuscated-global load, identity extension and null branch are unique.
+constexpr std::string_view kActivityRouteRecordText =
+    "48 89 5C 24 08 48 89 6C 24 18 48 89 74 24 20 57 41 56 41 57 48 83 EC 20 "
+    "48 8B 1D ? ? ? ? 33 ED 4C 63 F1 4C 8B FA 48 85 DB 0F 84 ? ? ? ?";
+/** Compiled pattern bytes of the activity-start record lookup signature above. */
+constexpr auto kActivityRouteRecord =
+    signature<signature_length(kActivityRouteRecordText)>(kActivityRouteRecordText);
+
 // Matches the native local activity-manager initializer. The complete nonvolatile-register save
 // and 0x460-byte frame are unique in the pinned image and end before position-dependent data.
 constexpr std::string_view kActivityRouteLocalText =
@@ -327,6 +336,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"view_channel_accessor", kViewChannelAccessor},
     patterns::Pattern{"activity_host_decoder", kActivityHostDecoder},
     patterns::Pattern{"activity_host_connection_state", kActivityHostConnectionState},
+    patterns::Pattern{"activity_route_record", kActivityRouteRecord},
     patterns::Pattern{"activity_route_local", kActivityRouteLocal},
     patterns::Pattern{"activity_route_authored", kActivityRouteAuthored},
     patterns::Pattern{"activity_mode_selector", kActivityModeSelector},

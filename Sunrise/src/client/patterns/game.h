@@ -36,6 +36,7 @@ enum class Id : std::size_t {
     viewChannelAccessor,
     activityHostDecoder,
     activityHostConnectionState,
+    activityRouteRecord,
     activityRouteLocal,
     activityRouteAuthored,
     activityModeSelector,

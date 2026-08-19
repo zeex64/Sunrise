@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 5f3b1ee77922f5cb021f8d6de520234afc303f5fd0bba1196a9aff5f87f94703
+SHA-256 59918d13ce4f5957da8edb5c5477fa826d77c087734ba4c3484134a1b8550195
 ```
 
 ## Confirmed high-level path
@@ -1191,6 +1191,32 @@ authored constructor that hangs is distinguishable from one that never runs. Thi
 runtime test for the paper's identity-1 claim; the separate `activity-mode` probe remains a
 content-definition selector and must not be confused with this manager route.
 
+The exact constructor branch is now proven in `FUN_14175E520`, not inferred from the paper. The
+managed-session pump snapshots three 0xA8-byte activity-start records through `FUN_141751370`.
+Byte `+0x12` of each record is the route selector: zero calls `FUN_1417723C0`, which forwards to the
+local initializer `FUN_141772440`; nonzero takes the compatibility check and calls
+`FUN_14178FE00`, which forwards to the authored initializer `FUN_141773200`. `FUN_141751370`
+returns either the cached record at the identity's pump slot `+0x388` or the live record exposed by
+the manager component at `manager+0x19068`. A third passive detour now reports the raw boundary as
+`stage=activity-route-record result=ok identity=... selector=... route=local|authored` once per
+identity and branch. This separates a wrong decoded start record from a correct authored branch
+whose initializer or downstream director fails. No selector is forced.
+
+Several other labels in the external paper do not survive direct decompilation of this image.
+`FUN_1417ADA60` copies and commits a 0x1B0-byte activity-selection descriptor into one of two
+manager buffers; it is not the local/authored constructor switch. `FUN_1417B8C50` is the manager's
+state-1 worker, while `FUN_141766A30` performs throttled per-component work. RVA `0xC210F0` resolves
+only to an external jump thunk here. These addresses remain useful landmarks, but they are not safe
+entity-construction hook points. The verified `+0x12` branch above is the route authority for this
+runtime.
+
+The separately supplied `Decrypt_and_label_encrypted_ptrs.py` is IDAPython. It discovers two
+encrypted-string stub forms, decodes their text, then heuristically labels one associated global
+pointer; it does not decrypt arbitrary function pointers or recover missing function boundaries.
+Its default `APPLY=True` rename mode and fixed Windows JSON output path are also unsuitable for the
+current Ghidra project. Its stub formulas are useful reference for hidden diagnostics, but the
+script is not run against this database and does not replace the native route analysis above.
+
 ### Complete activity-logic archive
 
 The separate `destiny2-complete-activity-logic-archive` adds strong static package evidence, but it
@@ -1415,10 +1441,11 @@ The current checkpoint includes work in:
    successfully created enemy.
 13. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
    sobject is accepted; do not assume the squad codec can create the underlying native squad.
-14. On the next EDZ load, capture all `stage=activity-route` lines. Identity 1 taking only
-   `route=local` confirms the authored director pipeline never starts; `route=authored called`
-   without `ok` localizes a stall inside its native initializer; `route=authored result=ok` moves
-   the next boundary to receiver/component construction.
+14. On the next EDZ load, capture all `stage=activity-route-record` and `stage=activity-route`
+   lines. Identity 1 with `selector=0 route=local` proves the decoded start record chose the wrong
+   branch. A nonzero selector followed by `route=authored called` without `ok` localizes a stall
+   inside its native initializer; `route=authored result=ok` moves the next boundary downstream to
+   authored component/director startup.
 15. Capture one `stage=activity-mode`, its following
    `stage=activity-mode-definition`, and the distinct `stage=activity-type` pairs. Compare
    `source`, `destination`, and `element` with service 6's `from_activity=8`, `activity=8`, and absent

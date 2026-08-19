@@ -43,6 +43,7 @@ constexpr std::array<const char*, kHandleCount> kSlotNames{
     "view_creation",
     "activity_host_decoder",
     "activity_host_connection_state",
+    "activity_route_record",
     "activity_route_local",
     "activity_route_authored",
     "activity_mode_selector",

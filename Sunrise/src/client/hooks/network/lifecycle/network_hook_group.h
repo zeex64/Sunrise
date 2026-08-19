@@ -32,6 +32,7 @@ inline constexpr std::array kGameSlots{
     HookSlot::viewCreation,
     HookSlot::activityHostDecoder,
     HookSlot::activityHostConnectionState,
+    HookSlot::activityRouteRecord,
     HookSlot::activityRouteLocal,
     HookSlot::activityRouteAuthored,
     HookSlot::activityModeSelector,

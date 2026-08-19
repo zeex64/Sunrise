@@ -37,6 +37,7 @@ struct Targets {
     std::byte* viewChannelAccessor{};
     std::byte* activityHostDecoder{};
     std::byte* activityHostConnectionState{};
+    std::byte* activityRouteRecord{};
     std::byte* activityRouteLocal{};
     std::byte* activityRouteAuthored{};
     std::byte* activityModeSelector{};
