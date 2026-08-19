@@ -34,6 +34,7 @@ struct Targets {
     std::byte* activityMembershipQueue{};
     std::byte* membershipUpdateEncoder{};
     std::byte* accountSoidValidator{};
+    std::byte* accountSoidPublisher{};
     std::byte* accountSoidSource{};
     std::byte* accountConnectionSource{};
     std::byte* viewCreator{};

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <intrin.h>
 
 #include "../../../core/logging/log.h"
 #include "../../targets/game.h"
@@ -34,6 +35,7 @@ constexpr std::size_t kObservationCapacity = 4;
 constexpr ULONGLONG kReportIntervalMilliseconds = 5000;
 
 using Validator = bool(__fastcall*)(const void*);
+using Publisher = void(__fastcall*)(void*, const void*);
 using SourceAccessor = const void*(__fastcall*)();
 using ConnectionAccessor = const void*(__fastcall*)();
 
@@ -78,9 +80,28 @@ struct Observation {
     bool occupied{};
 };
 
+struct PublisherSnapshot {
+    const void* input{};
+    std::array<std::uint64_t, kAccountCapacity> desired{};
+    std::array<std::uint16_t, kAccountCapacity> masks{};
+    std::uint64_t header0{};
+    std::uint64_t header1{};
+    std::size_t desiredNonzero{};
+    bool readable{};
+};
+
+struct PublisherObservation {
+    std::uint64_t hash{};
+    std::uintptr_t callerRva{};
+    std::uint64_t calls{};
+    bool occupied{};
+};
+
 SRWLOCK g_observationLock{SRWLOCK_INIT};
 std::array<Observation, kObservationCapacity> g_observations{};
 std::size_t g_replacementCursor{};
+SRWLOCK g_publisherLock{SRWLOCK_INIT};
+PublisherObservation g_publisherObservation{};
 
 /** FNV-1a keeps the complete target and source images comparable without retaining pointers. */
 [[nodiscard]] std::uint64_t
@@ -91,6 +112,97 @@ hash_bytes(const void* address, std::size_t size, std::uint64_t hash) noexcept {
         hash *= 1099511628211ULL;
     }
     return hash;
+}
+
+/** Copies the producer input before the native publisher replaces its singleton. */
+[[nodiscard]] bool inspect_publisher(const void* inputAddress, PublisherSnapshot& output) noexcept {
+    output = {};
+    output.input = inputAddress;
+    if (inputAddress == nullptr) {
+        return false;
+    }
+    __try {
+        const auto* const input = static_cast<const std::byte*>(inputAddress);
+        std::memcpy(&output.header0, input, sizeof output.header0);
+        std::memcpy(&output.header1, input + 8, sizeof output.header1);
+        for (std::size_t index = 0; index < output.desired.size(); ++index) {
+            const auto* const entry = input + kSourceTableOffset + index * kSourceStride;
+            std::memcpy(&output.desired[index], entry, sizeof output.desired[index]);
+            std::memcpy(&output.masks[index], entry + 8, sizeof output.masks[index]);
+            if (output.desired[index] != 0) {
+                ++output.desiredNonzero;
+            }
+        }
+        output.readable = true;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        output.readable = false;
+        return false;
+    }
+}
+
+/** Retains publisher changes so a per-frame virtual callback cannot flood the log. */
+[[nodiscard]] bool record_publisher(const PublisherSnapshot& snapshot,
+                                    std::uintptr_t callerRva,
+                                    std::uint64_t& calls) noexcept {
+    std::uint64_t hash = 14695981039346656037ULL;
+    hash = hash_bytes(&snapshot.header0, sizeof snapshot.header0, hash);
+    hash = hash_bytes(&snapshot.header1, sizeof snapshot.header1, hash);
+    hash = hash_bytes(snapshot.desired.data(), sizeof snapshot.desired, hash);
+    hash = hash_bytes(snapshot.masks.data(), sizeof snapshot.masks, hash);
+    hash = hash_bytes(&snapshot.readable, sizeof snapshot.readable, hash);
+    AcquireSRWLockExclusive(&g_publisherLock);
+    ++g_publisherObservation.calls;
+    calls = g_publisherObservation.calls;
+    const bool report = !g_publisherObservation.occupied || g_publisherObservation.hash != hash
+                        || g_publisherObservation.callerRva != callerRva;
+    g_publisherObservation.hash = hash;
+    g_publisherObservation.callerRva = callerRva;
+    g_publisherObservation.occupied = true;
+    ReleaseSRWLockExclusive(&g_publisherLock);
+    return report;
+}
+
+/** Emits the writer callsite and first desired identities in its complete input snapshot. */
+void report_publisher(const PublisherSnapshot& snapshot,
+                      std::uintptr_t callerRva,
+                      std::uint64_t calls) noexcept {
+    std::array<char, 768> line{};
+    int written = std::snprintf(line.data(),
+                                line.size(),
+                                "ev=gameplay stage=account-soid-publish caller=+0x%llX input=%p "
+                                "readable=%u h0=0x%llX h1=0x%llX nonzero=%zu calls=%llu",
+                                static_cast<unsigned long long>(callerRva),
+                                snapshot.input,
+                                snapshot.readable ? 1U : 0U,
+                                static_cast<unsigned long long>(snapshot.header0),
+                                static_cast<unsigned long long>(snapshot.header1),
+                                snapshot.desiredNonzero,
+                                static_cast<unsigned long long>(calls));
+    if (written <= 0 || static_cast<std::size_t>(written) >= line.size()) {
+        return;
+    }
+    std::size_t used = static_cast<std::size_t>(written);
+    std::size_t reported = 0;
+    for (std::size_t index = 0; index < snapshot.desired.size() && reported < kReportEntryCapacity;
+         ++index) {
+        if (snapshot.desired[index] == 0) {
+            continue;
+        }
+        written = std::snprintf(line.data() + used,
+                                line.size() - used,
+                                " s%zu[slot=%zu soid=0x%llX mask=0x%X]",
+                                reported,
+                                index,
+                                static_cast<unsigned long long>(snapshot.desired[index]),
+                                static_cast<unsigned>(snapshot.masks[index]));
+        if (written <= 0 || static_cast<std::size_t>(written) >= line.size() - used) {
+            break;
+        }
+        used += static_cast<std::size_t>(written);
+        ++reported;
+    }
+    core::log::write(core::log::Channel::client, core::log::Level::info, {line.data(), used});
 }
 
 /** Finds the connection record that keeps an account entry in state 2. */
@@ -388,10 +500,41 @@ __declspec(noinline) bool __fastcall validator_body(const void* manager) noexcep
     return result;
 }
 
+/** Preserves the native snapshot copy while exposing its indirect caller and complete input. */
+__declspec(noinline) void __fastcall publisher_body(void* publisher, const void* input) noexcept {
+    void* const caller = _ReturnAddress();
+    const auto* const image = reinterpret_cast<const std::byte*>(GetModuleHandleW(nullptr));
+    const std::uintptr_t callerRva =
+        image != nullptr && caller != nullptr ? static_cast<const std::byte*>(caller) - image : 0;
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(
+        lease, HookSlot::accountSoidPublisher, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<Publisher>(lease.original);
+    __try {
+        PublisherSnapshot snapshot{};
+        const bool inspected = lease.accepting && inspect_publisher(input, snapshot);
+        if (call != nullptr) {
+            call(publisher, input);
+        }
+        if (lease.accepting && inspected) {
+            std::uint64_t calls = 0;
+            if (record_publisher(snapshot, callerRva, calls)) {
+                report_publisher(snapshot, callerRva, calls);
+            }
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+}
+
 } // namespace
 
 void* validator_entry_point() noexcept {
     return reinterpret_cast<void*>(&validator_body);
+}
+
+void* publisher_entry_point() noexcept {
+    return reinterpret_cast<void*>(&publisher_body);
 }
 
 void reset() noexcept {
@@ -399,6 +542,9 @@ void reset() noexcept {
     g_observations = {};
     g_replacementCursor = 0;
     ReleaseSRWLockExclusive(&g_observationLock);
+    AcquireSRWLockExclusive(&g_publisherLock);
+    g_publisherObservation = {};
+    ReleaseSRWLockExclusive(&g_publisherLock);
 }
 
 } // namespace sunrise::client::hooks::network::account_soid_probe

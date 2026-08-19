@@ -36,6 +36,8 @@ struct HandlerSnapshot {
     std::uintptr_t readinessRva{};
     std::int32_t entityNamespace{-1};
     std::int32_t firstActive{-1};
+    std::array<std::int32_t, 8> activeSlots{};
+    std::size_t activeCount{};
     std::int32_t typeKey{-1};
     std::int16_t mappedType{-1};
     std::int8_t activeKind{-1};
@@ -127,6 +129,7 @@ void inspect_active_metadata(HandlerSnapshot& output) noexcept {
 
 /** Reads only the handler, active-set, and descriptor fields used by FUN_141713980. */
 [[nodiscard]] bool inspect(const void* handlerAddress, HandlerSnapshot& output) noexcept {
+    output.activeSlots.fill(-1);
     if (handlerAddress == nullptr) {
         return false;
     }
@@ -146,11 +149,16 @@ void inspect_active_metadata(HandlerSnapshot& output) noexcept {
                 std::uint32_t mask = 1;
                 for (std::size_t bit = 0; bit < 32; ++bit, mask <<= 1) {
                     if ((bits & mask) != 0) {
-                        output.firstActive = static_cast<std::int32_t>(word * 32 + bit);
-                        break;
+                        const auto slot = static_cast<std::int32_t>(word * 32 + bit);
+                        if (output.firstActive < 0) {
+                            output.firstActive = slot;
+                        }
+                        if (output.activeCount < output.activeSlots.size()) {
+                            output.activeSlots[output.activeCount] = slot;
+                        }
+                        ++output.activeCount;
                     }
                 }
-                break;
             }
         }
         inspect_active_metadata(output);
@@ -160,6 +168,7 @@ void inspect_active_metadata(HandlerSnapshot& output) noexcept {
         output = {};
         output.entityNamespace = -1;
         output.firstActive = -1;
+        output.activeSlots.fill(-1);
         return false;
     }
 }
@@ -225,12 +234,13 @@ __declspec(noinline) std::uint64_t __fastcall scan_body(void* handler,
             if (record(handler, pending, GetTickCount64(), calls)) {
                 std::uint64_t token = 0;
                 (void)view_message_probe::token_for_entity_handler(handler, token);
-                std::array<char, 768> line{};
+                std::array<char, 896> line{};
                 const int written = std::snprintf(
                     line.data(),
                     line.size(),
                     "ev=gameplay stage=view-readiness token=0x%llX result=%s handler=%p "
-                    "manager=%p namespace=%d enabled=%u first_active=%d type_key=%d "
+                    "manager=%p namespace=%d enabled=%u active_count=%zu first_active=%d "
+                    "active=%d,%d,%d,%d,%d,%d,%d,%d type_key=%d "
                     "mapped_type=%d active_kind=%d mapped_kind=%d active_ns=0x%08X "
                     "type_flags=0x%02X ns_flags=0x%02X registry=%p codec=%p vtable=%p "
                     "readiness=%p readiness_rva=0x%llX meta=%u readable=%u calls=%llu",
@@ -240,7 +250,16 @@ __declspec(noinline) std::uint64_t __fastcall scan_body(void* handler,
                     snapshot.manager,
                     snapshot.entityNamespace,
                     static_cast<unsigned>(snapshot.enabled),
+                    snapshot.activeCount,
                     snapshot.firstActive,
+                    snapshot.activeSlots[0],
+                    snapshot.activeSlots[1],
+                    snapshot.activeSlots[2],
+                    snapshot.activeSlots[3],
+                    snapshot.activeSlots[4],
+                    snapshot.activeSlots[5],
+                    snapshot.activeSlots[6],
+                    snapshot.activeSlots[7],
                     snapshot.typeKey,
                     static_cast<int>(snapshot.mappedType),
                     static_cast<int>(snapshot.activeKind),

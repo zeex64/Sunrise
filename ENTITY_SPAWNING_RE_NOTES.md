@@ -1582,6 +1582,30 @@ The probe now additionally resolves the kind-2 codec, vtable, and virtual method
 including its main-image RVA for direct Ghidra analysis. All added signatures resolve uniquely in
 the pinned Ghidra image.
 
+The next stationary run localized the global timer trigger. Before activity membership, both the
+source and reconciled manager remain `1/1`, with one live state-2 target for local account SOID
+`0x9EAA300100100100`. The revision-3 membership snapshot then adds the synthetic activity-host
+peer (`occupied=eligible=3`, decoded `p1_gate=0x10`, `create=1`). At `t=68947`, the desired source
+changes to `2/1`: its first header counts two peer/upsert inputs while its second header and entry
+table still contain only the local account SOID. The manager copies `2/1` at `t=69015` and starts
+its global grace timer. The family-zero bootstrap is not the writer: it permanently yields to the
+native producer earlier at `1/1` after observing producer-owned mask bit 4. The unresolved protocol
+defect is therefore one missing native account-identity association for the synthetic host peer,
+not a missing local profile or a stale Sunrise seed.
+
+Ghidra identifies the complete desired-snapshot publisher as `FUN_140FC9050`. It copies `0x210`
+bytes from its second argument into the singleton and is reached indirectly through a virtual
+table, so static callers are not available. A passive `stage=account-soid-publish` detour now logs
+the native return-address RVA, input headers, and first desired identities whenever its input
+changes. This should identify the subsystem that constructs `2/1` without modifying the account
+table.
+
+The kind-2 readiness virtual resolved at RVA `0x11B1DB0` is only `mov al,1; ret`; it has no hidden
+state check. The pending result comes from the entity manager's active bitset at `+0xC920` and the
+slot lifecycle around it. The readiness probe now reports the full active-bit count and first eight
+active slots. Do not force stage 5 or clear those bits: they represent native entity initialization
+that the server still needs to satisfy.
+
 ### External NetDuma connection-table capture
 
 The shared `destiny 2.pcapng` is not a packet capture from the Destiny host's gameplay interface.
@@ -1622,11 +1646,12 @@ The current checkpoint includes work in:
 
 Immediate stationary EDZ run:
 
-- Capture several expanded `stage=account-soids` samples. Compare `mh0/mh1` with `sh0/sh1`, follow
-  the `timer` pair, and retain `conn_state/conn_bytes`. This will identify why the global no-valid
-  timer remains armed despite a live state-2 account record.
-- Capture the expanded `view-readiness` line for token `...002`. Use `readiness_rva` to decompile
-  slot 0's exact kind-2 virtual and trace the condition that keeps it pending.
+- Capture every `stage=account-soid-publish` transition, especially the one with `h0=2 h1=1`.
+  Decompile its `caller=+0x...` callsite and trace the input builder back to the membership field
+  that increments the peer count without emitting a second account identity.
+- Capture the expanded `view-readiness` line for token `...002`. Compare `active_count` and the
+  first eight `active=` slots with the public manager's `entity-slots occupied=` count. Determine
+  which baseline/create acknowledgment is supposed to clear slot 0.
 - `membership-native-profile` is not expected in a solo run. Retain the hook for a future real
   multi-peer capture; do not wait on it now.
 - The run may stop after several `account-soids` samples and one expanded pending readiness line.
@@ -1719,6 +1744,7 @@ view-codecs
 view-readiness
 membership-native-profile
 account-soids
+account-soid-publish
 sobject-create
 sobject-update
 sobject-native

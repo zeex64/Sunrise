@@ -197,6 +197,15 @@ constexpr std::string_view kAccountSoidValidatorText =
 constexpr auto kAccountSoidValidator =
     signature<signature_length(kAccountSoidValidatorText)>(kAccountSoidValidatorText);
 
+// Matches the virtual publisher that copies a complete 0x210-byte desired-account snapshot into
+// the singleton consumed by the account reconciler. The fixed singleton lea, four-block copy
+// count, and saved input register make the entry unique in the current runtime image.
+constexpr std::string_view kAccountSoidPublisherText =
+    "40 53 48 83 EC 20 48 8D 0D ? ? ? ? 48 8B DA E8 ? ? ? ? B9 04 00 00 00";
+/** Compiled pattern bytes of the desired account-SOID publisher signature above. */
+constexpr auto kAccountSoidPublisher =
+    signature<signature_length(kAccountSoidPublisherText)>(kAccountSoidPublisherText);
+
 // Matches the tiny accessor for the desired account-SOID singleton. The adjacent function prefix
 // makes the two-instruction tail-call wrapper unique without retaining either displacement.
 constexpr std::string_view kAccountSoidSourceText =
@@ -375,6 +384,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},
     patterns::Pattern{"membership_update_encoder", kMembershipUpdateEncoder},
     patterns::Pattern{"account_soid_validator", kAccountSoidValidator},
+    patterns::Pattern{"account_soid_publisher", kAccountSoidPublisher},
     patterns::Pattern{"account_soid_source", kAccountSoidSource},
     patterns::Pattern{"account_connection_source", kAccountConnectionSource},
     patterns::Pattern{"view_creator", kViewCreator},
