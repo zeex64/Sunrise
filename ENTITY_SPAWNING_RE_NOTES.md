@@ -1266,6 +1266,21 @@ Session wiping explicitly restores the `-1` sentinel because `SecureZeroMemory` 
 initializer and region zero is valid. Keepalive diagnostics expose `citizen`, `settle`, and `settled`
 so the next run can prove each transition.
 
+The next EDZ run validated the retention boundary: revisions 1 and 2 both consumed 30,992 bits,
+the client started the `PUB80.80` citizen join, sent and received join-complete, and never emitted the
+ambassador-zero abort or the duplicate-managed-session warning. The run eventually entered EDZ and
+captured native sobjects. It also exposed a cadence bug in the first three-state implementation.
+Using the unsettled marker as the urgent-send trigger produced 320 descriptor-bearing keepalives,
+with revisions advancing roughly every 12--67 ms while each gameplay view bound. That flood explains
+the repeated transition churn and can itself delay the prologue filler even though the join succeeds.
+
+Publication and retirement now use separate delivered markers. `activityPublishedRegion` disarms
+the urgent send as soon as one descriptor-bearing membership reaches the client; transaction-driven
+membership refreshes still include the descriptor until `activitySettledRegion` advances after view
+bind. A separate retirement-due gate emits the one descriptor-free membership needed to settle the
+region. This preserves revision-2 retention without turning every network pump into a membership
+revision. Keepalive diagnostics now report both `published` and `settled`.
+
 ## Source areas changed
 
 The current checkpoint includes work in:
@@ -1282,9 +1297,9 @@ The current checkpoint includes work in:
 ## Next investigation
 
 1. Load EDZ and confirm revision 2 still consumes 30,992 bits while the `PUB80.80` citizen join is
-   pending. There must be no `ambassador is now advertising '00000000:00000000'` abort. After both
-   native view sides bind, one keepalive should report `settle=1`, then later lines should retain
-   `settled=80` without replaying the descriptor.
+   pending, but descriptor-bearing keepalives do not repeat every pump. The first delivered body
+   should advance `published=80`; after both native view sides bind, one keepalive should report
+   `settle=1`, then later lines should retain `settled=80`. There must be no ambassador-zero abort.
 2. Reproduce a busy public-zone handoff and confirm the client never starts a second transition to
    the same region/session after `leaving session gracefully`; there must be no duplicate managed
    session warning and every queued join-complete must advance to `sending initial join-complete`.

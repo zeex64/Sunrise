@@ -90,6 +90,16 @@ struct Session {
      */
     bool activityJoinedForeignSession{};
     /**
+     * Region whose first citizen descriptor reached the client. -1 until then.
+     * This marker controls only the urgent region-change publication; it does not retire the
+     * descriptor from later membership revisions while the gameplay join is still pending.
+     */
+    std::int32_t activityPublishedRegion{-1};
+    /** Region named by a transaction-staged descriptor, committed after caller delivery. */
+    std::int32_t activityPublishedRegionStaged{};
+    /** True while a transaction owns a published-region update to commit. */
+    bool activityPublishedRegionStagedPresent{};
+    /**
      * Region whose citizen advertisement was safely retired after its gameplay view bound.
      * -1 until then. The descriptor remains present in every root membership refresh while the
      * client is joining; remembering the region after settlement prevents a same-region replay.

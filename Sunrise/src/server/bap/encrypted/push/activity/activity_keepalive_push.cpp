@@ -92,9 +92,19 @@ bool consume_activity_keepalive(Session& session,
         session.activitySessionId == 0
             ? -1
             : state::activity::membership::reported_region(session.activitySessionId);
-    const bool regionUnsettled = !session.activityJoinedForeignSession && reportedRegion >= 0
-                                 && reportedRegion != session.activitySettledRegion;
-    if (session.activitySessionId == 0 || (!burstDue && !keepaliveDue && !regionUnsettled)) {
+    const bool regionPublicationDue = !session.activityJoinedForeignSession && reportedRegion >= 0
+                                      && reportedRegion != session.activityPublishedRegion;
+    const std::int32_t effectiveRegion =
+        session.activitySessionId == 0 ? -1 : effective_region(session.activitySessionId).index;
+    const std::uint64_t advertisedGroup =
+        session.activityJoinedForeignSession
+            ? 0
+            : server::gameplay::group::advertised_group_session(effectiveRegion);
+    const bool citizenRetirementDue = !session.activityJoinedForeignSession && effectiveRegion >= 0
+                                      && effectiveRegion != session.activitySettledRegion
+                                      && server::gameplay::group::view_accepted(advertisedGroup);
+    if (session.activitySessionId == 0
+        || (!burstDue && !keepaliveDue && !regionPublicationDue && !citizenRetirementDue)) {
         return false;
     }
     touchesScratch = true;
@@ -103,12 +113,13 @@ bool consume_activity_keepalive(Session& session,
     std::size_t framedSize = 0;
     const auto& key = state::bap().sessionKey;
     bool published = false;
-    // Held until the frame reaches the caller. Encoding alone does not spend the region trigger.
+    // Held until the frame reaches the caller. Encoding alone spends neither lifecycle marker.
+    std::int32_t stagedPublishedRegion = -1;
     std::int32_t stagedSettledRegion = -1;
     std::uint64_t stagedReflectedGroupSession = 0;
     // The burst is what step 36 waits on. When both timers fire together the roster goes out last,
     // because the type-13 key binds to the player message 12 creates.
-    if (!keepaliveDue && !regionUnsettled) {
+    if (!keepaliveDue && !regionPublicationDue && !citizenRetirementDue) {
         session.activityRosterDueTick = now + kRosterBurstIntervalMs;
         published = append_roster_notification(
             session, scratch, key, nextSendNonce, scratch.framed, framedSize, true);
@@ -122,18 +133,13 @@ bool consume_activity_keepalive(Session& session,
     // A claimed advertisement row exists before its gameplay peer. Reflect it only after admission;
     // publishing it during initial slice loading makes the root membership wait on a peer that the
     // world controller has not created yet.
-    const std::int32_t effectiveRegion = effective_region(session.activitySessionId).index;
-    const std::uint64_t advertisedGroup =
-        session.activityJoinedForeignSession
-            ? 0
-            : server::gameplay::group::advertised_group_session(effectiveRegion);
     const std::uint64_t reflectedGroup =
         server::gameplay::group::session_admitted(advertisedGroup) ? advertisedGroup : 0;
     const bool groupReflectionChanged =
         reflectedGroup != 0 && reflectedGroup != session.activityReflectedGroupSession;
     // The client applies one membership update per revision and drops repeats. Either a new region
     // or a newly admitted gameplay host therefore needs a fresh root-membership revision.
-    const bool regionRepublishReady = regionUnsettled
+    const bool regionRepublishReady = regionPublicationDue
                                       && server::gameplay::advertisement_state(reportedRegion)
                                              == server::gameplay::AdvertisementState::ready;
     if ((regionRepublishReady || groupReflectionChanged)
@@ -171,10 +177,6 @@ bool consume_activity_keepalive(Session& session,
     // The citizen advertisement rides on this message. Without one more send per region the client
     // finds no ambassador in the next region, takes the role itself and matchmakes forever.
     // Re-sending a stable snapshot instead would make it rebuild every player snapshot.
-    const bool publishesMembership =
-        hasMembership
-        && (regionUnsettled || groupReflectionChanged
-            || !state::activity::membership::acknowledged(session.activitySessionId));
     const bool rootMembership = !session.activityJoinedForeignSession;
     const bool citizenAdvertisementUnsettled =
         rootMembership && effectiveRegion >= 0 && effectiveRegion != session.activitySettledRegion;
@@ -182,6 +184,10 @@ bool consume_activity_keepalive(Session& session,
         citizenAdvertisementUnsettled && server::gameplay::group::view_accepted(advertisedGroup);
     const bool includeCitizenAdvertisement =
         citizenAdvertisementUnsettled && !settleCitizenAdvertisement;
+    const bool publishesMembership =
+        hasMembership
+        && (regionPublicationDue || settleCitizenAdvertisement || groupReflectionChanged
+            || !state::activity::membership::acknowledged(session.activitySessionId));
     // Resolved the way the body resolves it, not from the reported field. Before the first report
     // the arrival slice set stands in, and that first push carries a descriptor too.
     const server::gameplay::AdvertisementState advertisement =
@@ -207,8 +213,11 @@ bool consume_activity_keepalive(Session& session,
                                                          nextSendNonce,
                                                          scratch.framed,
                                                          framedSize);
-        // The descriptor remains armed through every pre-bind refresh. Only a descriptor-free body
-        // sent after the native view binds retires the region, and delivery commits it below.
+        // Publishing the descriptor disarms only the urgent region trigger. It remains in any later
+        // refresh until a descriptor-free body sent after native view bind retires the region.
+        if (sent && includeCitizenAdvertisement) {
+            stagedPublishedRegion = effectiveRegion;
+        }
         if (sent && settleCitizenAdvertisement) {
             stagedSettledRegion = effectiveRegion;
         }
@@ -262,7 +271,7 @@ bool consume_activity_keepalive(Session& session,
                       line.size(),
                       "ev=activity stage=keepalive result=%s bytes=%zu membership=%u key=0x%llX "
                       "spawn_state=%d teleport_state=%d teleport_slice=%d token=%u revision=%u "
-                      "advert=%u citizen=%u settle=%u settled=%d",
+                      "advert=%u citizen=%u settle=%u published=%d settled=%d",
                       published ? "ok" : "fail",
                       framedSize,
                       hasMembership ? 1U : 0U,
@@ -275,6 +284,7 @@ bool consume_activity_keepalive(Session& session,
                       static_cast<unsigned>(advertisement),
                       static_cast<unsigned>(includeCitizenAdvertisement),
                       static_cast<unsigned>(settleCitizenAdvertisement),
+                      session.activityPublishedRegion,
                       session.activitySettledRegion);
     if (count > 0) {
         core::log::write(core::log::Channel::server,
@@ -283,7 +293,10 @@ bool consume_activity_keepalive(Session& session,
     }
     const bool delivered =
         publish_frame(session, scratch, response, written, framedSize, nextSendNonce, published);
-    // A body the client never saw must offer the descriptor or retirement again on the next poll.
+    // A body the client never saw must offer its urgent publication or retirement again.
+    if (delivered && stagedPublishedRegion >= 0) {
+        session.activityPublishedRegion = stagedPublishedRegion;
+    }
     if (delivered && stagedSettledRegion >= 0) {
         session.activitySettledRegion = stagedSettledRegion;
     }

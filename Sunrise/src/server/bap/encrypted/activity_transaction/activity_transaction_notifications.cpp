@@ -35,7 +35,7 @@ namespace {
     return true;
 }
 
-/** Separates root-membership handling from the one-shot citizen descriptor it may carry. */
+/** Separates root-membership handling from the citizen descriptor lifecycle it may carry. */
 struct MembershipPublication final {
     std::int32_t region{-1};
     bool root{};
@@ -95,7 +95,9 @@ membership_publication(const Session& session,
                                                        nonce,
                                                        response,
                                                        written);
-    if (staged && publication.settlesCitizenAdvertisement) {
+    if (staged && publication.includesCitizenAdvertisement) {
+        push::activity::stage_published_region(session, publication.region);
+    } else if (staged && publication.settlesCitizenAdvertisement) {
         push::activity::stage_settled_region(session, publication.region);
     }
     return staged;

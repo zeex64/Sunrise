@@ -218,6 +218,7 @@ bool consume(Session& session,
             publish_connection_fields(session, publication, connection);
             // The caller copy is done, so what the staged roster body owes is settled here.
             push::activity::commit_staged_roster(session);
+            push::activity::commit_staged_published_region(session);
             push::activity::commit_staged_settled_region(session);
             session.accountMutationPublished = mutatesAccount;
             if (transaction_if<EquipmentSwapTransaction>(outcome) != nullptr) {
@@ -348,6 +349,7 @@ bool consume(Session& session,
     if (!handled) {
         // The staged body is dropped, so its grant and its state byte go back for the next push.
         push::activity::discard_staged_roster(session);
+        push::activity::discard_staged_published_region(session);
         push::activity::discard_staged_settled_region(session);
     }
     clear_prefix(scratch.plaintext, plaintextSize);

@@ -154,6 +154,31 @@ bool append_membership_notification(Scratch& scratch,
     return encoded;
 }
 
+/** Records the region named by a transaction-staged citizen descriptor. */
+void stage_published_region(Session& session, std::int32_t region) noexcept {
+    if (region < 0) {
+        return;
+    }
+    session.activityPublishedRegionStaged = region;
+    session.activityPublishedRegionStagedPresent = true;
+}
+
+/** Publishes the transaction-staged descriptor region after its frame reaches the caller. */
+void commit_staged_published_region(Session& session) noexcept {
+    if (!session.activityPublishedRegionStagedPresent) {
+        return;
+    }
+    session.activityPublishedRegion = session.activityPublishedRegionStaged;
+    session.activityPublishedRegionStaged = 0;
+    session.activityPublishedRegionStagedPresent = false;
+}
+
+/** Drops the transaction-staged descriptor region with its discarded frame. */
+void discard_staged_published_region(Session& session) noexcept {
+    session.activityPublishedRegionStaged = 0;
+    session.activityPublishedRegionStagedPresent = false;
+}
+
 /** Records a region retired by a transaction-staged membership body. */
 void stage_settled_region(Session& session, std::int32_t region) noexcept {
     if (region < 0) {
