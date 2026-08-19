@@ -7,11 +7,13 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <span>
 
 #include "../../../core/logging/log.h"
+#include "../../player/player_position.h"
 #include "coordinator/network_call_coordinator.h"
 #include "platform.h"
 
@@ -184,12 +186,15 @@ void set_context_pointer(std::span<std::byte> context,
     std::memcpy(context.data() + offset, &value, sizeof value);
 }
 
-/** Changes one private transform float without depending on host floating-point behavior. */
-void set_component_one(std::span<std::byte> component, std::size_t offset) noexcept {
-    constexpr std::uint32_t kFloatOne = 0x3F800000;
-    if (offset <= component.size() - sizeof kFloatOne) {
-        std::memcpy(component.data() + offset, &kFloatOne, sizeof kFloatOne);
+/** Changes one private transform float after rejecting values the native codec cannot use. */
+[[nodiscard]] bool
+set_component_float(std::span<std::byte> component, std::size_t offset, float value) noexcept {
+    if (!std::isfinite(value) || component.size() < sizeof value
+        || offset > component.size() - sizeof value) {
+        return false;
     }
+    std::memcpy(component.data() + offset, &value, sizeof value);
+    return true;
 }
 
 /**
@@ -465,10 +470,60 @@ void probe_decoded_record(std::span<const std::byte> create,
     };
     for (std::size_t index = 0; index < kPositionVariants.size(); ++index) {
         positionComponent = spatialComponent;
-        set_component_one(positionComponent,
-                          kTransformSecondFloat4Offset + index * sizeof(std::uint32_t));
+        static_cast<void>(set_component_float(positionComponent,
+                                              kTransformSecondFloat4Offset
+                                                  + index * sizeof(std::uint32_t),
+                                              1.0F));
         encode_synthetic_variant(
             kPositionVariants[index], spatialCreate, positionComponent, nativeMask, true);
+    }
+
+    // The player-position publisher is already fed by the physics sync and protected by a
+    // seqlock. Use it only as private source data for two native encodes; the accepted object and
+    // its component storage are never changed here.
+    const player::position::Snapshot player = player::position::snapshot();
+    bool playerValid = player.present;
+    positionComponent = spatialComponent;
+    for (std::size_t axis = 0; axis < player.position.size(); ++axis) {
+        playerValid = playerValid
+                      && set_component_float(positionComponent,
+                                             kTransformSecondFloat4Offset + axis * sizeof(float),
+                                             player.position[axis]);
+    }
+    if (playerValid) {
+        std::array<char, core::log::kLineCapacity> line{};
+        const int written = std::snprintf(line.data(),
+                                          line.size(),
+                                          "ev=gameplay stage=entity-player-position result=ok "
+                                          "x=%.9g y=%.9g z=%.9g",
+                                          static_cast<double>(player.position[0]),
+                                          static_cast<double>(player.position[1]),
+                                          static_cast<double>(player.position[2]));
+        if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(written)});
+        }
+        encode_synthetic_variant(
+            "spatial-transform-player", spatialCreate, positionComponent, nativeMask, true);
+        positionComponent = spatialComponent;
+        constexpr float kNearbyOffset = 3.0F;
+        for (std::size_t axis = 0; axis < player.position.size(); ++axis) {
+            const float value = player.position[axis] + (axis == 0 ? kNearbyOffset : 0.0F);
+            playerValid = playerValid
+                          && set_component_float(positionComponent,
+                                                 kTransformSecondFloat4Offset
+                                                     + axis * sizeof(float),
+                                                 value);
+        }
+        if (playerValid) {
+            encode_synthetic_variant(
+                "spatial-transform-player-x3", spatialCreate, positionComponent, nativeMask, true);
+        }
+    } else {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::debug,
+                         "ev=gameplay stage=entity-player-position result=missing");
     }
 }
 

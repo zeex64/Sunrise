@@ -93,13 +93,28 @@ The following transform-bearing run also matched its prediction:
   regional transition. The transform record itself decoded cleanly, but channel hygiene is not yet
   considered solved.
 
+The controlled second-float4 probes then resolved all four lanes:
+
+- X/Y/Z each preserve the 112-bit total and independently change their own coordinate field.
+- W changes the transform branch and shortens the record to 111 bits; it is not a world-position
+  lane and remains zero for the placement experiment.
+- The complete native wires are reconstructed correctly from flushed and pending state. For
+  example X=`1.0` produces `C013F80000000000000000000000`, while Y and Z move that value into
+  their later fields.
+- The same run continued for more than two minutes without the earlier four-second gameplay
+  timeout, but its two-minute channel report still counted 76 corrupt reads. The later BAP failure
+  lines coincide with normal shutdown, not the entity decode.
+- The launch selected EDZ Town (`bubble=0xB8459D59`, bubble ordinal 51, map index 145) and spawn set
+  `0x9617A6E7`. The extracted cache contains real points for that set, but the flat point bank no
+  longer retains each point's individual bubble mask, so it is not used to guess Town coordinates.
+
 ## Immediate plan
 
 ### 1. Recover native position encoding
 
-The current build keeps the validated 112-bit default transform on the live path and privately sets
-each element of the transform's second float4 to `1.0`. Comparing those four native encodings will
-identify which fields carry X/Y/Z position without publishing speculative coordinates.
+The current build keeps the validated 112-bit default transform on the live path and reads the
+existing, seqlock-protected local-player position snapshot. It privately asks the native encoder for
+the exact player coordinate and `player X + 3` wires. Neither is published in this build.
 
 ### 2. Publish one bounded position
 
@@ -112,10 +127,8 @@ After validating the transform probe output, recover:
 - the initial native update and dirty-component masks;
 - whether a kind-1 squad relationship is additionally required.
 
-The diagnostic also reconstructs flushed and pending writer state into one complete wire hex
-string. No perturbed transform is published. Use those native results to identify position fields
-before publishing a location near the player. Keep retries bounded and do not hand-author
-compressed transform fields.
+After the two player-position encodes succeed, publish only the `X + 3` native wire as one bounded
+placement. Keep retries bounded and do not hand-author compressed transform fields.
 
 ### 3. Complete safe scheduler support
 
@@ -148,10 +161,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code sends the exact 112-bit native default-transform update and privately probes
-  each element of its second float4 to recover position encoding.
+- Current working code sends the exact 112-bit native default-transform update and privately asks
+  the native encoder for the live player position and a point three units beside it.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `56748fe9e2395bcfe58219fbc848721183f257943244eafc59c31d19358601bb`
+- DLL SHA-256: `12a1ffbfd66d6a41e59b0963bb1e6a1025c6373bb8e75380af358228bb930616`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

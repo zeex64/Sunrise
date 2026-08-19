@@ -1896,6 +1896,34 @@ turn and invokes the same native encoder. It also combines flushed bytes with pe
 bits into one complete wire string, so X/Y/Z/W payloads can be compared directly without mutating
 the live object.
 
+Those four probes succeeded. X, Y, and Z each retained the 112-bit total and independently changed
+their own field:
+
+```text
+default  C010000000000000000000000000
+X=1      C013F80000000000000000000000
+Y=1      C01000000003F800000000000000
+Z=1      C0100000000000000003F8000000
+```
+
+W=`1.0` instead produced `C020000000000000000000000000` in 111 bits, confirming that it selects
+an auxiliary transform branch rather than world position. X/Y/Z are therefore the second float4's
+first three lanes, and W stays zero for placement.
+
+This run lasted more than two minutes without the earlier four-second gameplay receive timeout.
+The report at `t=120600` still counted 76 corrupt reads, however, so packet hygiene remains open.
+The later `_connection_failure_suicide` reports occur with session teardown and shutdown at
+`t=130517`; they do not mark the accepted entity record failing.
+
+The current EDZ launch selected bubble hash `0xB8459D59`, resolved from `build_data.bin` to `town`,
+bubble ordinal 51 and map-global index 145. Spawn set `0x9617A6E7` has 54 extracted points across
+map indices 30, 38, 63, 73, 82, 145, and 155. Sunrise's flat cache preserves the union bubble mask
+on the set but not the individual mask on each point, so assigning one of the coordinate clusters
+to Town by order would still be a guess. The existing player-position publisher is stronger: it
+already reads the local player's rigid-body position through the teleport physics path and exposes
+a seqlock snapshot. The next diagnostic privately native-encodes that exact position and X plus
+three units without modifying the accepted object.
+
 At `t=105336`, during a later regional transition, the channel timed out after four seconds without
 a valid receive and reported 146 corrupt reads. Server send calls continued to return success. The
 accepted transform record did not leave a partial entity decode, but the channel result means packet
@@ -1984,9 +2012,9 @@ The current checkpoint includes work in:
 2. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
    passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
    required by actual enemies; object allocation alone does not start AI.
-3. Capture the four `spatial-transform-second-{x,y,z,w}1` private probe lines and compare their
-   complete native wire strings. Identify the translation fields, then publish one bounded position
-   only after its encoder results are internally consistent.
+3. Capture `entity-player-position`, `spatial-transform-player`, and
+   `spatial-transform-player-x3`. Publish only the native X-plus-three wire after both encodes
+   succeed and the complete strings are internally consistent.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.
