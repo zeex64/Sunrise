@@ -1412,7 +1412,12 @@ void service(std::uint64_t now) noexcept {
         bool prepared = false;
         if (firstAttempt) {
             (void)synchronise_scheduler_layout(peer);
-            prepared = prepare_entity_create(peer, candidate);
+            // Reliable membership, join, and view records establish the topology the scheduler
+            // describes. Never let an entity body overtake one or start its settle timer while
+            // that control packet is still awaiting acknowledgement.
+            const bool controlQueueSettled =
+                peer.outbound.count == 0 && !peer.outbound.awaitingAcknowledgement;
+            prepared = controlQueueSettled && prepare_entity_create(peer, candidate);
             if (!prepared) {
                 peer.entityCreateReadyToken = 0;
                 peer.entityCreateReadySlot = 0;

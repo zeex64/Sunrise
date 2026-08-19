@@ -1128,10 +1128,12 @@ branch. The namespace-1 failure is therefore evidence against that *transition s
 of a different namespace wire grammar. The scheduler lists first agreed at `t=116578`, only 5 ms
 before Sunrise emitted the create, while a citizen handoff was still in progress. The server did
 not finish the group join until `t=116801`, and the replacement activity view appeared immediately
-afterward. Sunrise now requires the exact token, slot, generation, and all existing preparation
-gates to remain continuously valid for 500 ms before the first create may leave. An idle stable
-zone is polled during that interval; a momentary transition agreement resets it instead of turning
-movement timing into a packet-emission lottery.
+afterward. The server kept retrying that replacement view roughly every 255 ms while the poisoned
+channel was still receiving ordinary packets. Sunrise now refuses to arm entity creation while any
+reliable membership, join, or view control record is queued or awaiting acknowledgement. Once that
+control queue is empty, the exact token, slot, generation, and all existing preparation gates must
+remain continuously valid for another 500 ms before the first create may leave. An idle stable zone
+is polled during that interval; a handoff cannot make entity data overtake its topology records.
 
 Seven later native registrations and create-codec captures resolved to tags `0x815AA673`,
 `0x80FC45CE`, `0x815AA68E`, `0x8157E74D`, `0x8157E747`, `0x815A6C5E`, and `0x815B16E9`.
