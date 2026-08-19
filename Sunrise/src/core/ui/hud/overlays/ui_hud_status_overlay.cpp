@@ -16,7 +16,6 @@
 #include "../../../../client/player/player_position.h"
 #include "../../../../middleware/content/packages/tables/region_reader.h"
 #include "../../../../middleware/content/packages/tables/spawn_reader.h"
-#include "../../../../state/activity/destination/activity_destination_snapshot.h"
 #include "../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../state/activity/runtime.h"
 #include "../../../../state/build_data/runtime.h"
@@ -171,32 +170,29 @@ void build_spawn(std::string_view stem, Value& output) noexcept {
 /** @return Every line's text, read from published State in one pass. */
 [[nodiscard]] Status read_status() noexcept {
     Status status{};
-    const std::uint64_t sessionId =
-        activity::membership::live_region_session(activity::kAbsentSessionId);
+    activity::membership::WorldSnapshot world{};
+    const bool hasWorld = activity::membership::primary_world(world);
     // The client's own step, published every frame. The world phase only moves on the spawn gate,
     // which stops being polled once the player is in, so it stays `arrived` in orbit.
-    status.inWorld = client::hooks::bootflow::in_world() && sessionId != activity::kAbsentSessionId;
+    status.inWorld = client::hooks::bootflow::in_world() && hasWorld;
     if (!status.inWorld) {
         g_spawn = {};
         // The next destination has its own map, so a position from this one must not carry over.
         client::player::position::reset();
         return status;
     }
-    activity::destination::DestinationSelection selection{};
-    (void)activity::destination::snapshot(sessionId, selection);
-    const std::string_view name = name_of(selection);
+    const std::string_view name = name_of(world.destination);
     assign(name.empty() ? std::string_view(kUnknown) : name, status.activity);
 
-    const std::int32_t region = activity::membership::reported_region(sessionId);
     layouts::Definition layout{};
     if (!state::build_data::find_scenario_layout(name, layout)) {
         assign(kUnknown, status.bubble);
         assign(kUnknown, status.spawn);
-        build_slice_set(region, status.sliceSet);
+        build_slice_set(world.region, status.sliceSet);
         return status;
     }
-    build_bubble(layout, region, status.bubble);
-    build_slice_set(region, status.sliceSet);
+    build_bubble(layout, world.region, status.bubble);
+    build_slice_set(world.region, status.sliceSet);
     build_spawn({layout.spawnStem.data(), layout.spawnStemLength}, status.spawn);
     return status;
 }

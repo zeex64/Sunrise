@@ -91,4 +91,27 @@ bool primary_identity(Identity& identity) noexcept {
     return oldest != kAbsentSessionId;
 }
 
+/** Reads one coherent destination and region from the signed-in player's original session. */
+bool primary_world(WorldSnapshot& output) noexcept {
+    output = {};
+    output.region = kAbsentRegionIndex;
+    std::uint64_t oldest = kAbsentSessionId;
+    AcquireSRWLockShared(&runtime::storage::g_stateLock);
+    const auto& root = runtime::storage::g_state;
+    for (const SessionRecord& record : root.activity.sessions) {
+        if (!record.occupied || !record.joined || !record.membership.hasIdentity
+            || record.membership.identity.accountSoid != root.account.primarySoid
+            || record.membership.region.index <= kAbsentRegionIndex
+            || (oldest != kAbsentSessionId && record.sessionId >= oldest)) {
+            continue;
+        }
+        output.destination = record.destination;
+        output.sessionId = record.sessionId;
+        output.region = record.membership.region.index;
+        oldest = record.sessionId;
+    }
+    ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+    return oldest != kAbsentSessionId;
+}
+
 } // namespace sunrise::state::activity::membership

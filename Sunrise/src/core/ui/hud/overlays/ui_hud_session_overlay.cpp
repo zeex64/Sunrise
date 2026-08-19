@@ -91,19 +91,16 @@ void draw() noexcept {
     std::array<group::HostSessionRow, kRowCapacity> rows{};
     std::size_t rowCount = 0;
     group::snapshot_host_sessions(rows, rowCount);
-    // A host session outlives the instance on purpose: the peer may rotate back into a region it
-    // never left, and a fresh id there is a hard error. So the link is what says it is still live.
-    std::array<state::gameplay::PeerStage, kRowCapacity> stages{};
-    std::size_t live = 0;
-    for (std::size_t index = 0; index < rowCount; ++index) {
-        if (peer::link_stage(rows[index].groupSessionId, stages[live])) {
-            rows[live] = rows[index];
-            ++live;
-        }
-    }
-    if (live == 0) {
+    if (rowCount == 0) {
         ImGui::TextDisabled("%s", kNoInstance);
         return;
+    }
+    // A claimed host row exists before its peer link and deliberately survives a disconnect.
+    // Keep it visible and let the channel column say `absent`; filtering it made a real instance
+    // look as if it had never been created, precisely when this diagnostic is most useful.
+    std::array<state::gameplay::PeerStage, kRowCapacity> stages{};
+    for (std::size_t index = 0; index < rowCount; ++index) {
+        static_cast<void>(peer::link_stage(rows[index].groupSessionId, stages[index]));
     }
     std::array<group::AdmittedRow, kAdmittedCapacity> admitted{};
     std::size_t admittedCount = 0;
@@ -119,7 +116,7 @@ void draw() noexcept {
     ImGui::TableSetupColumn("channel");
     ImGui::TableSetupColumn("join");
     ImGui::TableHeadersRow();
-    for (std::size_t index = 0; index < live; ++index) {
+    for (std::size_t index = 0; index < rowCount; ++index) {
         const group::HostSessionRow& row = rows[index];
         ImGui::TableNextRow();
         ImGui::TableNextColumn();

@@ -7,6 +7,13 @@
 
 namespace sunrise::state::activity::membership {
 
+/** One coherent view of the signed-in player's current world. */
+struct WorldSnapshot final {
+    destination::DestinationSelection destination{};
+    std::uint64_t sessionId{};
+    std::int32_t region{kAbsentRegionIndex};
+};
+
 /** Snapshot and revision guards for one deferred membership operation. */
 struct PendingMutation final {
     Snapshot snapshot{};
@@ -130,6 +137,15 @@ struct PendingMutation final {
  * @return True when a joined session has published the signed-in account and character.
  */
 [[nodiscard]] bool primary_identity(Identity& identity) noexcept;
+
+/**
+ * Reads the destination and region from the signed-in player's original activity session.
+ * Later activity-host sessions can report the same region while retaining the configured default
+ * destination, so choosing the newest region reporter would combine two different worlds.
+ * @param output Cleared first, then receives fields copied under one State read lock.
+ * @return True when the primary joined session has both an identity and reported region.
+ */
+[[nodiscard]] bool primary_world(WorldSnapshot& output) noexcept;
 
 /**
  * Prepares an acknowledgement mark for the current membership revision.
