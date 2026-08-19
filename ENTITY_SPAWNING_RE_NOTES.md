@@ -2257,13 +2257,18 @@ destination scenario's `bubbleMapIndices`: EDZ region 24 -> bubble ordinal 3 -> 
 (Basin), while region 408 -> ordinal 51 -> cell 145 (Town). This directly corrects the prior
 `...0002` / cell-145 injection while the client was entering Basin on `...0003`.
 
-Before enabling a create in that current view, the build emits at most one empty two-view validation
-packet per peer-link lifetime. Its body is the exact captured 275-bit signature followed by two
-`00010` handler tails (285 scheduler bits total). It cannot carry an entity. Success requires direct
-coverage of its sent sequence by a later inbound ACK; remote scheduler mutation is logged only as
-`proof=none`. A 3-second or 63-later-packet bound ends the attempt without retry. Four passive
-decoder hooks plus the existing entity-list hook record the per-view event -> mask -> entity-prelude
--> entity-list -> fixed boundaries under one same-reader/thread epoch.
+Before enabling a create in that current view, the first probe emitted one empty two-view validation
+packet. Its 275-bit signature plus two `00010` tails was directly acknowledged after 66 ms, and the
+client's remote signature changed to both views. The handler trace proved that was necessary but not
+sufficient: view 0 consumed `1,1,2,1,1` bits and completed by taking the first zero of view 1; view 1
+then consumed `1,1,10,19`, returned result 2 in the entity lane, and never called the fixed handler.
+The later packet-loss summary reported one corrupt read. This is the exact historical reason the
+entity remained suppressed; the build intentionally carried no Vandal.
+
+The corrected probe writes an independent six-bit `000100` body for each view, for 287 scheduler
+bits total (275 + 6 + 6), while leaving the proven one-view helper unchanged. Direct ACK coverage is
+still required but now counts as success only together with ten complete ordered handler calls and
+zero new corruption. A 3-second or 63-later-packet bound ends the attempt without retry.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -2316,9 +2321,10 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ, transition once from Town into Basin, then wait. Require
-   `scheduler-two-view-probe result=sent`, ten ordered `scheduler-handler-trace` calls, and finally
-   `result=accepted`. Remote mutation alone is not success.
+1. Load EDZ, transition once from Town into Basin, then wait. Require the corrected 287-bit
+   `scheduler-two-view-probe result=sent`, ten ordered handler calls consuming `1,1,2,1,1` for each
+   view, and finally `result=transport-accepted proof=ack`. Remote mutation or ACK with an
+   incomplete trace is not scheduler success.
 2. Confirm the current entity gate resolves the Basin view and reports `region=24 bubble=3 cell=11`.
    Old token `...0002` or cell 145 while Basin is current is a selector regression.
 3. If the empty two-view packet is directly acknowledged with zero new corrupt reads, enable the
@@ -2351,9 +2357,9 @@ sha256sum build/x64/Release/steam_api64.dll
 git diff --check
 ```
 
-Current Release test DLL SHA-256:
-`dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`.
-Committed as `test: validate current EDZ replication view` (this checkpoint).
+Current corrected Release candidate SHA-256:
+`4cd97f077e3b241d64ac195843b96f7e58f0a88c4050b412c556e52750fa1029`.
+Committed as `test: isolate two-view scheduler tails` (this checkpoint).
 
 After manual deployment, inspect:
 

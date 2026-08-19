@@ -246,11 +246,16 @@ The slot-14 atomic run then completed the current wire milestone:
   from the selected token's stored region and destination layout. In EDZ this maps Basin region 24
   / bubble 3 to map-global cell 11, while Town region 408 / bubble 51 remains cell 145. The audible
   Vandal was sent to old Town token `...0002`, cell 145, during the move to Basin token `...0003`.
-- A single fail-contained two-view validation now precedes any current-view entity work. It sends
-  the captured 275-bit signature plus two empty five-bit handler tails, never an entity, and accepts
-  success only when a later client packet directly acknowledges that packet sequence. Passive
-  hooks record the exact event, mask, entity-prelude, entity-list, and fixed-lane boundaries for
-  both views. This separates a valid frame from the earlier partial remote mutation and corruption.
+- The first fail-contained two-view validation sent the captured 275-bit signature plus two
+  five-bit tails and no entity. The client directly acknowledged packet 127 after 66 ms, and Basin
+  resolved correctly as token `...0003`, region 24, bubble 3, cell 11. The handler trace exposed a
+  narrower framing error: view 0 consumed six bits and completed, borrowing view 1's first zero;
+  view 1 consequently began one bit late, its prelude consumed 10 bits, and its entity lane returned
+  result 2 after 19 bits without reaching the fixed lane. The run later reported only one corrupt
+  read, but direct transport acknowledgement alone is not complete scheduler acceptance.
+- The corrected candidate keeps the one-view path unchanged and gives each two-view probe entry its
+  own six-bit `000100` empty body. Its scheduler body is now 287 bits (275 + 6 + 6). It remains a
+  one-shot packet with no entity.
 
 ## Immediate plan
 
@@ -259,9 +264,10 @@ The slot-14 atomic run then completed the current wire milestone:
 - Load EDZ, transition from Town to Basin once, and then wait. The build should report
   `scheduler-two-view-probe result=sent` for the bound Basin token and exactly ten bounded
   `scheduler-handler-trace` calls when the client enters both views.
-- Treat only `scheduler-two-view-probe result=accepted` as wire success. `remote-mutated` explicitly
-  carries `proof=none`; `unacknowledged`, new corrupt reads, or a channel timeout means the entity
-  path must stay disabled.
+- Require both `scheduler-two-view-probe result=transport-accepted proof=ack` and ten ordered
+  handler calls in which both views consume `1,1,2,1,1` bits and return result 0 through the fixed
+  lane. `remote-mutated` explicitly carries `proof=none`; an incomplete trace, new corrupt reads,
+  or a timeout keeps the entity path disabled.
 - Confirm the entity gate reports `region=24 bubble=3 cell=11` in Basin. Old token `...0002` or
   cell 145 while Basin is current is a regression.
 
@@ -308,7 +314,8 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
 - Previous atomic-create build: `2ce86a3d test atomic Vandal create update`.
-- Current test build: `test: validate current EDZ replication view` (this checkpoint).
+- Current-view probe base: `c3332f69 test: validate current EDZ replication view`.
+- Current corrected test: `test: isolate two-view scheduler tails` (this checkpoint).
 - The tested path preloads shared Vandal RSAT `0x815B204B`, sends the 86-bit slot-13 staged control,
   then sends the 216-bit slot-14 atomic create/update with map-global cell `0x91` and the exact
   native nearby-player transform. Both allocate; neither is visible.
@@ -316,11 +323,13 @@ Once the director evaluates an encounter and creates native squad/member objects
   `bee5df9bdf30023ba09a2d59b543355233d46984415fddc177d65be94197c67c`, proved two target-RSAT
   registrations and valid glue-dispatch arguments for slots 13 and 14. Its old logger observed
   dispatcher entry only.
-- The current Release test DLL adds watched-slot glue-table postconditions, current-region view
-  selection, dynamic EDZ cell resolution, and the one-shot two-view ACK/handler probe. SHA-256:
-  `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`.
+- The first two-view probe DLL, SHA-256
+  `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`, proved current-region
+  selection and direct ACK coverage but exposed the five-versus-six-bit per-view boundary.
+- The corrected six-bit-tail Release candidate has SHA-256
+  `4cd97f077e3b241d64ac195843b96f7e58f0a88c4050b412c556e52750fa1029`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- Current committed entity DLL SHA-256:
+- Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`

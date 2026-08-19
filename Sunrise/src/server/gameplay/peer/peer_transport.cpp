@@ -107,8 +107,8 @@ constexpr std::uint16_t kProvenSchedulerWireBits = 203;
 constexpr std::uint8_t kTwoViewProbeViewCount = 2;
 /** Captured two-view signature, including its one-bit update gate. */
 constexpr std::uint16_t kTwoViewProbeWireBits = 275;
-/** Signature plus one empty five-bit native handler tail for each registered view. */
-constexpr std::uint16_t kTwoViewProbeBodyBits = 285;
+/** Signature plus one complete empty six-bit native handler tail for each registered view. */
+constexpr std::uint16_t kTwoViewProbeBodyBits = 287;
 /** Fail before the native four-second corrupt-packet timeout can close the channel. */
 constexpr std::uint64_t kTwoViewProbeTimeout = 3000;
 /** Stay below half of the 128-entry packet ring while waiting for direct acknowledgement. */
@@ -488,6 +488,13 @@ write_scheduler_signature(bits::Writer& writer,
            && writer.write(0, 1);
 }
 
+/** Writes the complete six-bit empty body proven by the per-handler two-view trace. */
+[[nodiscard]] bool write_complete_empty_scheduler_view(bits::Writer& writer) noexcept {
+    // The older five-bit form relies on the following field's first zero. That works for a single
+    // view but shifts every later view. Give each view its own final fixed-handler absence bit.
+    return write_empty_scheduler_view(writer) && writer.write(0, 1);
+}
+
 /** Writes a captured MSB-first native body whose final byte is left-aligned. */
 [[nodiscard]] bool write_native_update(bits::Writer& writer,
                                        const EntityCreatePlan& plan) noexcept {
@@ -602,7 +609,7 @@ write_scheduler_signature(bits::Writer& writer,
         return false;
     }
     for (std::size_t index = 0; index < kTwoViewProbeViewCount; ++index) {
-        if (!write_empty_scheduler_view(writer)) {
+        if (!write_complete_empty_scheduler_view(writer)) {
             return false;
         }
     }
@@ -1786,7 +1793,7 @@ void consume_established(const state::gameplay::Endpoint& from,
     }
     if (twoViewProbeAccepted) {
         report(core::log::Level::info,
-               "ev=gameplay stage=scheduler-two-view-probe result=accepted "
+               "ev=gameplay stage=scheduler-two-view-probe result=transport-accepted proof=ack "
                "token=0x%016llX packet=%u ack_base=%u ack_entries=%u packets_after=%u "
                "elapsed_ms=%llu",
                static_cast<unsigned long long>(twoViewProbeToken),
