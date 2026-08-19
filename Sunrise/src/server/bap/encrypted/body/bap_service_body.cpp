@@ -40,12 +40,11 @@ constexpr std::size_t kTranslationReportLimit = 160;
 
 /**
  * Validates and reads one svc-23 identity. Sunrise hosts one local account, but Destiny requests a
- * translation for both that player and each synthetic activity-host peer. The latter deliberately
- * carries identity zero; its valid request must still resolve to the local account. Returning an
- * empty answer increments the native peer header without emitting its matching account entry,
- * producing the fatal 2/1 account-SOID table.
+ * translation for both that player and each synthetic activity-host peer. The latter currently
+ * carries identity zero. Zero is a missing platform identity, not an alias for the local player:
+ * pairing both to one SOID creates two native account records with the same key, and both expire.
  * @param requestBody Complete svc-23 request body.
- * @param output Receives the identity, including zero for a valid synthetic-host request.
+ * @param output Receives the identity, including zero for a valid but unpairable request.
  * @return True when the request has one correctly typed identity entry.
  */
 [[nodiscard]] bool translation_identity(std::span<const std::byte> requestBody,
@@ -95,7 +94,7 @@ bool process(const ServiceRoute& route,
         const state::AccountState account = state::account_snapshot();
         std::uint64_t identity = 0;
         const bool validIdentity = translation_identity(requestBody, identity);
-        const bool pairs = validIdentity && account.primarySoid != 0;
+        const bool pairs = validIdentity && identity != 0 && account.primarySoid != 0;
         const std::uint64_t soid = pairs ? account.primarySoid : 0;
         std::array<char, kTranslationReportLimit> line{};
         const int count = std::snprintf(line.data(),

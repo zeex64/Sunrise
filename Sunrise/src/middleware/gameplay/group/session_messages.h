@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 #include "../../encoding/bit_reader.h"
 #include "../../encoding/bit_writer.h"
@@ -162,6 +163,12 @@ struct MembershipMember {
     std::uint64_t joinTimestamp{};
     /** The third connection value has no recovered name; zero is its cleared value. */
     std::uint8_t connectionValue{};
+    /**
+     * Native peer-session identity. Retail complete snapshots publish this for every occupied
+     * peer. An empty view leaves the identity delta absent so a remote peer's local identity is
+     * not overwritten with guessed data.
+     */
+    std::string_view peerSessionId{};
     /** True publishes the player slot below. A member with no player publishes none. */
     bool ownsPlayerSlot{};
     std::uint32_t playerSlot{};

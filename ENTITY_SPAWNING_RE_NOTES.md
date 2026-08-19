@@ -1611,14 +1611,51 @@ translation at `t=37352` is followed by a native `1/1` snapshot. When the synthe
 added, svc 23 returns `unpaired` at `t=66655`; the publisher emits `2/1` at `t=66754` and the global
 timer starts immediately afterward. The server handler contained an explicit process-wide gate
 that paired only the first identity and returned an empty svc-24 response for every distinct later
-identity. That policy has been removed. In Sunrise's one-account loopback topology, every valid
-identity request for the player or a synthetic activity host maps to the local account SOID. The
-follow-up run established that the public synthetic host's request is structurally valid but
-carries identity zero. Returning the empty response for that zero produces `2/1` again, and the
-disconnect follows 91.5 seconds later. Request-shape validation is therefore separate from the
-identity value: a correctly typed zero identity now maps to the local account, while malformed
-requests still receive the empty response. Translation logs include validity, identity, and
-selected SOID so duplicate-source behavior remains observable.
+identity. That gate was removed, while malformed and zero identities still received an empty
+response. The follow-up run established that the public synthetic host's request is structurally
+valid but carries identity zero. Returning the empty response for that zero produces `2/1` again,
+and the disconnect follows 91.5 seconds later. Request-shape validation is therefore separate from
+the identity value.
+
+The experiment that aliased this typed zero to the local account disproved that shortcut. Svc 24
+accepted it and the source reached `2/2`, but both source slots contained the same account SOID
+`0x9EAA300100100100`. The reconciler created two target records with that same key, both remained
+in state 1 with the same countdown, and both expired together after 91 seconds with duplicate
+`Failed peer-subscription validation` errors. A platform identity of zero is missing identity, not
+another name for the local Steam account. Sunrise again leaves it unpaired; any future synthetic
+account response must be distinct and must also have a real matching connection record.
+
+### Native peer identity delta
+
+The upstream membership mismatch is now exact. `FUN_14176B450`, the native complete-snapshot
+builder, emits a full peer delta for every occupied peer and calls `FUN_14176BE20` with no old
+identity. Consequently its outer identity flag is present for every peer. The resulting `0x130`
+delta image describes a `0x108` peer identity. `FUN_1417A51E0` encodes it in this order:
+
+- a `peer-session-id` presence bit and a zero-terminated string of at most 128 bytes;
+- an optional 3-bit/7-bit pair;
+- a four-bit change mask for the identity fields around native offsets `+0x88..+0xB4`;
+- independently optional fields through the final native qword at `+0x100`.
+
+The membership dump formatter at RVA `0x1776763` confirms the first string becomes the displayed
+`session_id`, while native identity offset `+0xB8` becomes the displayed `flags`. The retail local
+fireteam/posse peer has a nonempty process session id and later flags `0x2000006F`; both Sunrise
+public peers had blank session ids and zero flags. This matches the writer: it previously emitted
+the outer identity bit as absent for both peers even in a complete snapshot.
+
+Sunrise now publishes a bounded `Sunrise_<group-session>@x64@activity_host` peer-session-id for the
+embedded host. Only that proven string arm is sent. All platform, account, QoS, flags, and trailing
+identity arms remain absent, and the admitted client's identity arm remains absent so the server
+does not overwrite its local native identity with guessed values. This is the smallest retail-like
+change that can test whether the native account publisher was classifying a blank-identity host as
+an ordinary account-bearing peer.
+
+The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
+account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
+public/peer route is the transport milestone that creates a real session and entity slots but only
+a live, empty world; authored mode and its server-published selection are the later layer that
+creates encounters, AI, scripts, and objectives. Stabilizing this public group session is therefore
+still prerequisite work, not a detour from enemy spawning.
 
 The same run showed the public namespace active set start at slot 0, then grow to exactly 13
 contiguous slots `0..12` when twelve additional native sobjects register. It never clears, so the
@@ -1666,9 +1703,17 @@ The current checkpoint includes work in:
 
 Immediate stationary EDZ run:
 
-- Capture every `stage=account-soid-publish` transition, especially the one with `h0=2 h1=1`.
-  Decompile its `caller=+0x...` callsite and trace the input builder back to the membership field
-  that increments the peer count without emitting a second account identity.
+- In the first `networking:session:membership:dump` for `group_target`, peer 0 must show
+  `session_id=Sunrise_<16 hex digits>@x64@activity_host`; peer 1 should not acquire that string.
+  Failure to decode the exact string means the new identity arm or its optional-field terminators
+  are misaligned, and the run should stop before interpreting later account state.
+- Capture every `stage=account-soid-publish` transition. The desired outcome is that the public
+  host no longer causes a typed-zero svc-23 request and the source remains `1/1`. If svc 23 still
+  requests identity zero, it must remain `result=unpaired`; do not alias it to the local SOID.
+- If the source still becomes `2/1`, the peer-session-id alone is not its classification key. The
+  next static target is the native identity field that distinguishes a platform peer from the
+  activity host, not an invented account translation. If it becomes `2/2`, verify the two SOIDs
+  are distinct and that both have matching state-4 connection records before waiting 91 seconds.
 - Capture the expanded `view-readiness` line for token `...002`. Compare `active_count` and the
   first eight `active=` slots with the public manager's `entity-slots occupied=` count. Determine
   which baseline/create acknowledgment is supposed to clear slot 0.

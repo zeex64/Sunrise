@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
 
 #include "../../../client/hooks/network/view_signature_capture.h"
 #include "../../../core/settings/settings.h"
@@ -69,6 +70,8 @@ constexpr std::uint8_t kInitialViewStage = 1;
 constexpr std::uint8_t kSignatureViewStage = 2;
 /** Both sides reaching stage five opens the simulation gatekeeper. */
 constexpr std::uint8_t kFinalViewStage = 5;
+/** Storage for the embedded host's bounded native peer-session-id. */
+constexpr std::size_t kPeerSessionIdCapacity = 128;
 
 /** Per-session host side of native message 40's five-stage handshake. */
 struct ViewHandshake {
@@ -240,10 +243,25 @@ template <typename Body>
 [[nodiscard]] bool publish_snapshot(const Admitted& record) noexcept {
     const state::gameplay::Endpoint host = endpoint::advertised();
     std::array<wire::MembershipMember, kSnapshotMemberCount> members{};
+    std::array<char, kPeerSessionIdCapacity> hostPeerSessionId{};
+    const int hostPeerSessionIdSize =
+        std::snprintf(hostPeerSessionId.data(),
+                      hostPeerSessionId.size(),
+                      "Sunrise_%016llX@x64@activity_host",
+                      static_cast<unsigned long long>(record.sessionId));
+    if (hostPeerSessionIdSize <= 0
+        || static_cast<std::size_t>(hostPeerSessionIdSize) >= hostPeerSessionId.size()) {
+        return false;
+    }
     descriptor::write_net_addr(host.address, host.port, members[kHostMemberIndex].address);
     // The session id is the machine id this region's descriptor advertised, and the client joined
     // through it. The whole-process identity would name a host this session never saw.
     members[kHostMemberIndex].machineId = record.sessionId;
+    // Retail complete snapshots always carry the host's native peer identity. Only the
+    // peer-session-id field is known for the embedded host; the remaining optional fields stay
+    // absent instead of borrowing the local player's platform/account identity.
+    members[kHostMemberIndex].peerSessionId = {hostPeerSessionId.data(),
+                                               static_cast<std::size_t>(hostPeerSessionIdSize)};
     // The consumer refuses a table with no entry it recognises as itself, so the peer's own blob is
     // echoed. A blob rebuilt from the endpoint it arrived from is not the same bytes.
     if (!peer::remote_address(record.sessionId, members[kPeerMemberIndex].address)) {

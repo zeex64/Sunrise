@@ -100,8 +100,20 @@ constexpr std::uint64_t kPlayerOwnedIndexZero = 0;
 /** A clear flag ends a player row after its identity group. The profile block it would gate has
  *  no writer here, so no row carries one. */
 constexpr std::uint64_t kPlayerProfileAbsent = 0;
-/** This host publishes no 264-byte identity block and neither trailing delta-entry flag. */
+/** An empty optional delta field is represented by a clear one-bit flag. */
 constexpr std::uint64_t kEntryFieldAbsent = 0;
+/** A populated optional delta field is represented by a set one-bit flag. */
+constexpr std::uint64_t kEntryFieldPresent = 1;
+/** Maximum native peer-session-id storage, including its terminating zero. */
+constexpr std::size_t kPeerSessionIdCapacity = 128;
+/** The identity delta's second group is absent in Sunrise's minimal host identity. */
+constexpr std::uint64_t kPeerIdentityPairAbsent = 0;
+/** Four-bit change mask for the identity fields at native offsets 0x88 through 0xB4. */
+constexpr std::uint8_t kPeerIdentityChangeMaskWidth = 4;
+/** No fields in that four-bit identity group are published. */
+constexpr std::uint64_t kPeerIdentityChangeMaskEmpty = 0;
+/** Optional identity fields after the 16-byte pair, through the last 64-bit value. */
+constexpr std::size_t kPeerIdentityTailFieldCount = 9;
 /** The four tail groups are all omitted, which leaves the consumer's own values alone. */
 constexpr std::uint64_t kTailGroupAbsent = 0;
 /** Tail groups omitted, one presence bit each. The encoder writes four, not five. */
@@ -116,6 +128,38 @@ constexpr std::size_t kMachineIdBytes = 8;
 constexpr unsigned kByteBits = 8;
 /** Mask of one byte. */
 constexpr std::uint64_t kByteMask = 0xFF;
+
+/**
+ * Writes the proven minimal arm of the native 0x108-byte peer identity delta. Retail's helper
+ * writes a presence bit followed by a zero-terminated, at-most-128-byte peer-session-id. Every
+ * later field is independently optional; leaving those arms absent avoids inventing platform,
+ * QoS, or account data for the embedded activity host.
+ * @param writer Open writer.
+ * @param peerSessionId Non-empty host session identity, without its terminating zero.
+ * @return True when the complete identity delta fit.
+ */
+[[nodiscard]] bool write_peer_identity_delta(bits::Writer& writer,
+                                             std::string_view peerSessionId) noexcept {
+    if (peerSessionId.empty() || peerSessionId.size() >= kPeerSessionIdCapacity
+        || !writer.write(kEntryFieldPresent, kFlagWidth)) {
+        return false;
+    }
+    for (const char character : peerSessionId) {
+        if (!writer.write(static_cast<unsigned char>(character), kByteBits)) {
+            return false;
+        }
+    }
+    if (!writer.write(0, kByteBits) || !writer.write(kPeerIdentityPairAbsent, kFlagWidth)
+        || !writer.write(kPeerIdentityChangeMaskEmpty, kPeerIdentityChangeMaskWidth)) {
+        return false;
+    }
+    for (std::size_t field = 0; field < kPeerIdentityTailFieldCount; ++field) {
+        if (!writer.write(kEntryFieldAbsent, kFlagWidth)) {
+            return false;
+        }
+    }
+    return true;
+}
 
 /**
  * Appends one member as a length-delimited submessage.
@@ -198,8 +242,17 @@ write_peer_delta(bits::Writer& writer, std::size_t index, const MembershipMember
             || !writer.write(member.connectionValue, kConnectionValueWidth))) {
         return false;
     }
+    if (member.peerSessionId.empty()) {
+        if (!writer.write(kEntryFieldAbsent, kFlagWidth)) {
+            return false;
+        }
+    } else if (!writer.write(kEntryFieldPresent, kFlagWidth)
+               || !write_peer_identity_delta(writer, member.peerSessionId)) {
+        return false;
+    }
+    // The two flags following the identity arm are independent peer-delta fields. Native complete
+    // snapshots can leave both clear, and Sunrise has no recovered values for either.
     return writer.write(kEntryFieldAbsent, kFlagWidth)
-           && writer.write(kEntryFieldAbsent, kFlagWidth)
            && writer.write(kEntryFieldAbsent, kFlagWidth);
 }
 
