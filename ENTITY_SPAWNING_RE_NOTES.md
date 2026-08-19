@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 1551506548c3d8cdaa41ebf2889b2b5e9218a9b069ad7ed607df6cb704980f73
+SHA-256 e26762d23b6ca7f82a8425baf2590e594be8c6ed41131f8234e59f505090a102
 ```
 
 ## Confirmed high-level path
@@ -227,16 +227,16 @@ transforms or frames those values even though its total width remains fixed.
 The scheduler address is now corrected directly from `FUN_1416E80B0` and
 `FUN_14172B453`: the view stores its scheduler owner at `view + 0x68`, and the scheduler begins at
 owner `+0x38`. The client probe reads the logical header/count/key/tag object there on every view
-pump. Separately, Sunrise retains the exact MSB-first encoded signature-update bits received from
-the client and replays them verbatim. A create is allowed only when the native logical count equals
-the wire count and the bound token/key/tag has one unique logical lane. No lane-order guess or
-server-side schema re-encoding remains in the path.
+pump. Separately, Sunrise retains the exact MSB-first encoded signature schema body received from
+the client and replays it after the external scheduler-update bit. A create is allowed only when
+the native logical count equals the wire count and the bound token/key/tag has one unique logical
+lane. No lane-order guess or server-side schema re-encoding remains in the path.
 
 This run also proves the scheduler signature is dynamic. It first sent an empty 131-bit update
 (the one-bit update gate plus a 130-bit zero-entry signature), then a valid 347-bit update with
 three registered entries (one update bit plus a 346-bit signature). Any create writer must size
 itself from the captured count and echo the complete captured signature; it must not assume the
-earlier one-view 203-bit prefix.
+earlier one-view 203-bit update-plus-schema width.
 
 The field-11 address correction resolved native view creation. The latest run proves all of the
 following:
@@ -811,12 +811,12 @@ first 16 bytes of both native dirty/sent mask objects, the component scratch bas
 delta, accumulator state, and up to 64 flushed bytes. The hook calls the original encoder first
 and never edits its context, masks, or writer.
 
-The server's existing external-body probe now also records the scheduler body after its two
-presence bits as `stage=scheduler-body`. It retains up to 256 bytes, preserves a final partial byte
-as an MSB-aligned value, and reports the original/captured bit counts plus a truncation flag. This
-replaces the old need to reconstruct a potentially 1500-bit native scheduler frame from only four
-64-bit prefix words; it is read-only and is emitted only after the server considers the view
-accepted and the client declares a scheduler body.
+The server's existing external-body probe now also records the scheduler body after the
+gatekeeper/update prefix as `stage=scheduler-body`. It retains up to 256 bytes, preserves a final
+partial byte as an MSB-aligned value, and reports the original/captured bit counts plus a
+truncation flag. This replaces the old need to reconstruct a potentially 1500-bit native scheduler
+frame from only four 64-bit prefix words; it is read-only and is emitted only after the server
+considers the view accepted and the client declares a scheduler body.
 
 The copied-reader path originally treated the bits after schema `0x80806AEA` as a two-bit view
 count followed by 64/8-bit view entries. The 2026-08-18 run disproved that layout: while the native
@@ -1030,7 +1030,7 @@ Client hooks now cover:
   signature value (`stage=entity-view`).
 - The exact bit delta of native schema `0x80806AEA` output plus its 16-byte input value
   (`stage=scheduler-native-signature`).
-- Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
+- Up to 2048 exact client scheduler-body bits after the gatekeeper/update prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
 - Membership-to-view synchronization predicates.
@@ -1763,6 +1763,24 @@ entity record or visible enemy accompanied it. Ordinary acknowledgements now sup
 after the first entity attempt. Only an actual bounded create/retry packet carries the cached
 one-view scheduler, isolating pending resource decodes while allowing acknowledgement-only traffic
 to keep the channel alive.
+
+The packet chronology localizes the corruption one step earlier than the create. The last valid
+client receive was `t=64892`; at `t=64952` Sunrise replaced its cached signature wire from a new
+client scheduler update, and the client partially applied that echo but never counted it as a valid
+packet. The later entity-list calls all arrived with `capacity=255` and their readers already near
+the zero-padded packet end, proving an earlier handler had consumed the intended entity body.
+
+Comparing two captures with the same logical one-view header, key, and tag exposed the unstable
+bit: their first 202 schema bits matched, while bit 203 followed the client's handler state. Ghidra
+explains the boundary. The external trailer's second bit is already the scheduler update flag;
+schema `0x80806AEA` starts immediately after it and the native encoder measures exactly 202 bits for
+one view. Sunrise incorrectly consumed a second nested update bit and retained 203 bits, borrowing
+the first handler bit. A borrowed zero appeared to work; a borrowed one made the event handler eat
+the following entity frame. The probe now captures and replays exactly the 202-bit schema body,
+while the external trailer supplies the single update bit. Scheduler isolation remains as a second
+line of defense between bounded entity attempts. The one-view writer also rejects any cached schema
+whose measured width is not exactly 202 bits, preventing a stale zero-view or multi-view capture
+from re-entering this path.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the

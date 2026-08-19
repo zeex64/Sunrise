@@ -91,7 +91,7 @@ struct EstablishedPacket {
 struct ExternalStatus {
     /** State the remote simulation gatekeeper expects for this channel. */
     bool gatekeeperEnabled{};
-    /** True when a scheduler frame follows; the frame owns its signature-update flag. */
+    /** Native scheduler update bit; when set, the signature schema and handler frame follow. */
     bool schedulerPresent{};
 };
 
@@ -171,7 +171,7 @@ struct ExternalStatus {
                                    std::size_t bodyBits) noexcept;
 
 /**
- * Reads the simulation-gatekeeper and replication-scheduler presence bits.
+ * Reads the simulation-gatekeeper state and replication-scheduler update bit.
  * @param reader Reader positioned at EstablishedPacket::externalBitOffset.
  * @param output Receives both native handler states.
  * @return True when both bits were present.
@@ -180,11 +180,11 @@ struct ExternalStatus {
                                         ExternalStatus& output) noexcept;
 
 /**
- * Writes the simulation-gatekeeper and replication-scheduler presence bits.
+ * Writes the simulation-gatekeeper state and replication-scheduler update bit.
  * A bound view requires the gatekeeper bit even before this host can publish a scheduler body.
  * @param writer Writer positioned after the reliable queues.
  * @param gatekeeperEnabled State expected by the peer's simulation gatekeeper.
- * @param schedulerPresent True only when a scheduler frame follows.
+ * @param schedulerPresent Scheduler update bit; true only when its schema and handlers follow.
  * @return True when both status bits fit.
  */
 [[nodiscard]] bool write_external_status(encoding::bits::Writer& writer,
