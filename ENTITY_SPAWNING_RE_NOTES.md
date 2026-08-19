@@ -2109,6 +2109,14 @@ and refuses the update unless both the live local and remote scheduler layouts s
 the cached one-view signature. A missed window now leaves the update unsent rather than publishing
 an incompatible scheduler body.
 
+The following run showed that the overlap window is not stable: the create again decoded and slot
+13 was occupied, but the local scheduler expanded to two views only 18 ms later. The 100 ms build
+correctly suppressed `entity-update-out`, so it caused no incompatible update packet, but there was
+nothing new for the client to render. The native transform had already been captured before the
+occupied bit appeared. The next build therefore has no artificial post-acceptance delay; it sends
+on the first service tick that observes slot 13, still guarded by exact live one-view agreement on
+both scheduler sides.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2162,7 +2170,7 @@ The current checkpoint includes work in:
 
 1. Run the two-stage shared-Vandal build once in the initial EDZ zone without moving. Confirm one
    77-bit `entity-create-out`, an `occupied_low` transition containing bit 13, then exactly one
-   `entity-update-out` with `update_bits=130` after the 100 ms post-acceptance gap.
+   `entity-update-out` with `update_bits=130` on the first service tick after occupancy.
 2. Confirm the update-only decoder returns `result=0 count=1`, reports flags `0x0002`, retains the
    same entity handle, and does not introduce a corrupt-read burst or four-second channel timeout.
 3. Check visually at the measured nearby-player position. If the object renders but has no AI,

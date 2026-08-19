@@ -173,9 +173,14 @@ The first live nearby-placement run was accepted but remained invisible:
 - The 500 ms update delay then missed the one-view window. The local scheduler expanded to two
   views before a busy control queue cleared; the server sent the cached one-view update afterward,
   but the client never entered the entity decoder and nothing rendered.
-- The update delay is now 100 ms, and transmission requires both live local and remote layouts to
-  match the cached one-view signature. A changed layout suppresses the packet instead of emitting
-  it into an incompatible scheduler context.
+- The update delay was reduced to 100 ms, and transmission requires both live local and remote
+  layouts to match the cached one-view signature. A changed layout suppresses the packet instead
+  of emitting it into an incompatible scheduler context.
+- The next run proved the overlap can be much shorter: the local layout grew to two views only
+  18 ms after slot 13 became occupied. The 100 ms update was safely suppressed, so no update was
+  decoded and nothing could render.
+- The native payload is ready before occupancy publishes. The update now leaves on the first
+  service tick that observes slot 13, with the same exact local/remote one-view guards.
 
 ## Immediate plan
 
@@ -183,9 +188,9 @@ The first live nearby-placement run was accepted but remained invisible:
 
 The current build sends shared Vandal RSAT `0x815B204B` create-only, observes the exact low occupied
 word, and stops retries as soon as its selected slot is allocated. It retains the native X+3 wire
-generated from that accepted baseline, waits 100 ms, verifies both scheduler layouts still match
-the cached one-view signature, and sends exactly one 130-bit update-only shortcut for the same
-handle. The expected sequence is `entity-create-out`, slot 13 occupied, then
+generated from that accepted baseline, verifies both scheduler layouts still match the cached
+one-view signature on the first accepted service tick, and sends exactly one 130-bit update-only
+shortcut for the same handle. The expected sequence is `entity-create-out`, slot 13 occupied, then
 `entity-update-out update_bits=130` followed by a decoded update record.
 
 ### 2. Publish one bounded position
@@ -239,10 +244,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
 - Current working code sends shared Vandal sobject RSAT `0x815B204B` create-only, inherits the
   active view's spatial cell, confirms the exact occupied slot, and then sends one native-encoded
-  nearby-player update-only record after a 100 ms post-acceptance gap while the one-view layout is
+  nearby-player update-only record on the first accepted service tick while the one-view layout is
   still exact on both scheduler sides.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `23ce4af20ae35cd6f97c8411c89693f0f978d3429603f88997b55606e5b4263c`
+- DLL SHA-256: `041a515670327a4d9bbf15ac721bfb36b829d69fc54e150ff0c457419e8a88ac`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

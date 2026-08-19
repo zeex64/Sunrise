@@ -83,9 +83,8 @@ constexpr std::uint8_t kFirstObjectGeneration = 2;
 constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
 /** A failed decode queues the RSAT; retry the exact same slot after loader service has run. */
 constexpr std::uint64_t kEntityCreateRetryInterval = 2000;
-/** The baseline is ready immediately; retain a short gap before the one-view overlap window closes.
- */
-constexpr std::uint64_t kEntityUpdateReadyInterval = 100;
+/** The native baseline is ready before occupancy publishes; update on the first accepted tick. */
+constexpr std::uint64_t kEntityUpdateReadyInterval = 0;
 /** Exact shared-Vandal transform width produced by the native encoder. */
 constexpr std::uint16_t kFirstEntityUpdateBits = 130;
 /** Reject a scheduler layout that only agrees for one transition sample. */
