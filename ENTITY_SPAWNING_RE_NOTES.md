@@ -1476,6 +1476,29 @@ field. The planner now accepts any nonnegative native namespace that still passe
 one-view signature agreement, 13-object baseline, pristine slot generations, control-queue, and
 500 ms stability gates. Decoder tracing follows the armed view's namespace for the same reason.
 
+### External NetDuma connection-table capture
+
+The shared `destiny 2.pcapng` is not a packet capture from the Destiny host's gameplay interface.
+It was recorded on a Windows machine while a browser repeatedly called a NetDuma router's
+`com.netdumasoftware.ctwatch` JSON-RPC endpoint. The roughly 215-second file contains 230 decoded
+connection-table snapshots, but the actual game datagrams never traverse the capturing interface.
+
+One sustained connection on the same LAN device as active Steam traffic is consistent with the
+reported Destiny session: client source port 2003 to remote UDP port 3074. Across the capture its
+counters increased by 1,704 sent and 1,685 received packets, or about 1.30 MB sent and 0.69 MB
+received. That supports a long-lived bidirectional retail gameplay route, but attribution to
+Destiny is still an inference from the file's provenance and the concurrent Steam activity.
+
+The capture contains no UDP/3074 payload bytes, traversal records, DTLS frames, scheduler bodies,
+entity lists, or sobject create/update messages. It therefore cannot determine entity wire layout
+and does not justify changing Sunrise's loopback gameplay or activity-host ports. A useful retail
+comparison capture must be taken on the game PC's active NIC (or a real mirrored router port), must
+include packet bytes rather than router statistics, and should begin before activity launch so the
+initial handshake and first zone load are both present.
+
+The file also records an HTTP Basic authorization header for the router in clear text. Do not
+redistribute it; if the credential is still valid, rotate it before sharing any sanitized excerpt.
+
 ## Source areas changed
 
 The current checkpoint includes work in:
@@ -1543,6 +1566,10 @@ The current checkpoint includes work in:
 16. Validate the authored-content paper's identity-1 mode switch at runtime, then locate
    or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
    and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
+17. If a retail packet comparison becomes available, first verify that the pcap itself contains
+   the UDP gameplay datagrams. Capture on the game PC before launch and retain the initial
+   handshake plus the first zone load; a NetDuma connection-table export provides only counters
+   and cannot be used to recover entity framing.
 
 ## Build and verification
 
