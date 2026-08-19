@@ -253,31 +253,34 @@ The slot-14 atomic run then completed the current wire milestone:
   view 1 consequently began one bit late, its prelude consumed 10 bits, and its entity lane returned
   result 2 after 19 bits without reaching the fixed lane. The run later reported only one corrupt
   read, but direct transport acknowledgement alone is not complete scheduler acceptance.
-- The corrected candidate keeps the one-view path unchanged and gives each two-view probe entry its
-  own six-bit `000100` empty body. Its scheduler body is now 287 bits (275 + 6 + 6). It remains a
-  one-shot packet with no entity.
+- The corrected 287-bit probe passed at `t=94777`: all ten handler calls ran in exact view-major
+  order, both views consumed `1,1,2,1,1`, every native result was zero, and ordinal 9/fixed reported
+  `status=complete`. The client acknowledged packet 135 after 66 ms. Basin remained token
+  `...0003`, namespace 2, region 24, bubble 3, cell 11. The later summary reported 536 delivered,
+  zero lost, and one aggregate corrupt read; there was no timeout or disconnect during the observed
+  session. The framing boundary is now proven, though the next entity packet remains one-shot.
+- The current candidate replays that cached two-view layout after its ACK and successful handler
+  epoch. It sends one create-only shared Vandal into current Basin slot 0 with no retries. If slot 0
+  allocates and its two-view handler epoch also completes, the native baseline supplies the exact
+  current-player transform and the build sends one atomic create/update in slot 1.
 
 ## Immediate plan
 
-### 1. Validate the safe two-view frame
+### 1. Test the current-Basin create
 
-- Load EDZ, transition from Town to Basin once, and then wait. The build should report
-  `scheduler-two-view-probe result=sent` for the bound Basin token and exactly ten bounded
-  `scheduler-handler-trace` calls when the client enters both views.
-- Require both `scheduler-two-view-probe result=transport-accepted proof=ack` and ten ordered
-  handler calls in which both views consume `1,1,2,1,1` bits and return result 0 through the fixed
-  lane. `remote-mutated` explicitly carries `proof=none`; an incomplete trace, new corrupt reads,
-  or a timeout keeps the entity path disabled.
-- Confirm the entity gate reports `region=24 bubble=3 cell=11` in Basin. Old token `...0002` or
-  cell 145 while Basin is current is a regression.
+- Load EDZ, transition from Town to Basin once, and wait. First require the already-proven 287-bit
+  probe and complete ten-call handler trace.
+- The next `entity-create-out` must name token `...0003`, namespace 2, view 1, slot 0, region 24,
+  bubble 3, and cell 11. Any old token, namespace 1, or cell 145 is a hard regression.
+- Require the create packet's ten-call handler epoch, `entity-record cell=0x000B flags=0x0001`, a
+  target-RSAT registration, `sobject-bind-dispatch status=bound`, and slot-0 occupancy.
 
-### 2. Send the unchanged atomic body to the current view
+### 2. Observe the atomic nearby Vandal
 
-- Only after direct probe acknowledgement, enable a separately bounded create for the current
-  bound token using Basin cell 11 and the already-accepted 216-bit Vandal body.
-- Require `entity-record`, target-RSAT registration, and `sobject-bind-dispatch status=bound` for
-  the dynamically allocated slot. Do not alter the RSAT, transform, parent, or stream source during
-  this ownership test.
+- If the baseline produces the 130-bit native nearby-player update before the cached remote layout
+  changes, expect a second `entity-create-out` for slot 1 with `combined=1` and `update_bits=130`.
+- Require `entity-record cell=0x000B flags=0x0003`, slot-1 occupancy, target registration, and a
+  completed glue-table bind. There are no two-view retries if either bounded send fails.
 
 ### 3. Resolve rendering, then AI
 
@@ -315,7 +318,8 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
 - Previous atomic-create build: `2ce86a3d test atomic Vandal create update`.
 - Current-view probe base: `c3332f69 test: validate current EDZ replication view`.
-- Current corrected test: `test: isolate two-view scheduler tails` (this checkpoint).
+- Two-view tail proof: `83cf6b0c test: isolate two-view scheduler tails`.
+- Current bounded spawn test: `test: create Vandal in current Basin view` (this checkpoint).
 - The tested path preloads shared Vandal RSAT `0x815B204B`, sends the 86-bit slot-13 staged control,
   then sends the 216-bit slot-14 atomic create/update with map-global cell `0x91` and the exact
   native nearby-player transform. Both allocate; neither is visible.
@@ -328,6 +332,8 @@ Once the director evaluates an encounter and creates native squad/member objects
   selection and direct ACK coverage but exposed the five-versus-six-bit per-view boundary.
 - The corrected six-bit-tail Release candidate has SHA-256
   `4cd97f077e3b241d64ac195843b96f7e58f0a88c4050b412c556e52750fa1029`.
+- The current bounded Basin-spawn Release candidate has SHA-256
+  `69ceeaee5d60b92091f97331ee0d21f2bd92d9185b5661e6ebcaf48de5fb096d`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

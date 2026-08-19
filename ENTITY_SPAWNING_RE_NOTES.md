@@ -2266,9 +2266,20 @@ The later packet-loss summary reported one corrupt read. This is the exact histo
 entity remained suppressed; the build intentionally carried no Vandal.
 
 The corrected probe writes an independent six-bit `000100` body for each view, for 287 scheduler
-bits total (275 + 6 + 6), while leaving the proven one-view helper unchanged. Direct ACK coverage is
-still required but now counts as success only together with ten complete ordered handler calls and
-zero new corruption. A 3-second or 63-later-packet bound ends the attempt without retry.
+bits total (275 + 6 + 6), while leaving the proven one-view helper unchanged. Its next run passed:
+both views consumed `1,1,2,1,1`, every handler returned zero, ordinal 9/fixed reported complete, and
+packet 135 was directly acknowledged after 66 ms. The selected view was current Basin token
+`...0003`, namespace 2, region 24, bubble 3, map-global cell 11. The later aggregate reported 536
+delivered, zero lost, and one corrupt read without a timeout or disconnect.
+
+The current bounded entity build caches that acknowledged two-view signature. Completion is now a
+programmatic gate: the latest scheduler epoch must visit every expected lane with result zero. Once
+the empty probe is acknowledged, the server may send one create-only shared Vandal to the current
+token's pristine namespace-2 slot 0, with no retries. Its packet reuses the six-bit empty body for
+old view 0 and targets Basin view 1. If slot 0 allocates and that entity packet also completes its
+handler epoch, the decoded native baseline generates the exact 130-bit current-player update and a
+single combined create/update may use slot 1. The cached remote two-view layout is intentional even
+after the local list adds the root view; outbound decoding follows the client's remote list.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -2321,15 +2332,13 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ, transition once from Town into Basin, then wait. Require the corrected 287-bit
-   `scheduler-two-view-probe result=sent`, ten ordered handler calls consuming `1,1,2,1,1` for each
-   view, and finally `result=transport-accepted proof=ack`. Remote mutation or ACK with an
-   incomplete trace is not scheduler success.
-2. Confirm the current entity gate resolves the Basin view and reports `region=24 bubble=3 cell=11`.
-   Old token `...0002` or cell 145 while Basin is current is a selector regression.
-3. If the empty two-view packet is directly acknowledged with zero new corrupt reads, enable the
-   unchanged 216-bit atomic Vandal body in the current bound view. Require the decoded cell, target
-   RSAT occurrence, and `sobject-bind-dispatch status=bound` for its dynamic slot.
+1. Load EDZ, transition once from Town into Basin, then wait. Require the 287-bit empty probe's
+   complete ten-call epoch and direct transport ACK.
+2. Require the first `entity-create-out` on token `...0003`, namespace 2, view 1, slot 0, region 24,
+   bubble 3, cell 11. Confirm its complete handler epoch, decoded cell `0x000B`, target registration,
+   glue-table `status=bound`, and occupancy.
+3. If the native baseline yields the current 130-bit update in time, require the slot-1 combined
+   create/update on the same token/view/cell and its flags `0x0003`. Neither two-view send retries.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
    biped's parent, stream-source, and RSAT suffix before changing the payload. Do not guess them.
 5. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
@@ -2357,9 +2366,9 @@ sha256sum build/x64/Release/steam_api64.dll
 git diff --check
 ```
 
-Current corrected Release candidate SHA-256:
-`4cd97f077e3b241d64ac195843b96f7e58f0a88c4050b412c556e52750fa1029`.
-Committed as `test: isolate two-view scheduler tails` (this checkpoint).
+Current bounded Basin-spawn Release candidate SHA-256:
+`69ceeaee5d60b92091f97331ee0d21f2bd92d9185b5661e6ebcaf48de5fb096d`.
+Committed as `test: create Vandal in current Basin view` (this checkpoint).
 
 After manual deployment, inspect:
 

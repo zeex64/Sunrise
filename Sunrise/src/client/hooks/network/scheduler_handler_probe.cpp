@@ -43,11 +43,13 @@ struct EpochState {
     std::uint8_t viewCount{};
     std::uint8_t expectedCalls{};
     std::uint8_t ordinal{};
+    bool resultsOk{true};
     bool armed{};
 };
 
 SRWLOCK g_traceLock{SRWLOCK_INIT};
 std::atomic_bool g_active{};
+std::atomic_uint8_t g_completedViews{};
 EpochState g_epoch{};
 std::uint64_t g_nextEpoch{};
 
@@ -274,7 +276,9 @@ void arm(std::uint8_t viewCount) noexcept {
     g_epoch.deadline = GetTickCount64() + kTraceLifetimeMilliseconds;
     g_epoch.viewCount = viewCount;
     g_epoch.expectedCalls = static_cast<std::uint8_t>(viewCount * kLaneCount);
+    g_epoch.resultsOk = true;
     g_epoch.armed = true;
+    g_completedViews.store(0, std::memory_order_release);
     g_active.store(true, std::memory_order_release);
     ReleaseSRWLockExclusive(&g_traceLock);
 }
@@ -297,6 +301,10 @@ bool active() noexcept {
     const bool armed = g_epoch.armed;
     ReleaseSRWLockExclusive(&g_traceLock);
     return armed;
+}
+
+bool completed(std::uint8_t viewCount) noexcept {
+    return viewCount != 0 && g_completedViews.load(std::memory_order_acquire) == viewCount;
 }
 
 Call begin(Lane lane, const void* reader) noexcept {
@@ -379,9 +387,13 @@ void finish(const Call& call, int result) noexcept {
             status = Status::callLimit;
             disarm_locked();
         } else {
+            g_epoch.resultsOk = g_epoch.resultsOk && result == 0;
             ++g_epoch.ordinal;
             if (g_epoch.ordinal == g_epoch.expectedCalls) {
                 status = Status::complete;
+                if (g_epoch.resultsOk) {
+                    g_completedViews.store(g_epoch.viewCount, std::memory_order_release);
+                }
                 disarm_locked();
             } else {
                 status = Status::ok;
@@ -394,6 +406,7 @@ void finish(const Call& call, int result) noexcept {
 
 void reset() noexcept {
     cancel();
+    g_completedViews.store(0, std::memory_order_relaxed);
 }
 
 } // namespace sunrise::client::hooks::network::scheduler_handler_probe

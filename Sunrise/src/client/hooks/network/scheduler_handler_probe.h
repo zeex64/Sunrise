@@ -64,6 +64,9 @@ void cancel() noexcept;
 /** @return True while a non-expired trace still accepts handler calls. */
 [[nodiscard]] bool active() noexcept;
 
+/** @return True when the latest armed epoch completed every lane with result zero. */
+[[nodiscard]] bool completed(std::uint8_t viewCount) noexcept;
+
 /** Captures the entry state for one handler while an epoch is armed. */
 [[nodiscard]] Call begin(Lane lane, const void* reader) noexcept;
 
