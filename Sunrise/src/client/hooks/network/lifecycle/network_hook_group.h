@@ -51,6 +51,9 @@ inline constexpr std::array kGameSlots{
     HookSlot::signOnReadinessReady,
     HookSlot::sobjectApplyJob,
     HookSlot::sobjectKind0Constructor,
+    HookSlot::sobjectRecordPromotion,
+    HookSlot::sobjectDirtyService,
+    HookSlot::sobjectType2Job,
 };
 
 /** Steam networking hooks, found after SteamAPI_Init. */

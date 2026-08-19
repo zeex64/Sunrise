@@ -69,6 +69,9 @@ namespace {
         signon::ready_entry_point(),
         sobject_apply_probe::apply_entry_point(),
         sobject_apply_probe::kind0_entry_point(),
+        sobject_apply_probe::promotion_entry_point(),
+        sobject_apply_probe::dirty_service_entry_point(),
+        sobject_apply_probe::type2_job_entry_point(),
     };
 }
 
@@ -125,6 +128,9 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.signOnReadinessReady, replacements[35]},
         hooking::detour::Spec{resolved.sobjectApplyJob, replacements[36]},
         hooking::detour::Spec{resolved.sobjectKind0Constructor, replacements[37]},
+        hooking::detour::Spec{resolved.sobjectRecordPromotion, replacements[38]},
+        hooking::detour::Spec{resolved.sobjectDirtyService, replacements[39]},
+        hooking::detour::Spec{resolved.sobjectType2Job, replacements[40]},
     };
 }
 

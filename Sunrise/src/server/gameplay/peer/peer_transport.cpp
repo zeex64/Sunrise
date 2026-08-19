@@ -107,8 +107,14 @@ constexpr std::uint16_t kProvenSchedulerWireBits = 203;
 constexpr std::uint8_t kTwoViewProbeViewCount = 2;
 /** Captured two-view signature, including its one-bit update gate. */
 constexpr std::uint16_t kTwoViewProbeWireBits = 275;
-/** Signature plus one complete empty six-bit native handler tail for each registered view. */
-constexpr std::uint16_t kTwoViewProbeBodyBits = 287;
+/** The transition capture orders the outgoing EDZ view before the current Basin view. */
+constexpr std::uint8_t kTwoViewProbeTargetView = 1;
+/** Current Basin's signed region and scenario-resolved map cell. */
+constexpr std::int32_t kTwoViewProbeRegion = 24;
+constexpr std::uint8_t kTwoViewProbeBubble = 3;
+constexpr std::uint8_t kTwoViewProbeCell = 11;
+/** Signature, complete old-view tail, and the target view's full 220-bit handler body. */
+constexpr std::uint16_t kTwoViewProbeBodyBits = 501;
 /** Fail before the native four-second corrupt-packet timeout can close the channel. */
 constexpr std::uint64_t kTwoViewProbeTimeout = 3000;
 /** Stay below half of the 128-entry packet ring while waiting for direct acknowledgement. */
@@ -178,7 +184,7 @@ struct EntityCreatePlan {
     bool present{};
 };
 
-/** One fail-contained scheduler validation with no entity records in either view. */
+/** One fail-contained scheduler validation carrying an atomic create in the selected view. */
 struct TwoViewProbePlan {
     state::gameplay::SchedulerSignature scheduler{};
     std::uint64_t token{};
@@ -605,17 +611,29 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
-/** Writes the exact captured two-view signature followed by two empty native handler tails. */
+/** Writes the exact two-view signature, an empty old view, and one atomic current-view create. */
 [[nodiscard]] bool write_two_view_probe(bits::Writer& writer,
-                                        const TwoViewProbePlan& plan) noexcept {
+                                        const TwoViewProbePlan& plan,
+                                        const EntityCreatePlan& entityCreate) noexcept {
     if (!plan.present || !plan.scheduler.present
         || plan.scheduler.viewCount != kTwoViewProbeViewCount
         || plan.scheduler.wireBits != kTwoViewProbeWireBits
+        || plan.selectedView != kTwoViewProbeTargetView || !entityCreate.present
+        || !entityCreate.combinedCreate || entityCreate.updateOnly
+        || entityCreate.updateBits != kFirstEntityUpdateBits || entityCreate.token != plan.token
+        || entityCreate.viewIndex != plan.selectedView
+        || entityCreate.schedulerKey != plan.scheduler.views[plan.selectedView].key
+        || entityCreate.schedulerTag != plan.scheduler.views[plan.selectedView].tag
+        || entityCreate.rsat != state::gameplay::kFirstEntityRsat
+        || !entityCreate.spatialCellPresent || entityCreate.spatialRegion != kTwoViewProbeRegion
+        || entityCreate.spatialBubble != kTwoViewProbeBubble
+        || entityCreate.spatialCell != kTwoViewProbeCell
         || !write_scheduler_signature(writer, plan.scheduler)) {
         return false;
     }
     for (std::size_t index = 0; index < kTwoViewProbeViewCount; ++index) {
-        if (!write_complete_empty_scheduler_view(writer)) {
+        if (index == plan.selectedView ? !write_entity_create_view(writer, entityCreate)
+                                       : !write_complete_empty_scheduler_view(writer)) {
             return false;
         }
     }
@@ -702,7 +720,8 @@ write_scheduler_signature(bits::Writer& writer,
         }
         selectedIndex = index;
     }
-    if (selectedIndex == scheduler.views.size()) {
+    if (selectedIndex == scheduler.views.size() || selectedIndex != kTwoViewProbeTargetView
+        || scheduler.views[0].key == capture.schedulerKey) {
         return false;
     }
 
@@ -712,6 +731,141 @@ write_scheduler_signature(bits::Writer& writer,
     output.remoteViews = capture.schedulerRemoteViewCount;
     output.remoteAlreadyMatches = scheduler_matches_remote_capture(scheduler, capture);
     output.present = true;
+    return true;
+}
+
+/** @return True when two guarded plans describe the exact same atomic create. */
+[[nodiscard]] bool same_entity_create_plan(const EntityCreatePlan& left,
+                                           const EntityCreatePlan& right) noexcept {
+    return left.token == right.token && left.schedulerKey == right.schedulerKey
+           && left.rsat == right.rsat && left.slot == right.slot
+           && left.schedulerTag == right.schedulerTag
+           && left.handleGeneration == right.handleGeneration
+           && left.objectGeneration == right.objectGeneration && left.viewIndex == right.viewIndex
+           && left.namespaceId == right.namespaceId && left.spatialRegion == right.spatialRegion
+           && left.updateWire == right.updateWire && left.updateBits == right.updateBits
+           && left.spatialCell == right.spatialCell && left.spatialBubble == right.spatialBubble
+           && left.spatialCellPresent == right.spatialCellPresent
+           && left.bootstrapScheduler == right.bootstrapScheduler
+           && left.combinedCreate == right.combinedCreate && left.updateOnly == right.updateOnly
+           && left.present == right.present;
+}
+
+/**
+ * Builds the current-Basin atomic create that accompanies the first two-view signature.
+ * A retained plan supplies only the already-consumed native update during send revalidation;
+ * every topology, slot, resource, and cell field is rebuilt from current live state.
+ */
+[[nodiscard]] bool
+prepare_entity_create_with_two_view_probe(const SelectedReplicationView& selected,
+                                          const TwoViewProbePlan& probe,
+                                          const EntityCreatePlan* retained,
+                                          EntityCreatePlan& output,
+                                          EntityCreateGate& gate) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    if (!probe.present || !probe.scheduler.present
+        || probe.scheduler.viewCount != kTwoViewProbeViewCount
+        || probe.scheduler.wireBits != kTwoViewProbeWireBits
+        || probe.selectedView != kTwoViewProbeTargetView) {
+        gate = EntityCreateGate::schedulerShape;
+        return false;
+    }
+    if (!selected.present || !selected.signature.bound || selected.signature.token == 0
+        || selected.signature.token != probe.token || !selected.worldPresent
+        || selected.world.region != kTwoViewProbeRegion) {
+        gate = EntityCreateGate::view;
+        return false;
+    }
+    const std::uint64_t currentGroup = group::advertised_group_session(selected.world.region);
+    if (currentGroup == 0
+        || group::holding_group_session(selected.signature.token) != currentGroup) {
+        gate = EntityCreateGate::view;
+        return false;
+    }
+    if (!selected.capturePresent) {
+        gate = EntityCreateGate::captureMissing;
+        return false;
+    }
+
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
+    if (!capture.candidatePresent || capture.namespaceId < 0) {
+        gate = EntityCreateGate::candidate;
+        return false;
+    }
+    if (capture.slot >= 0x2000 || capture.availableCount == 0) {
+        gate = EntityCreateGate::slot;
+        return false;
+    }
+    if (capture.handleGeneration != 0 || capture.reservedGeneration != 0
+        || capture.objectGeneration != 0) {
+        gate = EntityCreateGate::generation;
+        return false;
+    }
+    if (!client::hooks::network::sobject_rsat_probe::first_entity_ready()) {
+        gate = EntityCreateGate::rsat;
+        return false;
+    }
+    if (!resolve_entity_spatial_cell(selected, output)
+        || output.spatialRegion != kTwoViewProbeRegion
+        || output.spatialBubble != kTwoViewProbeBubble || output.spatialCell != kTwoViewProbeCell) {
+        gate = EntityCreateGate::spatialCell;
+        return false;
+    }
+    if (capture.token != selected.signature.token || capture.schedulerKey != capture.token
+        || !scheduler_matches_local_capture(probe.scheduler, capture)) {
+        gate = EntityCreateGate::schedulerIdentity;
+        return false;
+    }
+
+    std::size_t match = probe.scheduler.views.size();
+    for (std::size_t index = 0; index < probe.scheduler.viewCount; ++index) {
+        if (probe.scheduler.views[index].key != capture.schedulerKey
+            || probe.scheduler.views[index].tag != capture.schedulerTag) {
+            continue;
+        }
+        if (match != probe.scheduler.views.size()) {
+            gate = EntityCreateGate::schedulerEntry;
+            return false;
+        }
+        match = index;
+    }
+    if (match != probe.selectedView) {
+        gate = EntityCreateGate::schedulerEntry;
+        return false;
+    }
+
+    output.token = capture.token;
+    output.schedulerKey = capture.schedulerKey;
+    output.schedulerTag = capture.schedulerTag;
+    output.rsat = state::gameplay::kFirstEntityRsat;
+    output.slot = capture.slot;
+    output.handleGeneration = capture.handleGeneration;
+    output.objectGeneration = kFirstObjectGeneration;
+    output.viewIndex = static_cast<std::uint8_t>(match);
+    output.namespaceId = capture.namespaceId;
+    if (retained == nullptr) {
+        client::hooks::network::sobject_update_probe::NearbyUpdateCapture update{};
+        if (!client::hooks::network::sobject_update_probe::take_nearby_player_update(
+                state::gameplay::kFirstEntityRsat, update)
+            || update.bitCount != kFirstEntityUpdateBits) {
+            gate = EntityCreateGate::rsat;
+            return false;
+        }
+        output.updateWire = update.wire;
+        output.updateBits = update.bitCount;
+    } else {
+        output.updateWire = retained->updateWire;
+        output.updateBits = retained->updateBits;
+    }
+    output.combinedCreate = true;
+    output.present = true;
+    if (output.updateBits != kFirstEntityUpdateBits
+        || (retained != nullptr && !same_entity_create_plan(output, *retained))) {
+        gate = EntityCreateGate::rsat;
+        return false;
+    }
+    gate = EntityCreateGate::ready;
     return true;
 }
 
@@ -2121,7 +2275,7 @@ void consume_established(const state::gameplay::Endpoint& from,
  * Builds and sends one acknowledgement-only packet.
  * @param peer Peer state copied under the lock before the send.
  * @param entityCreate Optional guarded entity body in a proven one- or two-view layout.
- * @param twoViewProbe Optional empty two-view validation body.
+ * @param twoViewProbe Optional one-shot two-view validation carrying entityCreate.
  * @return True when the packet left the endpoint.
  */
 [[nodiscard]] bool send_acknowledgement(const state::gameplay::PeerLink& peer,
@@ -2150,12 +2304,21 @@ void consume_established(const state::gameplay::Endpoint& from,
     const bool viewPresent = selected.present && selected.signature.token != 0;
     if (twoViewProbe.present) {
         TwoViewProbePlan verified{};
-        if (entityCreate.present || !prepare_two_view_probe(peer, selected, verified)
+        EntityCreatePlan verifiedEntity{};
+        EntityCreateGate ignoredGate = EntityCreateGate::view;
+        if (!entityCreate.present || !prepare_two_view_probe(peer, selected, verified)
+            || !prepare_entity_create_with_two_view_probe(
+                selected, verified, &entityCreate, verifiedEntity, ignoredGate)
             || verified.token != twoViewProbe.token
+            || verified.selectedView != twoViewProbe.selectedView
             || verified.scheduler.value != twoViewProbe.scheduler.value
             || verified.scheduler.wire != twoViewProbe.scheduler.wire
             || verified.scheduler.wireBits != twoViewProbe.scheduler.wireBits
-            || verified.scheduler.viewCount != twoViewProbe.scheduler.viewCount) {
+            || verified.scheduler.viewCount != twoViewProbe.scheduler.viewCount
+            || verified.scheduler.views[0].key != twoViewProbe.scheduler.views[0].key
+            || verified.scheduler.views[0].tag != twoViewProbe.scheduler.views[0].tag
+            || verified.scheduler.views[1].key != twoViewProbe.scheduler.views[1].key
+            || verified.scheduler.views[1].tag != twoViewProbe.scheduler.views[1].tag) {
             return false;
         }
     }
@@ -2174,7 +2337,8 @@ void consume_established(const state::gameplay::Endpoint& from,
             return false;
         }
     }
-    if (entityCreate.present && !oneViewScheduler && !twoViewEntityScheduler) {
+    if (entityCreate.present && !twoViewProbe.present && !oneViewScheduler
+        && !twoViewEntityScheduler) {
         return false;
     }
     // Once an entity create has been attempted, its native decoder may retain a pending body
@@ -2185,15 +2349,15 @@ void consume_established(const state::gameplay::Endpoint& from,
     // one-view layout through entityCreate.present.
     const bool schedulerWanted =
         entityCreate.present || (peer.entityCreateAttempts == 0 && !peer.twoViewProbeAttempted);
-    const bool schedulerBodyPresent =
-        schedulerWanted && viewPresent && (oneViewScheduler || twoViewEntityScheduler);
+    const bool schedulerBodyPresent = !twoViewProbe.present && schedulerWanted && viewPresent
+                                      && (oneViewScheduler || twoViewEntityScheduler);
     const bool schedulerPresent = schedulerBodyPresent || twoViewProbe.present;
     std::size_t size = 0;
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)
         || !wire::write_empty_queue(writer)
         || !wire::write_external_status(writer, viewPresent, schedulerPresent)
-        || (twoViewProbe.present && !write_two_view_probe(writer, twoViewProbe))
+        || (twoViewProbe.present && !write_two_view_probe(writer, twoViewProbe, entityCreate))
         || (schedulerBodyPresent && !write_scheduler(writer, scheduler, entityCreate))
         || !writer.finish(size)) {
         return false;
@@ -2469,10 +2633,10 @@ void service(std::uint64_t now) noexcept {
         }
         const bool validatedTwoView = two_view_layout_ready(peer, selected);
         TwoViewProbePlan twoViewProbe{};
-        const bool twoViewProbeDue =
-            !peer.twoViewProbeAttempted && firstAttempt && !peer.entityCreateAccepted
-            && peer.stage == state::gameplay::PeerStage::connected && controlQueueSettled
-            && prepare_two_view_probe(peer, selected, twoViewProbe);
+        const bool twoViewProbeReady = !peer.twoViewProbeAttempted && firstAttempt
+                                       && !peer.entityCreateAccepted
+                                       && peer.stage == state::gameplay::PeerStage::connected
+                                       && prepare_two_view_probe(peer, selected, twoViewProbe);
         bool prepared = false;
         EntityCreateGate gate = firstAttempt ? EntityCreateGate::view : EntityCreateGate::attempted;
         if (firstAttempt) {
@@ -2482,10 +2646,20 @@ void service(std::uint64_t now) noexcept {
             // EDZ control bursts recur faster than the conservative settle interval; resetting
             // the timer for each burst makes a stationary create impossible even though both
             // native scheduler layouts, the token, and the slot remain unchanged.
-            const bool candidatePrepared =
-                validatedTwoView
-                    ? prepare_entity_create_after_two_view(peer, selected, candidate, gate)
-                    : prepare_entity_create(peer, selected, candidate, gate);
+            bool candidatePrepared = false;
+            if (twoViewProbeReady) {
+                if (!controlQueueSettled) {
+                    gate = EntityCreateGate::controlQueue;
+                } else {
+                    candidatePrepared = prepare_entity_create_with_two_view_probe(
+                        selected, twoViewProbe, nullptr, candidate, gate);
+                }
+            } else {
+                candidatePrepared =
+                    validatedTwoView
+                        ? prepare_entity_create_after_two_view(peer, selected, candidate, gate)
+                        : prepare_entity_create(peer, selected, candidate, gate);
+            }
             if (!candidatePrepared) {
                 peer.entityCreateReadyToken = 0;
                 peer.entityCreateReadySlot = 0;
@@ -2505,9 +2679,9 @@ void service(std::uint64_t now) noexcept {
                 }
                 if (!controlQueueSettled) {
                     gate = EntityCreateGate::controlQueue;
-                } else if (validatedTwoView) {
-                    // The directly acknowledged empty frame already proved this exact remote
-                    // layout. Its two-view window is short, so do not add the one-view settle age.
+                } else if (twoViewProbeReady || validatedTwoView) {
+                    // The transition window is short. Send its first proven signature with the
+                    // fully guarded atomic create instead of adding the one-view settle age.
                     prepared = true;
                 } else if (candidate.bootstrapScheduler
                            || now - peer.entityCreateReadySince < kEntityCreateReadyInterval) {
@@ -2517,6 +2691,7 @@ void service(std::uint64_t now) noexcept {
                 }
             }
         }
+        const bool twoViewProbeDue = twoViewProbeReady && prepared;
         const auto gateValue = static_cast<std::uint8_t>(gate);
         if (peer.entityCreateGate != gateValue && gateReportCount < gateReports.size()) {
             peer.entityCreateGate = gateValue;
@@ -2531,7 +2706,7 @@ void service(std::uint64_t now) noexcept {
             && peer.entityCreateAttempts < kEntityCreateAttemptLimit
             && peer.entityCreateScheduler.viewCount == kProvenSchedulerViewCount
             && now - peer.lastEntityCreate >= kEntityCreateRetryInterval;
-        const bool entityFirstDue = firstAttempt && prepared;
+        const bool entityFirstDue = firstAttempt && prepared && !twoViewProbeDue;
         const bool twoViewUpdateReady =
             peer.entityCreateAttempts != 0
             && peer.entityCreateScheduler.viewCount == kTwoViewProbeViewCount
@@ -2577,10 +2752,12 @@ void service(std::uint64_t now) noexcept {
         if (entityFollowupDue) {
             peer.entityFollowupSent = true;
             entityCreates[count] = candidate;
-        } else if (entityFirstDue || sameAttempt) {
+        } else if (twoViewProbeDue || entityFirstDue || sameAttempt) {
             if (firstAttempt) {
                 peer.entityCreateScheduler =
-                    validatedTwoView ? peer.twoViewProbeScheduler : peer.schedulerSignature;
+                    twoViewProbeDue
+                        ? twoViewProbe.scheduler
+                        : (validatedTwoView ? peer.twoViewProbeScheduler : peer.schedulerSignature);
                 peer.entityCreateToken = candidate.token;
                 peer.entityCreateSlot = candidate.slot;
                 peer.entityCreateHandleGeneration = candidate.handleGeneration;

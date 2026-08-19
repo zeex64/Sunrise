@@ -58,6 +58,9 @@ struct Targets {
     std::byte* activityTypeResolver{};
     std::byte* sobjectApplyJob{};
     std::byte* sobjectKind0Constructor{};
+    std::byte* sobjectRecordPromotion{};
+    std::byte* sobjectDirtyService{};
+    std::byte* sobjectType2Job{};
     std::byte* contentIdToken{};
 };
 

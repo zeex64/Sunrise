@@ -30,7 +30,8 @@ constexpr std::uint32_t kMaximumGlueStride = 0x1000;
 constexpr std::size_t kNativeObjectIndexOffset = 4;
 
 struct WatchEntry {
-    std::atomic_uint32_t slotKey{};
+    std::atomic_uint64_t contextKey{};
+    std::atomic_uint32_t entityId{};
     std::atomic_uint32_t dispatches{};
 };
 
@@ -43,16 +44,49 @@ struct BindingSnapshot {
     bool readable{};
 };
 
-/** Converts a zero-based entity slot into a nonzero atomic watch key. */
-[[nodiscard]] constexpr std::uint32_t watch_key(std::uint32_t entityId) noexcept {
-    return (entityId & kEntitySlotMask) + 1;
+/** Packs one namespace and zero-based entity slot into a nonzero atomic watch key. */
+[[nodiscard]] constexpr std::uint64_t watch_key(std::int32_t namespaceId,
+                                                std::uint32_t entityId) noexcept {
+    if (namespaceId < 0) {
+        return 0;
+    }
+    const std::uint64_t namespaceKey =
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(namespaceId)) + 1;
+    const std::uint64_t slotKey = static_cast<std::uint64_t>(entityId & kEntitySlotMask) + 1;
+    return namespaceKey << 32U | slotKey;
 }
 
-/** @return Stable watch storage for a decoded slot, or null when it was not armed. */
-[[nodiscard]] WatchEntry* find_watch(std::uint32_t entityId) noexcept {
-    const std::uint32_t key = watch_key(entityId);
+/** @return Stable watch storage for an exact decoded namespace/slot pair. */
+[[nodiscard]] WatchEntry* find_watch(std::int32_t namespaceId, std::uint32_t entityId) noexcept {
+    const std::uint64_t key = watch_key(namespaceId, entityId);
+    if (key == 0) {
+        return nullptr;
+    }
     for (WatchEntry& entry : g_watches) {
-        if (entry.slotKey.load(std::memory_order_acquire) == key) {
+        if (entry.contextKey.load(std::memory_order_acquire) == key) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+/** @return Stable watch storage for a generation-rewritten slot in any namespace. */
+[[nodiscard]] WatchEntry* find_watch(std::uint32_t entityId) noexcept {
+    const std::uint32_t slotKey = (entityId & kEntitySlotMask) + 1;
+    for (WatchEntry& entry : g_watches) {
+        if (static_cast<std::uint32_t>(entry.contextKey.load(std::memory_order_acquire))
+            == slotKey) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+/** @return Stable watch storage for the exact full entity decoded from the experiment. */
+[[nodiscard]] WatchEntry* find_exact_watch(std::uint32_t entityId) noexcept {
+    for (WatchEntry& entry : g_watches) {
+        if (entry.contextKey.load(std::memory_order_acquire) != 0
+            && entry.entityId.load(std::memory_order_acquire) == entityId) {
             return &entry;
         }
     }
@@ -152,32 +186,64 @@ void* binder_entry_point() noexcept {
     return reinterpret_cast<void*>(&binder_body);
 }
 
-void watch(std::uint32_t entityId) noexcept {
-    const std::uint32_t key = watch_key(entityId);
+void watch(std::int32_t namespaceId, std::uint32_t entityId) noexcept {
+    const std::uint64_t key = watch_key(namespaceId, entityId);
+    if (key == 0) {
+        return;
+    }
     for (WatchEntry& entry : g_watches) {
-        std::uint32_t current = entry.slotKey.load(std::memory_order_acquire);
+        std::uint64_t current = entry.contextKey.load(std::memory_order_acquire);
         if (current == key) {
+            entry.entityId.store(entityId, std::memory_order_release);
             return;
         }
         if (current == 0
-            && entry.slotKey.compare_exchange_strong(
+            && entry.contextKey.compare_exchange_strong(
                 current, key, std::memory_order_release, std::memory_order_relaxed)) {
+            entry.entityId.store(entityId, std::memory_order_release);
             return;
         }
         if (current == key) {
+            entry.entityId.store(entityId, std::memory_order_release);
             return;
         }
     }
+}
+
+bool watched(std::int32_t namespaceId, std::uint32_t entityId) noexcept {
+    return find_watch(namespaceId, entityId) != nullptr;
+}
+
+bool watched_exact(std::uint32_t entityId) noexcept {
+    return find_exact_watch(entityId) != nullptr;
 }
 
 bool watched(std::uint32_t entityId) noexcept {
     return find_watch(entityId) != nullptr;
 }
 
+bool first_watched(std::int32_t namespaceId, std::uint32_t& entityId) noexcept {
+    entityId = 0;
+    if (namespaceId < 0) {
+        return false;
+    }
+    const std::uint64_t namespaceKey =
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(namespaceId)) + 1;
+    for (WatchEntry& entry : g_watches) {
+        const std::uint64_t contextKey = entry.contextKey.load(std::memory_order_acquire);
+        if (contextKey >> 32U == namespaceKey) {
+            entityId = entry.entityId.load(std::memory_order_acquire);
+            return true;
+        }
+    }
+    return false;
+}
+
 void reset() noexcept {
     for (WatchEntry& entry : g_watches) {
         entry.dispatches.store(0, std::memory_order_relaxed);
-        entry.slotKey.store(0, std::memory_order_relaxed);
+        entry.entityId.store(0, std::memory_order_relaxed);
+        entry.contextKey.store(0, std::memory_order_relaxed);
     }
 }
 

@@ -2327,6 +2327,59 @@ validates the entity/cell, and invokes codec virtual `+0xB0`. Kind 0 resolves th
 lines. Their presence and return state separate missing job dispatch, pre-codec validation failure,
 constructor rejection, and final glue binding in one run.
 
+The diagnostic run stopped before both hooks. They attached successfully, but the valid namespace-2
+record at `t=69242` produced neither `sobject-apply` nor `sobject-kind0`; it also produced no target
+native registration or bind while occupied slot 0 persisted. The empty two-view proof left at
+`t=69208`, the atomic record followed at `t=69241`, and root membership expanded the local scheduler
+at `t=69274`. That is the same roughly 33-millisecond interval in which the older-view experiment
+had reached native construction. The next candidate therefore carries the atomic record in the
+first already-proven two-view signature packet instead of spending that packet on two empty tails.
+It also hooks `FUN_141714840`, the pending-record batch commit/drain, and reports a watched record's
+batch flags as `sobject-commit`. This separates failure to commit from failure to enqueue/dispatch
+the later type-2 apply job.
+
+The first-packet writer preserves the captured 275-bit signature, completes the outgoing view with
+six empty bits, and gives the current view its full 220-bit handler body. The probe therefore logs
+`body_bits=501`; the entity-list lane within that current-view body remains the proven 216 bits.
+The Release candidate SHA-256 is
+`7a5ae97befc9be4050403c9342c57b5a6a8d6a324da9835d92e8c5439a826211`.
+
+The first-packet run passed the wire and timing test but still stopped before native construction.
+At `t=74442`, namespace 2 decoded entity `0x00200000`, cell `0x000B`, flags `0x0003`, and the exact
+nearby transform after 216 entity-list bits. All ten handler lanes completed, slot 0 became
+occupied, and packet 139 was directly acknowledged 27 ms later. Root membership did not expand the
+local scheduler to three views until 68 ms after the create. There was still no type-2 apply,
+kind-0 constructor, target RSAT registration, or bind. This disproves the short scheduler-window
+hypothesis while preserving the accepted packet grammar.
+
+Ghidra also corrected the meaning of `FUN_141714840`: it is a rollback/merge path for a linked
+batch list, not the ordinary accepted-record commit. The normal receive path invokes
+`FUN_141716010(manager, record)` immediately after decoding. For internal flag `record+0x42 bit 0`,
+that function allocates the 0x70-byte replicated row, copies cell/entity/creation state, sets
+row `+0x68 bit 0`, walks to the root internal row, and sets its bit in manager `+0xCA20`.
+
+Native construction then follows this per-frame path:
+
+`FUN_1416CCA40 -> FUN_141717790 -> FUN_14170B660 -> FUN_1417084B0 -> type-2 job -> FUN_1417085C0`
+
+`FUN_1416CCA40` services only the runtime's selected replication manager. `FUN_141717790` scans that
+manager's root-dirty bitmap. A backend-busy predicate can divert every dirty row to reason 5 without
+building jobs. Otherwise `FUN_14170B660` requires the replicated row to be eligible, including an
+active spatial-cell bit for its 16-bit cell, before `FUN_1417084B0` serializes the row and allocates
+job type 2. The builder returns 4 for serialization failure, 1/2/3 for allocation or queue refusal,
+and 0 with a non-null node for success.
+
+The next build therefore logs the exact accepted slot at `sobject-promote`, the selected manager and
+root dirty transition at `sobject-dirty-service`, and the serializer/allocator result at
+`sobject-type2-job`. These probes are passive and bounded; the entity body remains unchanged. The
+Release DLL SHA-256 is
+`f0467bca1b03b7023767a68f3225b9208ee4a0982a849058a0f2e18a4ebdc7c1`.
+
+This synthetic entity is scoped to the selected replication view and map cell. Sunrise does not
+migrate it to a successor view or publish its removal yet, so an overlapping bubble may retain it
+briefly and then cull it when that view leaves. This functional test is deliberately Basin-only:
+region 24, bubble 3, map-global cell 11. Stay in bubble 3 while observing this run.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2378,11 +2431,14 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Repeat the Town-to-Basin transition and retain the already-proven 216-bit atomic record on
-   token `...0003`, namespace 2, view 1, slot 0, region 24/bubble 3/cell 11.
-2. Classify the first missing post-decode boundary: no `sobject-apply` means the type-2 job never
-   dispatched; apply without `sobject-kind0` means retained-create decode, entity/cell validation,
-   or codec lookup rejected it; `sobject-kind0 result=0` means the native constructor rejected it.
+1. Repeat the Town-to-Basin transition with the promotion/service diagnostic and remain in Basin
+   bubble 3. Require the same 216-bit atomic record on token `...0003`, namespace 2, view 1, slot 0,
+   cell 11, plus direct ACK coverage.
+2. Classify the first missing post-decode boundary using `sobject-promote`,
+   `sobject-dirty-service`, and `sobject-type2-job`. No service on the namespace-2 manager indicates
+   an active-manager mismatch; retained dirty state with no job indicates service suppression;
+   cleared dirty state with no job indicates a row prerequisite such as active-cell membership;
+   builder result 4 indicates serialization failure; results 1/2/3 indicate queue refusal.
 3. Require `sobject-kind0 result=1`, target native registration, and
    `sobject-bind-dispatch status=bound` before treating the remaining failure as rendering.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
@@ -2427,6 +2483,13 @@ Committed as `4a19acb test: atomically create current-view Vandal`.
 Current post-decode diagnostic Release candidate SHA-256:
 `b295f21dcaaf17706a05766f75ce477dde50e606b24f3aad4d2e6886fefc40ca`.
 
+Current first-packet Basin Release candidate SHA-256:
+`7a5ae97befc9be4050403c9342c57b5a6a8d6a324da9835d92e8c5439a826211`
+(`scheduler-two-view-probe body_bits=501`).
+
+Current promotion/service diagnostic Release candidate SHA-256:
+`f0467bca1b03b7023767a68f3225b9208ee4a0982a849058a0f2e18a4ebdc7c1`.
+
 After manual deployment, inspect:
 
 ```text
@@ -2453,6 +2516,9 @@ sobject-create
 sobject-rsat-preload
 sobject-update
 sobject-native
+sobject-promote
+sobject-dirty-service
+sobject-type2-job
 sobject-bind-dispatch
 entity-create
 entity-create-out

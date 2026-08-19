@@ -148,14 +148,16 @@ void record_hex(const std::byte* input, std::size_t count, char* output) noexcep
 }
 
 /** Reports the baseline/update scratch produced by one successful native entity decode. */
-void report_decoded_record(const void* recordsAddress, int count) noexcept {
+void report_decoded_record(const void* recordsAddress,
+                           int count,
+                           std::int32_t namespaceId) noexcept {
     DecodedRecordSnapshot snapshot{};
     if (!inspect_decoded_record(recordsAddress, count, snapshot)) {
         return;
     }
     // Application rewrites the handle generation, but preserves its slot through the later glue
     // call. Arm that dynamic slot before the staged network job runs.
-    sobject_bind_probe::watch(snapshot.entity);
+    sobject_bind_probe::watch(namespaceId, snapshot.entity);
     std::array<char, kDecodedRecordMaskBytes * 2 + 1> maskHex{};
     std::array<char, kDecodedRecordCreateBytes * 2 + 1> createHex{};
     std::array<char, kDecodedRecordUpdateBytes * 2 + 1> updateHex{};
@@ -497,7 +499,7 @@ __declspec(noinline) int __fastcall decode_list(void* context,
                                  {line.data(), static_cast<std::size_t>(written)});
             }
             if (result == 0 && decodedCount > 0) {
-                report_decoded_record(records, decodedCount);
+                report_decoded_record(records, decodedCount, namespaceId);
             }
         }
         if (lease.accepting && manager != nullptr) {

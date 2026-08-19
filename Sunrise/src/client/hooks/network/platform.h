@@ -55,6 +55,9 @@ enum class HookSlot : std::size_t {
     signOnReadinessReady,
     sobjectApplyJob,
     sobjectKind0Constructor,
+    sobjectRecordPromotion,
+    sobjectDirtyService,
+    sobjectType2Job,
     count,
 };
 

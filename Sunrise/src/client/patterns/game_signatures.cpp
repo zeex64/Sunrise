@@ -386,6 +386,30 @@ constexpr std::string_view kSobjectKind0ConstructorText =
 constexpr auto kSobjectKind0Constructor =
     signature<signature_length(kSobjectKind0ConstructorText)>(kSobjectKind0ConstructorText);
 
+// Matches the immediate decoded-record promotion pass. The fixed prefix reads the full entity,
+// derives its 13-bit slot, and tests the validated create bit before any position-dependent call.
+constexpr std::string_view kSobjectRecordPromotionText =
+    "40 53 56 57 48 83 EC 20 8B 42 08 48 8B F2 25 FF 1F 00 00 "
+    "48 8B F9 F6 42 42 01 48 8D 1C 40";
+/** Compiled pattern bytes of the decoded-record promotion signature above. */
+constexpr auto kSobjectRecordPromotion =
+    signature<signature_length(kSobjectRecordPromotionText)>(kSobjectRecordPromotionText);
+
+// Matches the per-tick replicated-object dirty service. The fixed save set and 0x6090-byte frame
+// uniquely identify the routine before its position-dependent stack-probe call.
+constexpr std::string_view kSobjectDirtyServiceText =
+    "48 89 5C 24 18 48 89 6C 24 20 56 57 41 54 41 55 41 57 B8 90 60 00 00";
+/** Compiled pattern bytes of the replicated-object dirty-service signature above. */
+constexpr auto kSobjectDirtyService =
+    signature<signature_length(kSobjectDirtyServiceText)>(kSobjectDirtyServiceText);
+
+// Matches the type-2 replicated-object job builder. The distinct 0x4050-byte frame makes this
+// position-independent entry prefix unique in the current image.
+constexpr std::string_view kSobjectType2JobText = "48 89 5C 24 20 57 B8 50 40 00 00";
+/** Compiled pattern bytes of the type-2 job-builder signature above. */
+constexpr auto kSobjectType2Job =
+    signature<signature_length(kSobjectType2JobText)>(kSobjectType2JobText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -472,6 +496,9 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"activity_type_resolver", kActivityTypeResolver},
     patterns::Pattern{"sobject_apply_job", kSobjectApplyJob},
     patterns::Pattern{"sobject_kind0_constructor", kSobjectKind0Constructor},
+    patterns::Pattern{"sobject_record_promotion", kSobjectRecordPromotion},
+    patterns::Pattern{"sobject_dirty_service", kSobjectDirtyService},
+    patterns::Pattern{"sobject_type2_job", kSobjectType2Job},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},

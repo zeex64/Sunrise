@@ -298,19 +298,57 @@ The slot-14 atomic run then completed the current wire milestone:
   implementation is `FUN_1417242F0`. The new diagnostic build passively logs both boundaries for
   decoded experiment slots as `sobject-apply` and `sobject-kind0`; it does not alter the accepted
   create/update body.
+- The post-decode diagnostic run proved neither boundary executes. Both hooks attached, yet the
+  current Basin record at `t=69242` produced no `sobject-apply`, `sobject-kind0`, target native
+  registration, or bind before its view later left normally. Slot 0 remained occupied. The first
+  missing boundary is now staged-record commit/job dispatch, before native construction.
+- The timing is narrow and repeatable: the empty two-view proof left at `t=69208`, the atomic create
+  followed at `t=69241`, and root membership expanded the local scheduler at `t=69274`, precisely
+  when the older-view experiment had previously reached native construction. The next candidate
+  uses the already-proven first two-view packet for the atomic create, gaining one full service
+  interval before root expansion. A new passive `sobject-commit` probe distinguishes commit from
+  later type-2 job dispatch if construction still does not start.
+- The first-packet candidate logs `body_bits=501`: 275 signature bits, the outgoing view's complete
+  six-bit empty tail, and the current view's 220-bit handler body (including the 216-bit entity
+  list). Its Release DLL SHA-256 is
+  `7a5ae97befc9be4050403c9342c57b5a6a8d6a324da9835d92e8c5439a826211`.
+- The first-packet run passed. At `t=74442`, the client decoded entity `0x00200000` in namespace 2,
+  view 1, Basin cell 11 with flags `0x0003` and the exact nearby transform. Slot 0 became occupied,
+  packet 139 was directly acknowledged after 27 ms, and all ten native handlers completed. Root
+  membership did not expand to three views until 68 ms after the create, yet no native apply,
+  kind-0 construction, RSAT registration, or bind followed. Sending one service interval earlier
+  therefore disproves the scheduler-window timing hypothesis.
+- Ghidra corrected the next boundary. `FUN_141714840` is a rollback/merge path, not the normal
+  accepted-record commit, so the absence of `sobject-commit` is expected. Normal decoding calls
+  `FUN_141716010` immediately; it allocates the replicated row, sets its creation-pending flag, and
+  sets the root dirty bit at manager `+0xCA20`. Per-frame `FUN_141717790` must then service that
+  manager, pass the row through `FUN_14170B660`, and let `FUN_1417084B0` allocate a type-2 job before
+  the existing `FUN_1417085C0` apply hook can run.
+- The next passive build traces that exact chain as `sobject-promote`, `sobject-dirty-service`, and
+  `sobject-type2-job`. It distinguishes an unserviced namespace-2 manager, a globally suppressed or
+  inactive-cell dirty row, serialization failure, queue refusal, and a successfully allocated job
+  without changing the accepted entity packet.
+- The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
+  remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
+  when that view leaves. This candidate is Basin-only (region 24, bubble 3, cell 11), so stay in
+  bubble 3 for this test.
 
 ## Immediate plan
 
-### 1. Trace the post-decode apply boundary
+### 1. Classify the native promotion/service boundary
 
-- Repeat the same Town-to-Basin transition once. Preserve the proven `...0003`, namespace-2,
-  view-1, cell-11 atomic record and slot-0 occupancy.
-- If no `sobject-apply` line follows, the type-2 job was never dispatched or was cancelled before
-  its native apply callback. Trace its queue insertion and cancellation next.
-- If `sobject-apply` appears but `sobject-kind0` does not, creation re-decode, entity/cell
-  validation, or codec selection rejected it. If `sobject-kind0 result=0` appears, instrument the
-  constructor's first failing predicate. Only `result=1` plus `sobject-bind-dispatch status=bound`
-  moves the investigation back to rendering.
+- Repeat the Town-to-Basin transition once with the promotion diagnostic build and remain in Basin
+  bubble 3. Require the same 216-bit namespace-2 record and direct packet ACK.
+- `sobject-promote` must show internal create/update flags, object generation 2, and occupancy
+  changing from clear to set. `sobject-dirty-service` then reports whether the exact namespace-2
+  manager is selected and whether its root dirty bit is retained or drained.
+- No service line means the active runtime is servicing another manager. A dirty bit that remains
+  set with no job points to the service-wide busy/suppression branch. A dirty bit that clears with
+  no `sobject-type2-job` points to a row prerequisite, led by Basin cell 11's active-cell bit.
+- A type-2 job result of 4 means serialization failed; 1, 2, or 3 is an allocator/queue refusal;
+  result 0 with a non-null job means dispatch should reach `sobject-apply`.
+- Only after `sobject-apply`, `sobject-kind0 result=1`, target native registration, and
+  `sobject-bind-dispatch status=bound` should the investigation move back to rendering.
 
 ### 2. Observe the nearby Vandal
 
@@ -381,6 +419,11 @@ Once the director evaluates an encounter and creates native squad/member objects
   `cba76fa8b262b02ff4453560ae5f7456ad00715f09db318bbf524f10fd76a9c2`.
 - The current post-decode diagnostic Release candidate has SHA-256
   `b295f21dcaaf17706a05766f75ce477dde50e606b24f3aad4d2e6886fefc40ca`.
+- The current first-packet Basin Release candidate has SHA-256
+  `7a5ae97befc9be4050403c9342c57b5a6a8d6a324da9835d92e8c5439a826211` and reports
+  `body_bits=501`.
+- The current promotion/service diagnostic Release candidate has SHA-256
+  `f0467bca1b03b7023767a68f3225b9208ee4a0982a849058a0f2e18a4ebdc7c1`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
