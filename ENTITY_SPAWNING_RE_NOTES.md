@@ -2272,14 +2272,26 @@ packet 135 was directly acknowledged after 66 ms. The selected view was current 
 `...0003`, namespace 2, region 24, bubble 3, map-global cell 11. The later aggregate reported 536
 delivered, zero lost, and one corrupt read without a timeout or disconnect.
 
-The current bounded entity build caches that acknowledged two-view signature. Completion is now a
-programmatic gate: the latest scheduler epoch must visit every expected lane with result zero. Once
-the empty probe is acknowledged, the server may send one create-only shared Vandal to the current
-token's pristine namespace-2 slot 0, with no retries. Its packet reuses the six-bit empty body for
-old view 0 and targets Basin view 1. If slot 0 allocates and that entity packet also completes its
-handler epoch, the decoded native baseline generates the exact 130-bit current-player update and a
-single combined create/update may use slot 1. The cached remote two-view layout is intentional even
-after the local list adds the root view; outbound decoding follows the client's remote list.
+The first bounded Basin-create run proved that the cached remote list is not sufficient once the
+local list changes. The empty probe completed all ten handler calls at `t=71208` and was directly
+acknowledged at `t=71235`. At `t=71229`, however, root token `...0001` joined the scheduler: the
+local logical list became `[...0001,...0002,...0003]` while the decoded remote list remained
+`[...0002,...0003]`. The server sent its cached two-view create at `t=71235` to the correct current
+Basin token `...0003`, namespace 2, view 1, slot 0, region 24/bubble 3/cell 11. No second handler
+epoch ran, no `entity-list-decode` or `entity-record` followed, occupancy stayed zero, and there was
+no target native registration or glue dispatch. The packet therefore failed before construction;
+it is not evidence of an invisible current-view Vandal. The later packet-loss summary reported zero
+corrupt reads. The accompanying overlay confirmed the physical Basin state and showed both the old
+region-408 and current region-24 activity hosts connected and ready.
+
+The revised bounded build treats the synchronous ten-handler completion as the application proof
+and does not wait for the transport ACK before using the short two-view window. It requires the
+live local layout to match the cached two-view order exactly; a stale remote capture is tolerated
+only while still pristine and only after all ten native calls returned zero. The create can leave on
+the next service tick. Its own completed handler epoch produces the exact 130-bit current-player
+transform, which the following tick sends as an update-only record to the same slot without waiting
+for the occupancy probe to publish. Both send-time checks fail closed as soon as root token
+`...0001` expands the local scheduler.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -2333,12 +2345,14 @@ The current checkpoint includes work in:
 ## Next investigation
 
 1. Load EDZ, transition once from Town into Basin, then wait. Require the 287-bit empty probe's
-   complete ten-call epoch and direct transport ACK.
+   complete ten-call epoch. The create should leave on the next service tick, before its direct
+   transport ACK arrives.
 2. Require the first `entity-create-out` on token `...0003`, namespace 2, view 1, slot 0, region 24,
    bubble 3, cell 11. Confirm its complete handler epoch, decoded cell `0x000B`, target registration,
    glue-table `status=bound`, and occupancy.
-3. If the native baseline yields the current 130-bit update in time, require the slot-1 combined
-   create/update on the same token/view/cell and its flags `0x0003`. Neither two-view send retries.
+3. If the native baseline yields the current 130-bit update in time, require an
+   `entity-update-out` for the same slot 0/token/view/cell and a decoded nearby transform. Neither
+   two-view send retries.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
    biped's parent, stream-source, and RSAT suffix before changing the payload. Do not guess them.
 5. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
@@ -2366,9 +2380,13 @@ sha256sum build/x64/Release/steam_api64.dll
 git diff --check
 ```
 
-Current bounded Basin-spawn Release candidate SHA-256:
+Previous bounded Basin-spawn Release candidate SHA-256:
 `69ceeaee5d60b92091f97331ee0d21f2bd92d9185b5661e6ebcaf48de5fb096d`.
-Committed as `test: create Vandal in current Basin view` (this checkpoint).
+Committed as `2abfb562 test: create Vandal in current Basin view`.
+
+Current pre-ACK Basin Release candidate SHA-256:
+`a9afb46a3bd8e273f7346f312c333fcef18d61f2985bec692e157e922db5d3d6`.
+Committed as `test: use proven two-view window for Vandal` (this checkpoint).
 
 After manual deployment, inspect:
 

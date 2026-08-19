@@ -745,6 +745,33 @@ write_scheduler_signature(bits::Writer& writer,
            && capture.schedulerRemoteViewTags == kEmptyTags;
 }
 
+/**
+ * @return True while the exact two-view frame proven by the client handler trace is still live.
+ *
+ * The trace completes inside the receive call, before the transport acknowledgement returns to
+ * the server.  Waiting for that acknowledgement lets the root view join the local scheduler and
+ * closes the short two-view transition window.  A pristine remote capture is allowed only after
+ * all ten native handler calls completed; the capture pump can trail that synchronous proof by a
+ * frame.  Any local-layout change fails closed.
+ */
+[[nodiscard]] bool two_view_layout_ready(const state::gameplay::PeerLink& peer,
+                                         const SelectedReplicationView& selected) noexcept {
+    const state::gameplay::SchedulerSignature& scheduler = peer.twoViewProbeScheduler;
+    if (!peer.twoViewProbeAttempted
+        || !client::hooks::network::scheduler_handler_probe::completed(kTwoViewProbeViewCount)
+        || !scheduler.present || scheduler.viewCount != kTwoViewProbeViewCount
+        || scheduler.wireBits != kTwoViewProbeWireBits || !selected.present
+        || selected.signature.token == 0 || selected.signature.token != peer.twoViewProbeToken
+        || !selected.capturePresent) {
+        return false;
+    }
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
+    return capture.token == selected.signature.token && capture.schedulerKey == capture.token
+           && scheduler_matches_local_capture(scheduler, capture)
+           && (scheduler_matches_remote_capture(scheduler, capture)
+               || scheduler_remote_is_pristine(capture));
+}
+
 /** Builds a create only when the bound token, scheduler entry, and pristine slot all agree. */
 [[nodiscard]] bool prepare_entity_create(const state::gameplay::PeerLink& peer,
                                          const SelectedReplicationView& selected,
@@ -853,8 +880,7 @@ write_scheduler_signature(bits::Writer& writer,
                                                         EntityCreateGate& gate) noexcept {
     output = {};
     output.namespaceId = -1;
-    if (!peer.twoViewProbeAccepted
-        || !client::hooks::network::scheduler_handler_probe::completed(kTwoViewProbeViewCount)) {
+    if (!two_view_layout_ready(peer, selected)) {
         gate = EntityCreateGate::schedulerTrace;
         return false;
     }
@@ -896,12 +922,6 @@ write_scheduler_signature(bits::Writer& writer,
         gate = EntityCreateGate::spatialCell;
         return false;
     }
-    if (capture.token != selected.signature.token || capture.schedulerKey != capture.token
-        || !scheduler_matches_remote_capture(scheduler, capture)) {
-        gate = EntityCreateGate::remoteLayout;
-        return false;
-    }
-
     std::size_t match = scheduler.views.size();
     for (std::size_t index = 0; index < scheduler.viewCount; ++index) {
         if (scheduler.views[index].key != capture.schedulerKey
@@ -930,6 +950,69 @@ write_scheduler_signature(bits::Writer& writer,
     output.namespaceId = capture.namespaceId;
     output.present = true;
     gate = EntityCreateGate::ready;
+    return true;
+}
+
+/**
+ * Sends the decoded baseline's native transform back to the same two-view slot immediately.
+ * Occupancy publication trails decoding by several frames, while the root view can join sooner;
+ * the completed entity-handler trace and exact live scheduler layout are therefore the safe proof
+ * for this staged update.  The normal accepted-slot path remains unchanged for one-view layouts.
+ */
+[[nodiscard]] bool prepare_entity_update_after_two_view(const state::gameplay::PeerLink& peer,
+                                                        const SelectedReplicationView& selected,
+                                                        EntityCreatePlan& output) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    if (peer.entityCreateAttempts == 0 || peer.entityFollowupSent || peer.entityCreateToken == 0
+        || peer.entityCreateSlot >= 0x2000 || !two_view_layout_ready(peer, selected)) {
+        return false;
+    }
+
+    const state::gameplay::SchedulerSignature& scheduler = peer.entityCreateScheduler;
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
+    if (!scheduler.present || scheduler.viewCount != kTwoViewProbeViewCount
+        || scheduler.wireBits != kTwoViewProbeWireBits || capture.namespaceId < 0
+        || capture.token != peer.entityCreateToken || capture.schedulerKey != capture.token
+        || capture.handleGeneration != peer.entityCreateHandleGeneration) {
+        return false;
+    }
+
+    std::size_t match = scheduler.views.size();
+    for (std::size_t index = 0; index < scheduler.viewCount; ++index) {
+        if (scheduler.views[index].key != capture.schedulerKey
+            || scheduler.views[index].tag != capture.schedulerTag) {
+            continue;
+        }
+        if (match != scheduler.views.size()) {
+            return false;
+        }
+        match = index;
+    }
+    if (match == scheduler.views.size() || !resolve_entity_spatial_cell(selected, output)) {
+        return false;
+    }
+
+    client::hooks::network::sobject_update_probe::NearbyUpdateCapture update{};
+    if (!client::hooks::network::sobject_update_probe::take_nearby_player_update(
+            state::gameplay::kFirstEntityRsat, update)
+        || update.bitCount != kFirstEntityUpdateBits) {
+        return false;
+    }
+
+    output.token = capture.token;
+    output.schedulerKey = capture.schedulerKey;
+    output.schedulerTag = capture.schedulerTag;
+    output.rsat = state::gameplay::kFirstEntityRsat;
+    output.slot = peer.entityCreateSlot;
+    output.handleGeneration = peer.entityCreateHandleGeneration;
+    output.objectGeneration = kFirstObjectGeneration;
+    output.viewIndex = static_cast<std::uint8_t>(match);
+    output.namespaceId = capture.namespaceId;
+    output.updateWire = update.wire;
+    output.updateBits = update.bitCount;
+    output.updateOnly = true;
+    output.present = true;
     return true;
 }
 
@@ -2070,17 +2153,13 @@ void consume_established(const state::gameplay::Endpoint& from,
                                   && scheduler.viewCount == kProvenSchedulerViewCount
                                   && scheduler.wireBits == kProvenSchedulerWireBits;
     const bool twoViewEntityScheduler =
-        entityCreate.present && peer.twoViewProbeAccepted && scheduler.present
-        && scheduler.viewCount == kTwoViewProbeViewCount
-        && scheduler.wireBits == kTwoViewProbeWireBits
-        && client::hooks::network::scheduler_handler_probe::completed(kTwoViewProbeViewCount);
+        entityCreate.present && scheduler.present && scheduler.viewCount == kTwoViewProbeViewCount
+        && scheduler.wireBits == kTwoViewProbeWireBits && two_view_layout_ready(peer, selected);
     if (twoViewEntityScheduler) {
-        const auto& capture = selected.capture;
         if (!selected.capturePresent || entityCreate.token != selected.signature.token
             || entityCreate.viewIndex >= scheduler.viewCount
             || scheduler.views[entityCreate.viewIndex].key != entityCreate.schedulerKey
-            || scheduler.views[entityCreate.viewIndex].tag != entityCreate.schedulerTag
-            || !scheduler_matches_remote_capture(scheduler, capture)) {
+            || scheduler.views[entityCreate.viewIndex].tag != entityCreate.schedulerTag) {
             return false;
         }
     }
@@ -2377,9 +2456,7 @@ void service(std::uint64_t now) noexcept {
         if (firstAttempt) {
             (void)synchronise_scheduler_layout(peer, selected);
         }
-        const bool validatedTwoView =
-            peer.twoViewProbeAccepted
-            && client::hooks::network::scheduler_handler_probe::completed(kTwoViewProbeViewCount);
+        const bool validatedTwoView = two_view_layout_ready(peer, selected);
         TwoViewProbePlan twoViewProbe{};
         const bool twoViewProbeDue =
             !peer.twoViewProbeAttempted && firstAttempt && !peer.entityCreateAccepted
@@ -2444,11 +2521,19 @@ void service(std::uint64_t now) noexcept {
             && peer.entityCreateScheduler.viewCount == kProvenSchedulerViewCount
             && now - peer.lastEntityCreate >= kEntityCreateRetryInterval;
         const bool entityFirstDue = firstAttempt && prepared;
+        const bool twoViewUpdateReady =
+            peer.entityCreateAttempts != 0
+            && peer.entityCreateScheduler.viewCount == kTwoViewProbeViewCount
+            && !peer.entityFollowupSent && controlQueueSettled
+            && two_view_layout_ready(peer, selected);
         const bool entityFollowupReady =
-            peer.entityCreateAccepted && !peer.entityFollowupSent && controlQueueSettled
-            && now - peer.entityCreateAcceptedSince >= kEntityFollowupReadyInterval;
+            twoViewUpdateReady
+            || (peer.entityCreateAccepted && !peer.entityFollowupSent && controlQueueSettled
+                && now - peer.entityCreateAcceptedSince >= kEntityFollowupReadyInterval);
         const bool entityFollowupDue =
-            entityFollowupReady && prepare_entity_combined_create(peer, selected, candidate);
+            entityFollowupReady
+            && (twoViewUpdateReady ? prepare_entity_update_after_two_view(peer, selected, candidate)
+                                   : prepare_entity_combined_create(peer, selected, candidate));
         const bool due = peer.acknowledgementOwed || resendDue || entityFirstDue || entityRetryDue
                          || entityFollowupDue || twoViewProbeDue;
         if (!due) {
