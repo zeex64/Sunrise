@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 482433d4c6a95c334150366935152aca5549c82be879c1b8eb2ea71fa39e1365
+SHA-256 0a38dbe9827f38700cf19237c9ab8b71ef7376076bce7fc89778a736b4bc9d35
 ```
 
 ## Confirmed high-level path
@@ -1781,6 +1781,23 @@ corrupt`. The correct retained one-view scheduler wire is 203 bits: one nested u
 202-bit schema body. Sunrise now restores that prefix and rejects other widths for this guarded
 one-view path. Scheduler isolation remains in place so only a create or bounded retry carries this
 body after the first attempt; ordinary acknowledgements remain scheduler-free.
+
+The corrected 203-bit build validated both scheduler widths in a stationary run. A one-view native
+schema measured 202 bits and produced a 203-bit captured update; the later two-view schema measured
+274 bits and produced 275 bits. Signature logging returned to actual nested updates instead of
+appearing on nearly every packet. No create left in this run. Namespace 1 reached its 13-object
+baseline at `t=77537`, and local/remote one-view layouts agreed by `t=77767`, but reliable control
+records recurred roughly every 200 ms. Because the converged remote layout was no longer pristine,
+the guarded path required its conservative 500-ms interval and reset that timer for every control
+burst. The second view appeared before the timer could finish. Candidate validation now runs while
+the queue is outstanding and retains settle age only while the token, slot, generations, signature,
+and local/remote one-view layouts continue to agree. Transmission remains blocked until the reliable
+queue is acknowledged and empty, so no entity body can overtake topology records.
+
+The same run also resolved the authored-route branch. Identity 1's complete 0xA8 activity-start
+record had `selector=0` and completed the local constructor, while identity 2 had `selector=1` and
+completed the authored constructor. The missing enemy director is therefore tied to the primary
+activity record selecting the local route, not a universal failure of `FUN_141773200`.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the

@@ -1733,36 +1733,40 @@ void service(std::uint64_t now) noexcept {
         if (firstAttempt) {
             (void)synchronise_scheduler_layout(peer, selected);
             // Reliable membership, join, and view records establish the topology the scheduler
-            // describes. Never let an entity body overtake one or start its settle timer while
-            // that control packet is still awaiting acknowledgement.
+            // describes. Never let an entity body overtake one, but allow an otherwise identical
+            // candidate to accumulate its settle age while the record is acknowledged. Initial
+            // EDZ control bursts recur faster than the conservative settle interval; resetting
+            // the timer for each burst makes a stationary create impossible even though both
+            // native scheduler layouts, the token, and the slot remain unchanged.
             const bool controlQueueSettled =
                 peer.outbound.count == 0 && !peer.outbound.awaitingAcknowledgement;
-            if (!controlQueueSettled) {
-                gate = EntityCreateGate::controlQueue;
-            } else {
-                prepared = prepare_entity_create(peer, selected, candidate, gate);
-            }
-            if (!prepared) {
+            const bool candidatePrepared = prepare_entity_create(peer, selected, candidate, gate);
+            if (!candidatePrepared) {
                 peer.entityCreateReadyToken = 0;
                 peer.entityCreateReadySlot = 0;
                 peer.entityCreateReadyHandleGeneration = 0;
                 peer.entityCreateReadyBootstrap = false;
                 peer.entityCreateReadySince = 0;
-            } else if (peer.entityCreateReadyToken != candidate.token
-                       || peer.entityCreateReadySlot != candidate.slot
-                       || peer.entityCreateReadyHandleGeneration != candidate.handleGeneration) {
-                peer.entityCreateReadyToken = candidate.token;
-                peer.entityCreateReadySlot = candidate.slot;
-                peer.entityCreateReadyHandleGeneration = candidate.handleGeneration;
-                peer.entityCreateReadyBootstrap = candidate.bootstrapScheduler;
-                peer.entityCreateReadySince = now;
-                gate = EntityCreateGate::settling;
-                prepared = false;
-            } else if (now - peer.entityCreateReadySince
-                       < (peer.entityCreateReadyBootstrap ? kEntityCreateBootstrapReadyInterval
-                                                          : kEntityCreateReadyInterval)) {
-                gate = EntityCreateGate::settling;
-                prepared = false;
+            } else {
+                if (peer.entityCreateReadyToken != candidate.token
+                    || peer.entityCreateReadySlot != candidate.slot
+                    || peer.entityCreateReadyHandleGeneration != candidate.handleGeneration) {
+                    peer.entityCreateReadyToken = candidate.token;
+                    peer.entityCreateReadySlot = candidate.slot;
+                    peer.entityCreateReadyHandleGeneration = candidate.handleGeneration;
+                    peer.entityCreateReadyBootstrap = candidate.bootstrapScheduler;
+                    peer.entityCreateReadySince = now;
+                }
+                const auto readyInterval = peer.entityCreateReadyBootstrap
+                                               ? kEntityCreateBootstrapReadyInterval
+                                               : kEntityCreateReadyInterval;
+                if (!controlQueueSettled) {
+                    gate = EntityCreateGate::controlQueue;
+                } else if (now - peer.entityCreateReadySince < readyInterval) {
+                    gate = EntityCreateGate::settling;
+                } else {
+                    prepared = true;
+                }
             }
         }
         const auto gateValue = static_cast<std::uint8_t>(gate);
