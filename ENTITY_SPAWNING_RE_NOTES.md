@@ -1942,9 +1942,18 @@ exact intended position, namespace 1 occupancy advanced from 13 to 14, and the b
 did not return, but no object was visible. Rechecking the record codec in Ghidra exposed a spatial
 cell error: `FUN_141717eb0` interprets a leading zero as inheritance from the caller's active cell,
 while the emitted `1,0` branch explicitly stores `0xFFFF`. The caller loads its inherited cell from
-the active decode context at offset `+8` before invoking the record decoder. The next build replaces
-the explicit global/default cell with the one-bit inheritance branch, reducing the accepted record
-prediction to 189 bits, and logs the decoded record cell at offset `+2`.
+the active decode context at offset `+8` before invoking the record decoder. The inheritance build
+then decoded successfully after the predicted 189 bits, but the decoded record still reported
+`cell=0xFFFF`: the active context itself currently carries the default cell. The object remained
+invisible, occupancy still advanced from 13 to 14, and no assert occurred. This rules out the cell
+branch as the visibility blocker without guessing an unrelated bubble/map ordinal.
+
+The top-level encoder's named-component calls start at dirty index zero and advance through
+transform, parent, and stream source before the generic RSAT suffix. The clean update's five bits
+therefore bound the valid indices to 0 through 4: transform is bit 0, parent bit 1, stream source bit
+2, and the two RSAT fields bits 3 and 4. The next diagnostic sets each of bits 1 through 4
+individually against a private copy of the decoded 217-byte scratch and records the native wire;
+the accepted object is not modified.
 
 At `t=105336`, during a later regional transition, the channel timed out after four seconds without
 a valid receive and reported 146 corrupt reads. Server send calls continued to return success. The
@@ -1976,6 +1985,22 @@ It does not close the remaining boundary:
 The envelope implementation can be reused selectively after the real type payload is proven.
 Cherry-picking the full commit now would combine 273 files of unrelated architecture with the
 working scheduler path while still leaving the exact native payload empty.
+
+### External entity-name map
+
+The shared `EntityNames.json` contains 747 package entity-definition hashes with extracted display
+or internal names. It identifies concrete combat definitions including Red Legion Legionary
+`0x80C1A52D`, Red Legion Centurion `0x80C19B1F`, Red Legion Psion `0x80C1A8E4`, and Dreg v400
+`0x80FDEBC6`. Neither the current sobject RSAT `0x80C4FEAD` nor its statically linked definition
+`0x80B83809` appears in the map. That absence is not conclusive because the map can be incomplete,
+but it supports the runtime observation that the allocated object may be a nonvisual placed-object
+controller rather than a combat actor.
+
+These hashes must not be substituted directly for the RSAT field. Archive component evidence places
+the named actor hashes inside squad-definition data, while the sobject create codec expects an
+installed replication-schema asset tag. Their value is as package-graph anchors: locate an EDZ
+squad/member definition with a known name, recover the enclosing squad and spawn-rule records, then
+capture or derive the corresponding runtime squad and sobject RSAT sequence.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -2028,14 +2053,15 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the current cell-inheritance build once in the initial EDZ zone without moving. Confirm the
-   retry reaches `result=0 count=1`, consumes 189 bits, and the `entity-record` line reports a
-   non-`0xFFFF` cell with flags `0x0003`, update size 217, and a nonblank transform dirty mask.
+1. Run the remaining-component probe once in the initial EDZ zone without moving. Confirm the
+   `spatial-parent-decoded`, `spatial-stream-source-decoded`, `spatial-rsat-field0-decoded`, and
+   `spatial-rsat-field1-decoded` lines all return without faults and capture their exact wires.
 2. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
    passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
    required by actual enemies; object allocation alone does not start AI.
-3. If the inherited cell still decodes as `0xFFFF` or the object remains invisible, privately probe
-   the remaining RSAT-defined dirty components before adding lifecycle or squad records.
+3. Use the native probe results to construct one bounded initial update containing the required
+   default RSAT fields. Add lifecycle or a separate squad record only if those fields still do not
+   make the sobject visible.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.

@@ -125,7 +125,10 @@ The first live nearby-placement run was accepted but remained invisible:
   `[512.15094, 30.1296005, 74.3163147, 0]`; no blank-update assertion occurred.
 - Ghidra then confirmed the record's spatial-cell grammar. The emitted `1,0` branch explicitly
   selects global/default cell `0xFFFF`, while a zero bit inherits the active view's current cell.
-- The next build changes only that branch to current-cell inheritance and logs the decoded cell.
+- Current-cell inheritance decoded successfully after the predicted 189 bits, but the active view
+  context itself supplied `cell=0xFFFF`; the object remained invisible and no assert occurred.
+- The next build privately probes the four remaining valid component bits: parent, stream source,
+  and the two RSAT-defined fields. These probes do not alter the accepted live object.
 
 ## Immediate plan
 
@@ -133,8 +136,9 @@ The first live nearby-placement run was accepted but remained invisible:
 
 The current build publishes the exact native `player X + 3` transform captured above and inherits
 the active view's spatial cell. The predicted record is 189 bits with flags `0x0003`, a 217-byte
-update scratch, and transform dirty. It still emits only one entity and retains the existing
-bounded loader retry behavior.
+update scratch, and transform dirty. It also asks the native encoder to measure each remaining
+component against a private copy of that scratch. It still emits only one entity and retains the
+existing bounded loader retry behavior.
 
 ### 2. Publish one bounded position
 
@@ -172,6 +176,8 @@ another RSAT. Keep retries bounded and do not hand-author compressed transform f
 
 Once the director evaluates an encounter and creates native squad/member objects:
 
+- use the external entity-name map to recognize package definitions such as Red Legion Legionary
+  `0x80C1A52D` and Dreg `0x80FDEBC6` while tracing their enclosing squad definitions;
 - capture their create and initial-update order;
 - identify the squad/member relationship and required component data;
 - implement the equivalent server publications in Sunrise;
@@ -183,9 +189,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
 - Current working code publishes the exact 112-bit native transform for the captured point three
-  units beside the player and inherits the active view's streamed spatial cell.
+  units beside the player, inherits the active view's spatial cell, and privately probes component
+  dirty bits 1 through 4.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `f57c0b7badd028c94f6637b61667561287b53c8ba3fcaa58eac11117d12045a1`
+- DLL SHA-256: `18d3a0771a86c774e7d87078be74b3a1f46d48dd0c7b91d3636e26d799018b7c`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

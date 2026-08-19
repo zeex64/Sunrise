@@ -5,9 +5,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <span>
@@ -205,7 +205,7 @@ void encode_synthetic_variant(const char* variant,
                               std::span<const std::byte, kCreateBufferSize> create,
                               std::span<const std::byte> component,
                               std::span<const std::byte, kMaskCaptureSize> mask,
-                              bool transformDirty) noexcept {
+                              std::int32_t dirtyBit) noexcept {
     alignas(16) std::array<std::byte, kSyntheticWireCapacity> wire{};
     alignas(16) std::array<std::byte, kMaskCaptureSize> dirty{};
     alignas(16) std::array<std::byte, kMaskCaptureSize> sent{};
@@ -215,8 +215,9 @@ void encode_synthetic_variant(const char* variant,
     // The first eight bytes are the inline bits for this 64-entry mask. Preserve only its shape.
     std::fill_n(dirty.begin(), sizeof(std::uint64_t), std::byte{});
     std::fill_n(sent.begin(), sizeof(std::uint64_t), std::byte{});
-    if (transformDirty) {
-        dirty[0] = std::byte{0x01};
+    if (dirtyBit >= 0 && dirtyBit < 64) {
+        const auto bit = static_cast<std::uint32_t>(dirtyBit);
+        dirty[bit / 8] = static_cast<std::byte>(1U << (bit % 8));
     }
 
     NativeWriter writer{};
@@ -281,14 +282,14 @@ void encode_synthetic_variant(const char* variant,
         line.data(),
         line.size(),
         "ev=gameplay stage=sobject-native-update-probe variant=%s result=%llu fault=%u "
-        "rsat=0x%08X flag=%u dirty0=%u mask_meta=0x%08X bits=%d flushed=%d pending=%u "
+        "rsat=0x%08X flag=%u dirty_bit=%d mask_meta=0x%08X bits=%d flushed=%d pending=%u "
         "accum=0x%016llX bytes=%zu hex=%s full_bytes=%zu full_hex=%s component0=%s",
         variant,
         static_cast<unsigned long long>(result),
         faulted ? 1U : 0U,
         rsat,
         trailing,
-        transformDirty ? 1U : 0U,
+        static_cast<int>(dirtyBit),
         metadata,
         writer.totalBits,
         writer.flushedBits,
@@ -445,18 +446,34 @@ void probe_decoded_record(std::span<const std::byte> create,
     if (!incomingSpatial) {
         std::copy(
             update.begin(), update.end(), spatialComponent.begin() + kNamedComponentRsatOffset);
-        encode_synthetic_variant("plain-clean", plainCreate, plainComponent, nativeMask, false);
-        encode_synthetic_variant(
-            "spatial-clean", spatialCreate, spatialComponent, nativeMask, false);
+        encode_synthetic_variant("plain-clean", plainCreate, plainComponent, nativeMask, -1);
+        encode_synthetic_variant("spatial-clean", spatialCreate, spatialComponent, nativeMask, -1);
         return;
     }
 
     // A decoded spatial record already owns the complete named + RSAT scratch layout. Re-encode it
     // once clean, then privately mark only transform dirty to recover the exact native payload.
     std::copy(update.begin(), update.end(), spatialComponent.begin());
-    encode_synthetic_variant("spatial-clean", spatialCreate, spatialComponent, nativeMask, false);
+    encode_synthetic_variant("spatial-clean", spatialCreate, spatialComponent, nativeMask, -1);
     encode_synthetic_variant(
-        "spatial-transform-decoded", spatialCreate, spatialComponent, nativeMask, true);
+        "spatial-transform-decoded", spatialCreate, spatialComponent, nativeMask, 0);
+
+    // Ghidra shows exactly five top-level component presence decisions for this RSAT: transform,
+    // parent, stream-source, then two RSAT-defined fields. Probe each non-transform bit against
+    // the private decoded scratch so the next live payload can be assembled from native wire.
+    constexpr std::array<const char*, 4> kRemainingComponentVariants{
+        "spatial-parent-decoded",
+        "spatial-stream-source-decoded",
+        "spatial-rsat-field0-decoded",
+        "spatial-rsat-field1-decoded",
+    };
+    for (std::size_t index = 0; index < kRemainingComponentVariants.size(); ++index) {
+        encode_synthetic_variant(kRemainingComponentVariants[index],
+                                 spatialCreate,
+                                 spatialComponent,
+                                 nativeMask,
+                                 static_cast<std::int32_t>(index + 1));
+    }
 
     // Perturb each element of the transform's second float4 independently. These private calls
     // identify translation/auxiliary fields and recover exact native wire without touching the
@@ -470,12 +487,10 @@ void probe_decoded_record(std::span<const std::byte> create,
     };
     for (std::size_t index = 0; index < kPositionVariants.size(); ++index) {
         positionComponent = spatialComponent;
-        static_cast<void>(set_component_float(positionComponent,
-                                              kTransformSecondFloat4Offset
-                                                  + index * sizeof(std::uint32_t),
-                                              1.0F));
+        static_cast<void>(set_component_float(
+            positionComponent, kTransformSecondFloat4Offset + index * sizeof(std::uint32_t), 1.0F));
         encode_synthetic_variant(
-            kPositionVariants[index], spatialCreate, positionComponent, nativeMask, true);
+            kPositionVariants[index], spatialCreate, positionComponent, nativeMask, 0);
     }
 
     // The player-position publisher is already fed by the physics sync and protected by a
@@ -505,20 +520,19 @@ void probe_decoded_record(std::span<const std::byte> create,
                              {line.data(), static_cast<std::size_t>(written)});
         }
         encode_synthetic_variant(
-            "spatial-transform-player", spatialCreate, positionComponent, nativeMask, true);
+            "spatial-transform-player", spatialCreate, positionComponent, nativeMask, 0);
         positionComponent = spatialComponent;
         constexpr float kNearbyOffset = 3.0F;
         for (std::size_t axis = 0; axis < player.position.size(); ++axis) {
             const float value = player.position[axis] + (axis == 0 ? kNearbyOffset : 0.0F);
-            playerValid = playerValid
-                          && set_component_float(positionComponent,
-                                                 kTransformSecondFloat4Offset
-                                                     + axis * sizeof(float),
-                                                 value);
+            playerValid =
+                playerValid
+                && set_component_float(
+                    positionComponent, kTransformSecondFloat4Offset + axis * sizeof(float), value);
         }
         if (playerValid) {
             encode_synthetic_variant(
-                "spatial-transform-player-x3", spatialCreate, positionComponent, nativeMask, true);
+                "spatial-transform-player-x3", spatialCreate, positionComponent, nativeMask, 0);
         }
     } else {
         core::log::write(core::log::Channel::client,
