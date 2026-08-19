@@ -32,6 +32,7 @@ constexpr std::size_t kConnectionRecordSize = 0x58;
 constexpr std::uint8_t kExpiredAccountState = 3;
 constexpr std::size_t kReportEntryCapacity = 4;
 constexpr std::size_t kObservationCapacity = 4;
+constexpr std::size_t kPublisherStackCapacity = 8;
 constexpr ULONGLONG kReportIntervalMilliseconds = 5000;
 
 using Validator = bool(__fastcall*)(const void*);
@@ -96,6 +97,8 @@ struct PublisherObservation {
     std::uint64_t calls{};
     bool occupied{};
 };
+
+using PublisherStack = std::array<std::uintptr_t, kPublisherStackCapacity>;
 
 SRWLOCK g_observationLock{SRWLOCK_INIT};
 std::array<Observation, kObservationCapacity> g_observations{};
@@ -163,10 +166,43 @@ hash_bytes(const void* address, std::size_t size, std::uint64_t hash) noexcept {
     return report;
 }
 
-/** Emits the writer callsite and first desired identities in its complete input snapshot. */
+/** Captures only main-image frames, omitting the detour and system modules. */
+[[nodiscard]] PublisherStack capture_publisher_stack() noexcept {
+    PublisherStack output{};
+    std::array<void*, kPublisherStackCapacity> frames{};
+    const auto* const image = reinterpret_cast<const std::byte*>(GetModuleHandleW(nullptr));
+    if (image == nullptr) {
+        return output;
+    }
+    std::size_t imageSize = 0;
+    __try {
+        const auto* const dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(image);
+        const auto* const nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(image + dos->e_lfanew);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE || nt->Signature != IMAGE_NT_SIGNATURE) {
+            return output;
+        }
+        imageSize = nt->OptionalHeader.SizeOfImage;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return output;
+    }
+    const USHORT count =
+        RtlCaptureStackBackTrace(0, static_cast<ULONG>(frames.size()), frames.data(), nullptr);
+    std::size_t destination = 0;
+    for (USHORT index = 0; index < count && destination < output.size(); ++index) {
+        const auto* const frame = static_cast<const std::byte*>(frames[index]);
+        if (frame < image || frame >= image + imageSize) {
+            continue;
+        }
+        output[destination++] = static_cast<std::uintptr_t>(frame - image);
+    }
+    return output;
+}
+
+/** Emits the writer callsite, upstream stack, and first identities in its complete input. */
 void report_publisher(const PublisherSnapshot& snapshot,
                       std::uintptr_t callerRva,
-                      std::uint64_t calls) noexcept {
+                      std::uint64_t calls,
+                      const PublisherStack& stack) noexcept {
     std::array<char, 768> line{};
     int written = std::snprintf(line.data(),
                                 line.size(),
@@ -183,6 +219,19 @@ void report_publisher(const PublisherSnapshot& snapshot,
         return;
     }
     std::size_t used = static_cast<std::size_t>(written);
+    for (const std::uintptr_t frame : stack) {
+        if (frame == 0) {
+            break;
+        }
+        written = std::snprintf(line.data() + used,
+                                line.size() - used,
+                                " stack=+0x%llX",
+                                static_cast<unsigned long long>(frame));
+        if (written <= 0 || static_cast<std::size_t>(written) >= line.size() - used) {
+            break;
+        }
+        used += static_cast<std::size_t>(written);
+    }
     std::size_t reported = 0;
     for (std::size_t index = 0; index < snapshot.desired.size() && reported < kReportEntryCapacity;
          ++index) {
@@ -519,7 +568,7 @@ __declspec(noinline) void __fastcall publisher_body(void* publisher, const void*
         if (lease.accepting && inspected) {
             std::uint64_t calls = 0;
             if (record_publisher(snapshot, callerRva, calls)) {
-                report_publisher(snapshot, callerRva, calls);
+                report_publisher(snapshot, callerRva, calls, capture_publisher_stack());
             }
         }
     } __finally {

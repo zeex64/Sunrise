@@ -1709,7 +1709,9 @@ Immediate stationary EDZ run:
   are misaligned, and the run should stop before interpreting later account state.
 - Capture every `stage=account-soid-publish` transition. The desired outcome is that the public
   host no longer causes a typed-zero svc-23 request and the source remains `1/1`. If svc 23 still
-  requests identity zero, it must remain `result=unpaired`; do not alias it to the local SOID.
+  requests identity zero, it must remain `result=unpaired`; do not alias it to the local SOID. The
+  new repeated `stack=+0x...` fields exclude detour/system frames; the first frame above
+  `+0xFC9033` is the upstream caller that supplied the publisher wrapper's input.
 - If the source still becomes `2/1`, the peer-session-id alone is not its classification key. The
   next static target is the native identity field that distinguishes a platform peer from the
   activity host, not an invented account translation. If it becomes `2/2`, verify the two SOIDs
