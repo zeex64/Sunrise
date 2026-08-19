@@ -1611,10 +1611,14 @@ translation at `t=37352` is followed by a native `1/1` snapshot. When the synthe
 added, svc 23 returns `unpaired` at `t=66655`; the publisher emits `2/1` at `t=66754` and the global
 timer starts immediately afterward. The server handler contained an explicit process-wide gate
 that paired only the first identity and returned an empty svc-24 response for every distinct later
-identity. That policy has been removed. In Sunrise's one-account loopback topology, every nonzero
-identity requested for the player or a synthetic activity host now maps to the local account SOID;
-malformed and zero identities still receive the empty response. Translation logs include the
-identity and selected SOID so duplicate-source behavior remains observable.
+identity. That policy has been removed. In Sunrise's one-account loopback topology, every valid
+identity request for the player or a synthetic activity host maps to the local account SOID. The
+follow-up run established that the public synthetic host's request is structurally valid but
+carries identity zero. Returning the empty response for that zero produces `2/1` again, and the
+disconnect follows 91.5 seconds later. Request-shape validation is therefore separate from the
+identity value: a correctly typed zero identity now maps to the local account, while malformed
+requests still receive the empty response. Translation logs include validity, identity, and
+selected SOID so duplicate-source behavior remains observable.
 
 The same run showed the public namespace active set start at slot 0, then grow to exactly 13
 contiguous slots `0..12` when twelve additional native sobjects register. It never clears, so the

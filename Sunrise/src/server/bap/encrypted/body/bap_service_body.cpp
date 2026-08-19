@@ -26,26 +26,42 @@ namespace {
 constexpr std::size_t kSubscribeReportLimit = 96;
 /** The svc-23 request identity sits after its entry count and both type bytes. */
 constexpr std::size_t kTranslationIdentityOffset = 4;
+/** The request entry count begins the body and is big-endian. */
+constexpr std::size_t kTranslationEntryCountOffset = 0;
+/** The first identity discriminator follows the two-byte count. */
+constexpr std::size_t kTranslationTypeAOffset = 2;
 /** A request shorter than this carries no identity to read. */
 constexpr std::size_t kTranslationRequestSize =
     kTranslationIdentityOffset + middleware::encoding::kU64Size;
+/** Discriminator A value for the request's eight-byte identity entry. */
+constexpr std::byte kTranslationIdentityType{0x0C};
 /** One translation report carries the requested identity and selected account SOID. */
 constexpr std::size_t kTranslationReportLimit = 160;
 
 /**
- * Reads one svc-23 identity. Sunrise hosts one local account, but Destiny requests a translation
- * for both that player and each synthetic activity-host peer. They must all resolve to the local
- * account: returning an empty answer increments the native peer header without emitting its
- * matching account entry, producing the fatal 2/1 account-SOID table.
+ * Validates and reads one svc-23 identity. Sunrise hosts one local account, but Destiny requests a
+ * translation for both that player and each synthetic activity-host peer. The latter deliberately
+ * carries identity zero; its valid request must still resolve to the local account. Returning an
+ * empty answer increments the native peer header without emitting its matching account entry,
+ * producing the fatal 2/1 account-SOID table.
  * @param requestBody Complete svc-23 request body.
- * @return Requested identity, or zero when the body cannot name one.
+ * @param output Receives the identity, including zero for a valid synthetic-host request.
+ * @return True when the request has one correctly typed identity entry.
  */
-[[nodiscard]] std::uint64_t translation_identity(std::span<const std::byte> requestBody) noexcept {
+[[nodiscard]] bool translation_identity(std::span<const std::byte> requestBody,
+                                        std::uint64_t& output) noexcept {
+    output = 0;
     if (requestBody.size() < kTranslationRequestSize) {
-        return 0;
+        return false;
     }
-    return middleware::encoding::read_u64_be(
+    const std::uint16_t count = middleware::encoding::read_u16_be(
+        requestBody.subspan<kTranslationEntryCountOffset, middleware::encoding::kU16Size>());
+    if (count == 0 || requestBody[kTranslationTypeAOffset] != kTranslationIdentityType) {
+        return false;
+    }
+    output = middleware::encoding::read_u64_be(
         requestBody.subspan<kTranslationIdentityOffset, middleware::encoding::kU64Size>());
+    return true;
 }
 
 } // namespace
@@ -77,15 +93,17 @@ bool process(const ServiceRoute& route,
         return true;
     case BodyCodec::accountTranslationResponse: {
         const state::AccountState account = state::account_snapshot();
-        const std::uint64_t identity = translation_identity(requestBody);
-        const bool pairs = identity != 0 && account.primarySoid != 0;
+        std::uint64_t identity = 0;
+        const bool validIdentity = translation_identity(requestBody, identity);
+        const bool pairs = validIdentity && account.primarySoid != 0;
         const std::uint64_t soid = pairs ? account.primarySoid : 0;
         std::array<char, kTranslationReportLimit> line{};
         const int count = std::snprintf(line.data(),
                                         line.size(),
-                                        "ev=queuez stage=translate result=%s identity=0x%016llX "
-                                        "soid=0x%016llX",
+                                        "ev=queuez stage=translate result=%s valid=%u "
+                                        "identity=0x%016llX soid=0x%016llX",
                                         pairs ? "paired" : "unpaired",
+                                        validIdentity ? 1U : 0U,
                                         static_cast<unsigned long long>(identity),
                                         static_cast<unsigned long long>(soid));
         if (count > 0 && static_cast<std::size_t>(count) < line.size()) {
