@@ -9,6 +9,7 @@
 
 #include "../../../client/hooks/network/entity_slot_probe.h"
 #include "../../../client/hooks/network/scheduler_signature_probe.h"
+#include "../../../client/hooks/network/sobject_rsat_probe.h"
 #include "../../../client/hooks/network/sobject_update_probe.h"
 #include "../../../middleware/crypto/random_bytes.h"
 #include "../../../middleware/encoding/bit_reader.h"
@@ -73,8 +74,6 @@ constexpr std::size_t kExternalProbeByteCapacity = 256;
  * sequences ahead of its window, so this host must not send faster than the peer does.
  */
 constexpr std::uint64_t kResendInterval = 250;
-/** Shared Vandal sobject RSAT linked by definition 0x80C187BD at serialized offset +0x88. */
-constexpr std::uint32_t kFirstEntityRsat = 0x815B204B;
 /** The first EDZ entity view owns thirteen native objects before a server-authored slot is safe. */
 constexpr std::uint32_t kFirstEntityBaselineOccupied = 13;
 /** A pristine slot's first native allocation advances object generation zero to two. */
@@ -166,6 +165,7 @@ enum class EntityCreateGate : std::uint8_t {
     baseline,
     slot,
     generation,
+    rsat,
     signature,
     schedulerIdentity,
     remoteLayout,
@@ -256,6 +256,8 @@ select_replication_view(const state::gameplay::PeerLink& peer) noexcept {
         return "slot";
     case EntityCreateGate::generation:
         return "generation";
+    case EntityCreateGate::rsat:
+        return "rsat";
     case EntityCreateGate::signature:
         return "signature";
     case EntityCreateGate::schedulerIdentity:
@@ -524,6 +526,10 @@ write_scheduler_signature(bits::Writer& writer,
         gate = EntityCreateGate::generation;
         return false;
     }
+    if (!client::hooks::network::sobject_rsat_probe::first_entity_ready()) {
+        gate = EntityCreateGate::rsat;
+        return false;
+    }
 
     if (!capture.schedulerSignatureValid
         || capture.schedulerSignature != peer.schedulerSignature.value) {
@@ -564,7 +570,7 @@ write_scheduler_signature(bits::Writer& writer,
     output.token = capture.token;
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;
-    output.rsat = kFirstEntityRsat;
+    output.rsat = state::gameplay::kFirstEntityRsat;
     output.slot = capture.slot;
     output.handleGeneration = capture.handleGeneration;
     output.objectGeneration = kFirstObjectGeneration;
@@ -613,7 +619,7 @@ write_scheduler_signature(bits::Writer& writer,
     output.token = capture.token;
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;
-    output.rsat = kFirstEntityRsat;
+    output.rsat = state::gameplay::kFirstEntityRsat;
     output.slot = capture.slot;
     output.handleGeneration = capture.handleGeneration;
     output.objectGeneration = kFirstObjectGeneration;
@@ -670,8 +676,8 @@ write_scheduler_signature(bits::Writer& writer,
     }
 
     client::hooks::network::sobject_update_probe::NearbyUpdateCapture update{};
-    if (!client::hooks::network::sobject_update_probe::take_nearby_player_update(kFirstEntityRsat,
-                                                                                 update)
+    if (!client::hooks::network::sobject_update_probe::take_nearby_player_update(
+            state::gameplay::kFirstEntityRsat, update)
         || update.bitCount != kFirstEntityUpdateBits) {
         return false;
     }
@@ -679,7 +685,7 @@ write_scheduler_signature(bits::Writer& writer,
     output.token = capture.token;
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;
-    output.rsat = kFirstEntityRsat;
+    output.rsat = state::gameplay::kFirstEntityRsat;
     output.slot = peer.entityCreateSlot;
     output.handleGeneration = peer.entityCreateHandleGeneration;
     output.objectGeneration = kFirstObjectGeneration;

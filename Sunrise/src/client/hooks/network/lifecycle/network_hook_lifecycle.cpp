@@ -14,6 +14,7 @@
 #include "../scheduler_signature_probe.h"
 #include "../sobject_create_probe.h"
 #include "../sobject_native_probe.h"
+#include "../sobject_rsat_probe.h"
 #include "../sobject_update_probe.h"
 #include "../view_creation_probe.h"
 #include "../view_membership_probe.h"
@@ -151,6 +152,7 @@ bool uninstall() noexcept {
         scheduler_signature_probe::reset();
         sobject_create_probe::reset();
         sobject_native_probe::reset();
+        sobject_rsat_probe::reset();
         sobject_update_probe::reset();
         view_creation_probe::reset();
         activity_host_probe::reset();

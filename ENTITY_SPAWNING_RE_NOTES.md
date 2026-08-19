@@ -2117,6 +2117,28 @@ occupied bit appeared. The next build therefore has no artificial post-acceptanc
 on the first service tick that observes slot 13, still guarded by exact live one-view agreement on
 both scheduler sides.
 
+### Deterministic RSAT residency gate
+
+The first-tick update run did not reach allocation. Both bounded creates for shared Vandal RSAT
+`0x815B204B` returned result 2 after the direct entity handle, and slot 13 remained clear. The first
+call arrived with aggregate capacity 255, but three subsequent traced calls had capacity 256 and
+returned the same result, disproving capacity as the cause.
+
+Ghidra localizes this result precisely. `FUN_141718080` selects the kind-0 sobject codec and calls
+its inbound create method at vtable `+0x60`, `FUN_1417266B0`. That method decodes schema
+`0x80800014`, reads the identity bit, calls `FUN_140A020E0(rsat)` to queue the resource, then calls
+`FUN_140A01C70(rsat)` to test residency. A false readiness result makes the codec return false;
+`FUN_141718080` maps that failure to result 2 in the normal runtime mode. This is the complete
+explanation for the 19-bit rejection and for earlier nondeterminism: the same valid create succeeds
+only when another path has already made its RSAT resident.
+
+The client now resolves those adjacent private queue/readiness calls from the live kind-0 create
+decoder. On a game-owned view-lookup call it queues `0x815B204B`, polls readiness, and publishes
+only two transition logs: `sobject-rsat-preload result=queued` and then `result=ready`. The server
+create planner has a new `rsat` gate and cannot start its 500 ms scheduler-settle interval until the
+native predicate is ready. A resource miss therefore no longer uses a partially consumed entity
+packet as a preload request.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2168,8 +2190,9 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the two-stage shared-Vandal build once in the initial EDZ zone without moving. Confirm one
-   77-bit `entity-create-out`, an `occupied_low` transition containing bit 13, then exactly one
+1. Run the preloaded two-stage shared-Vandal build once in the initial EDZ zone without moving.
+   Confirm `sobject-rsat-preload result=queued`, then `result=ready`, followed by one 77-bit
+   `entity-create-out`, an `occupied_low` transition containing bit 13, and exactly one
    `entity-update-out` with `update_bits=130` on the first service tick after occupancy.
 2. Confirm the update-only decoder returns `result=0 count=1`, reports flags `0x0002`, retains the
    same entity handle, and does not introduce a corrupt-read burst or four-second channel timeout.
@@ -2224,6 +2247,7 @@ membership-native-profile
 account-soids
 account-soid-publish
 sobject-create
+sobject-rsat-preload
 sobject-update
 sobject-native
 entity-create

@@ -98,6 +98,8 @@ struct ViewSignature {
 inline constexpr std::size_t kSchedulerSignatureViewCapacity = 3;
 /** Bounded encoded scheduler-signature value plus its one-bit update gate. */
 inline constexpr std::size_t kSchedulerSignatureWireCapacity = 64;
+/** Loadable shared-Vandal sobject resource used by the first guarded entity experiment. */
+inline constexpr std::uint32_t kFirstEntityRsat = 0x815B204B;
 
 /** One native logical scheduler lane paired with the encoded signature value. */
 struct SchedulerSignatureView {

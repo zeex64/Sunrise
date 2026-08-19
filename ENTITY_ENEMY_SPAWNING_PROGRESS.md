@@ -17,8 +17,8 @@ squads, and encounters before publishing native objects through the replication 
 | --- | --- |
 | Gameplay session and views | Working and substantially stabilized |
 | Replication scheduler | One-view layout understood; the 203-bit framing correction is validated |
-| Native entity creation | A stationary create allocates reliably; exact Simulated Vandal RSAT `0x815B5422` is now selected |
-| Entity placement and updates | Old-RSAT transform is proven; Vandal-specific component tail must now be measured |
+| Native entity creation | Shared Vandal RSAT `0x815B204B` is proven; explicit native preload now removes the remaining residency race |
+| Entity placement and updates | Exact shared-Vandal 130-bit nearby transform is captured; staged update awaits validation |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
 
 ## Confirmed progress
@@ -181,17 +181,28 @@ The first live nearby-placement run was accepted but remained invisible:
   decoded and nothing could render.
 - The native payload is ready before occupancy publishes. The update now leaves on the first
   service tick that observes slot 13, with the same exact local/remote one-view guards.
+- The first-tick run did not allocate: both creates returned result 2 after the direct handle and
+  slot 13 remained free. Later traces returned the same result with capacity 256, so the initial
+  capacity-255 observation was not causal.
+- Ghidra now proves result 2 comes from the kind-0 create codec. `FUN_1417266B0` queues the decoded
+  RSAT through `FUN_140A020E0`, checks it through `FUN_140A01C70`, and returns false while it is not
+  resident. The generic record decoder maps that false return to result 2.
+- The current build explicitly queues `0x815B204B` from the live game create decoder, polls its
+  native readiness predicate on the game networking path, and holds the server create behind a new
+  `rsat` gate. Create packets are no longer used as resource-preload probes.
 
 ## Immediate plan
 
 ### 1. Validate the staged shared Vandal update
 
-The current build sends shared Vandal RSAT `0x815B204B` create-only, observes the exact low occupied
-word, and stops retries as soon as its selected slot is allocated. It retains the native X+3 wire
-generated from that accepted baseline, verifies both scheduler layouts still match the cached
-one-view signature on the first accepted service tick, and sends exactly one 130-bit update-only
-shortcut for the same handle. The expected sequence is `entity-create-out`, slot 13 occupied, then
-`entity-update-out update_bits=130` followed by a decoded update record.
+The current build first queues shared Vandal RSAT `0x815B204B` through the game's own loader and
+waits for the exact predicate used by the inbound create codec. It then sends create-only, observes
+the exact low occupied word, and stops retries as soon as its selected slot is allocated. It
+retains the native X+3 wire generated from that accepted baseline, verifies both scheduler layouts
+still match the cached one-view signature on the first accepted service tick, and sends exactly one
+130-bit update-only shortcut for the same handle. The expected sequence is
+`sobject-rsat-preload queued`, `sobject-rsat-preload ready`, `entity-create-out`, slot 13 occupied,
+then `entity-update-out update_bits=130` followed by a decoded update record.
 
 ### 2. Publish one bounded position
 
