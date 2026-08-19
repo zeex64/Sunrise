@@ -117,13 +117,24 @@ The live player-position probe then succeeded:
 - The player's position agrees with one extracted spawn-point cluster, independently validating
   the physics position and native transform coordinate basis.
 
+The first live nearby-placement run was accepted but remained invisible:
+
+- Attempt 2 decoded exactly one entity after 190 bits and namespace 1 occupancy advanced from 13
+  to 14.
+- Its update scratch decoded the intended second float4
+  `[512.15094, 30.1296005, 74.3163147, 0]`; no blank-update assertion occurred.
+- Ghidra then confirmed the record's spatial-cell grammar. The emitted `1,0` branch explicitly
+  selects global/default cell `0xFFFF`, while a zero bit inherits the active view's current cell.
+- The next build changes only that branch to current-cell inheritance and logs the decoded cell.
+
 ## Immediate plan
 
 ### 1. Validate the first nearby visible placement
 
-The current build publishes the exact native `player X + 3` transform captured above. The predicted
-record remains 190 bits with flags `0x0003`, a 217-byte update scratch, and transform dirty. It
-still emits only one entity and retains the existing bounded loader retry behavior.
+The current build publishes the exact native `player X + 3` transform captured above and inherits
+the active view's spatial cell. The predicted record is 189 bits with flags `0x0003`, a 217-byte
+update scratch, and transform dirty. It still emits only one entity and retains the existing
+bounded loader retry behavior.
 
 ### 2. Publish one bounded position
 
@@ -172,9 +183,9 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
 - Current working code publishes the exact 112-bit native transform for the captured point three
-  units beside the player.
+  units beside the player and inherits the active view's streamed spatial cell.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `233ca41625f3f08a8bd9ef24305cc1bd73401440c76770b3897f232abf1f20ef`
+- DLL SHA-256: `f57c0b7badd028c94f6637b61667561287b53c8ba3fcaa58eac11117d12045a1`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

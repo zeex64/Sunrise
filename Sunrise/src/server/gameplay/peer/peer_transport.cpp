@@ -383,8 +383,8 @@ write_scheduler_signature(bits::Writer& writer,
         || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(1, 1) || !writer.write(0, 1)
         || !writer.write(0, 1)
         || !writer.write(0, 1)
-        // Force the global/default spatial cell independently of the client's current cell.
-        || !writer.write(1, 1)
+        // Inherit the active view's current spatial cell. The explicit 1,0 branch means 0xFFFF
+        // and allocated the object outside the streamed Town cell even at a valid position.
         || !writer.write(0, 1)
         // Kind-0 core: object generation, codec kind, installed RSAT schema, identity flag.
         || !writer.write(plan.objectGeneration, 8) || !writer.write(0, 2)
@@ -1884,7 +1884,8 @@ void service(std::uint64_t now) noexcept {
             report(sent ? core::log::Level::info : core::log::Level::warn,
                    "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
                    "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
-                   "rsat=0x%08X update=transform-player-x3 update_bits=%zu bootstrap=%u",
+                   "rsat=0x%08X cell=inherited update=transform-player-x3 update_bits=%zu "
+                   "bootstrap=%u",
                    sent ? "sent" : "fail",
                    static_cast<unsigned long long>(entityCreates[index].token),
                    static_cast<unsigned>(owed[index].entityCreateAttempts),

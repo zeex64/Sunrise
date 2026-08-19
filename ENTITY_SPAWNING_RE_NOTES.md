@@ -1937,6 +1937,15 @@ cached nine-point cluster around `(509, 30, 74)`, independently confirming that 
 spawn-point cache, and transform schema share a world-coordinate basis. The next bounded live build
 publishes the exact X+3 wire for the single already-guarded RSAT create.
 
+That live create was accepted on attempt 2 after 190 bits. The decoded update scratch retained the
+exact intended position, namespace 1 occupancy advanced from 13 to 14, and the blank-update assert
+did not return, but no object was visible. Rechecking the record codec in Ghidra exposed a spatial
+cell error: `FUN_141717eb0` interprets a leading zero as inheritance from the caller's active cell,
+while the emitted `1,0` branch explicitly stores `0xFFFF`. The caller loads its inherited cell from
+the active decode context at offset `+8` before invoking the record decoder. The next build replaces
+the explicit global/default cell with the one-bit inheritance branch, reducing the accepted record
+prediction to 189 bits, and logs the decoded record cell at offset `+2`.
+
 At `t=105336`, during a later regional transition, the channel timed out after four seconds without
 a valid receive and reported 146 corrupt reads. Server send calls continued to return success. The
 accepted transform record did not leave a partial entity decode, but the channel result means packet
@@ -2019,15 +2028,14 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the current build once in the initial EDZ zone without moving. Confirm the retry reaches
-   `result=0 count=1`, consumes 190 bits, reports record flags `0x0003`, create flag 1, update size
-   217, and a nonblank transform dirty mask. The repeating blank-update assertion must disappear.
+1. Run the current cell-inheritance build once in the initial EDZ zone without moving. Confirm the
+   retry reaches `result=0 count=1`, consumes 189 bits, and the `entity-record` line reports a
+   non-`0xFFFF` cell with flags `0x0003`, update size 217, and a nonblank transform dirty mask.
 2. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
    passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
    required by actual enemies; object allocation alone does not start AI.
-3. Run the nearby-placement build without moving. Confirm the accepted record still consumes 190
-   bits, its decoded second float4 is near `[512.15094, 30.1296005, 74.3163147, 0]`, occupancy
-   advances once, and report whether RSAT `0x80C4FEAD` is visible.
+3. If the inherited cell still decodes as `0xFFFF` or the object remains invisible, privately probe
+   the remaining RSAT-defined dirty components before adding lifecycle or squad records.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.

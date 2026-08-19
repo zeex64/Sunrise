@@ -27,6 +27,7 @@ constexpr std::size_t kEntryStride = 6;
 constexpr std::size_t kFreeBitsetOffset = 0xC118;
 constexpr std::size_t kOccupiedBitsetOffset = 0xC520;
 constexpr std::size_t kDecodedRecordEntityOffset = 0x08;
+constexpr std::size_t kDecodedRecordCellOffset = 0x02;
 constexpr std::size_t kDecodedRecordMaskOffset = 0x18;
 constexpr std::size_t kDecodedRecordCreateSizeOffset = 0x2C;
 constexpr std::size_t kDecodedRecordUpdateSizeOffset = 0x2E;
@@ -81,6 +82,7 @@ struct DecodedRecordSnapshot {
     std::array<std::byte, kDecodedRecordCreateBytes> create{};
     std::array<std::byte, kDecodedRecordUpdateBytes> update{};
     std::uint32_t entity{};
+    std::uint16_t cell{};
     std::uint16_t flags{};
     std::int16_t createSize{};
     std::int16_t updateSize{};
@@ -98,6 +100,7 @@ struct DecodedRecordSnapshot {
     }
     __try {
         const auto* const record = static_cast<const std::byte*>(recordsAddress);
+        std::memcpy(&output.cell, record + kDecodedRecordCellOffset, sizeof output.cell);
         std::memcpy(&output.entity, record + kDecodedRecordEntityOffset, sizeof output.entity);
         std::memcpy(output.mask.data(), record + kDecodedRecordMaskOffset, output.mask.size());
         std::memcpy(
@@ -157,10 +160,11 @@ void report_decoded_record(const void* recordsAddress, int count) noexcept {
     const int written =
         std::snprintf(line.data(),
                       line.size(),
-                      "ev=gameplay stage=entity-record entity=0x%08X flags=0x%04X "
+                      "ev=gameplay stage=entity-record entity=0x%08X cell=0x%04X flags=0x%04X "
                       "create_size=%d create_copied=%zu create=%s update_size=%d update_copied=%zu "
                       "mask=%s update=%s",
                       snapshot.entity,
+                      static_cast<unsigned>(snapshot.cell),
                       static_cast<unsigned>(snapshot.flags),
                       static_cast<int>(snapshot.createSize),
                       snapshot.createCopied,
