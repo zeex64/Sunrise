@@ -93,13 +93,13 @@ constexpr std::uint8_t kProvenSchedulerViewCount = 1;
 /** One-view scheduler wire is its update bit plus schema 0x80806AEA's 202-bit body. */
 constexpr std::uint16_t kProvenSchedulerWireBits = 203;
 /**
- * Native schema 0x80809F75 encoding of the decoded default transform, followed by clear parent,
- * stream-source, and two RSAT-defined presence fields. The client encoder measured this as 112
- * bits: eight flushed bytes plus 48 pending zero bits.
+ * Native schema 0x80809F75 encoding of the first captured EDZ player position plus three world
+ * units on X, followed by clear parent, stream-source, and two RSAT-defined presence fields. The
+ * client encoder measured this complete body as 112 bits.
  */
 constexpr std::array<std::uint8_t, 14> kFirstEntityTransformUpdateWire{
-    0xC0, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0xC0, 0x14, 0x40, 0x00, 0x9A, 0x94, 0x1F,
+    0x10, 0x96, 0xC4, 0x29, 0x4A, 0x1F, 0x40,
 };
 
 SRWLOCK g_lock{SRWLOCK_INIT};
@@ -357,7 +357,7 @@ write_scheduler_signature(bits::Writer& writer,
            && writer.write(0, 1);
 }
 
-/** Replays the exact native default-transform update recovered by the private encoder probe. */
+/** Replays the exact native nearby-player transform recovered by the private encoder probe. */
 [[nodiscard]] bool write_first_entity_transform_update(bits::Writer& writer) noexcept {
     for (const std::uint8_t value : kFirstEntityTransformUpdateWire) {
         if (!writer.write(value, kByteBits)) {
@@ -367,7 +367,7 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
-/** Writes one direct kind-0 sobject create plus its native default-transform update. */
+/** Writes one direct kind-0 sobject create plus its native nearby-player transform update. */
 [[nodiscard]] bool write_entity_create_view(bits::Writer& writer,
                                             const EntityCreatePlan& plan) noexcept {
     // Trace only the bounded native decoder calls that follow this guarded server emission.
@@ -1884,7 +1884,7 @@ void service(std::uint64_t now) noexcept {
             report(sent ? core::log::Level::info : core::log::Level::warn,
                    "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
                    "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
-                   "rsat=0x%08X update=transform-default update_bits=%zu bootstrap=%u",
+                   "rsat=0x%08X update=transform-player-x3 update_bits=%zu bootstrap=%u",
                    sent ? "sent" : "fail",
                    static_cast<unsigned long long>(entityCreates[index].token),
                    static_cast<unsigned>(owed[index].entityCreateAttempts),

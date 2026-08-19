@@ -456,7 +456,7 @@ void probe_decoded_record(std::span<const std::byte> create,
     std::copy(update.begin(), update.end(), spatialComponent.begin());
     encode_synthetic_variant("spatial-clean", spatialCreate, spatialComponent, nativeMask, false);
     encode_synthetic_variant(
-        "spatial-transform-default", spatialCreate, spatialComponent, nativeMask, true);
+        "spatial-transform-decoded", spatialCreate, spatialComponent, nativeMask, true);
 
     // Perturb each element of the transform's second float4 independently. These private calls
     // identify translation/auxiliary fields and recover exact native wire without touching the

@@ -108,13 +108,22 @@ The controlled second-float4 probes then resolved all four lanes:
   `0x9617A6E7`. The extracted cache contains real points for that set, but the flat point bank no
   longer retains each point's individual bubble mask, so it is not used to guess Town coordinates.
 
+The live player-position probe then succeeded:
+
+- Player position was `(509.15094, 30.1296005, 74.3163147)`.
+- The native player transform is `C0143FE935241F1096C4294A1F40` in 112 bits.
+- The native transform for three units beside the player is
+  `C01440009A941F1096C4294A1F40`, also in 112 bits.
+- The player's position agrees with one extracted spawn-point cluster, independently validating
+  the physics position and native transform coordinate basis.
+
 ## Immediate plan
 
-### 1. Recover native position encoding
+### 1. Validate the first nearby visible placement
 
-The current build keeps the validated 112-bit default transform on the live path and reads the
-existing, seqlock-protected local-player position snapshot. It privately asks the native encoder for
-the exact player coordinate and `player X + 3` wires. Neither is published in this build.
+The current build publishes the exact native `player X + 3` transform captured above. The predicted
+record remains 190 bits with flags `0x0003`, a 217-byte update scratch, and transform dirty. It
+still emits only one entity and retains the existing bounded loader retry behavior.
 
 ### 2. Publish one bounded position
 
@@ -127,8 +136,9 @@ After validating the transform probe output, recover:
 - the initial native update and dirty-component masks;
 - whether a kind-1 squad relationship is additionally required.
 
-After the two player-position encodes succeed, publish only the `X + 3` native wire as one bounded
-placement. Keep retries bounded and do not hand-author compressed transform fields.
+Confirm whether RSAT `0x80C4FEAD` becomes visible at the captured location. If it allocates but does
+not render, inspect the decoded transform and object lifecycle/component requirements before trying
+another RSAT. Keep retries bounded and do not hand-author compressed transform fields.
 
 ### 3. Complete safe scheduler support
 
@@ -161,10 +171,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code sends the exact 112-bit native default-transform update and privately asks
-  the native encoder for the live player position and a point three units beside it.
+- Current working code publishes the exact 112-bit native transform for the captured point three
+  units beside the player.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `12a1ffbfd66d6a41e59b0963bb1e6a1025c6373bb8e75380af358228bb930616`
+- DLL SHA-256: `233ca41625f3f08a8bd9ef24305cc1bd73401440c76770b3897f232abf1f20ef`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

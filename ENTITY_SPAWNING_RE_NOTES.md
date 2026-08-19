@@ -1924,6 +1924,19 @@ already reads the local player's rigid-body position through the teleport physic
 a seqlock snapshot. The next diagnostic privately native-encodes that exact position and X plus
 three units without modifying the accepted object.
 
+That diagnostic succeeded at player position `(509.15094, 30.1296005, 74.3163147)`. It produced:
+
+```text
+player       C0143FE935241F1096C4294A1F40
+player X+3   C01440009A941F1096C4294A1F40
+```
+
+Both are complete 112-bit top-level spatial updates. The source second float4 for X+3 is
+`[512.15094, 30.1296005, 74.3163147, 0]`. The measured player position also lands directly in the
+cached nine-point cluster around `(509, 30, 74)`, independently confirming that the physics reader,
+spawn-point cache, and transform schema share a world-coordinate basis. The next bounded live build
+publishes the exact X+3 wire for the single already-guarded RSAT create.
+
 At `t=105336`, during a later regional transition, the channel timed out after four seconds without
 a valid receive and reported 146 corrupt reads. Server send calls continued to return success. The
 accepted transform record did not leave a partial entity decode, but the channel result means packet
@@ -2012,9 +2025,9 @@ The current checkpoint includes work in:
 2. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
    passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
    required by actual enemies; object allocation alone does not start AI.
-3. Capture `entity-player-position`, `spatial-transform-player`, and
-   `spatial-transform-player-x3`. Publish only the native X-plus-three wire after both encodes
-   succeed and the complete strings are internally consistent.
+3. Run the nearby-placement build without moving. Confirm the accepted record still consumes 190
+   bits, its decoded second float4 is near `[512.15094, 30.1296005, 74.3163147, 0]`, occupancy
+   advances once, and report whether RSAT `0x80C4FEAD` is visible.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.
