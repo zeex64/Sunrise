@@ -153,15 +153,24 @@ The first live nearby-placement run was accepted but remained invisible:
   plain `vandal` plus many actual Vandal variants and lives in the shared sandbox packages.
 - Because shared RSAT `0x815B204B` has 53 serialized descriptors rather than the Simulated
   Vandal's 55, the next build profiles it with a create-only record before sending any update.
+- That shared-Vandal create succeeded on attempt one after 77 bits. Its accepted baseline is
+  `4B205B8101000000AC2200005C000000`, giving an 8,876-byte update scratch and profile `0x5C`.
+- The native clean update is 23 bits and the transform-dirty update is 130 bits. At the captured
+  player position, the nearby X+3 payload is
+  `C01440009A641F107B842954A5C00000` plus two zero tail bits.
+- Slot 13 became occupied, proving allocation. The same run later timed out with 65 corrupt reads,
+  so the next build stops all create retries at that exact occupancy bit and sends only one staged
+  update after a 500 ms settle period.
 
 ## Immediate plan
 
-### 1. Validate the shared Vandal create profile
+### 1. Validate the staged shared Vandal update
 
-The current build selects shared Vandal RSAT `0x815B204B`, enables its spatial layout, and sends no
-update. It emits only one entity and retains the bounded loader retry behavior. The expected output
-is a 77-bit create-only record whose injected baseline reveals this RSAT's derived scratch size,
-profile value, clean width, and transform width.
+The current build sends shared Vandal RSAT `0x815B204B` create-only, observes the exact low occupied
+word, and stops retries as soon as its selected slot is allocated. It retains the native X+3 wire
+generated from that accepted baseline, waits 500 ms with an empty control queue, and sends exactly
+one 130-bit update-only shortcut for the same handle. The expected sequence is
+`entity-create-out`, slot 13 occupied, then `entity-update-out update_bits=130`.
 
 ### 2. Publish one bounded position
 
@@ -213,10 +222,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
 - Current working code sends shared Vandal sobject RSAT `0x815B204B` create-only, inherits the
-  active view's spatial cell, and retains bounded retries. Its update will be staged separately
-  after this RSAT's native profile is captured.
+  active view's spatial cell, confirms the exact occupied slot, and then sends one native-encoded
+  nearby-player update-only record after a 500 ms settle interval.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `3593c28509548fce568d0bad89b57e01eb1486bd788d2c65a336005547cc18ad`
+- DLL SHA-256: `4734b7ea45996b694da50ec6051aee69ffddea8be2ee5def450d3ebceca37894`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

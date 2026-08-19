@@ -17,6 +17,8 @@ struct ViewCapture {
     std::uint32_t freeCount{};
     std::uint32_t occupiedCount{};
     std::uint32_t availableCount{};
+    /** Exact occupancy for slots 0..31, including the guarded first server slot. */
+    std::uint32_t occupiedLow{};
     std::uint16_t slot{};
     std::uint8_t schedulerTag{};
     std::uint8_t handleGeneration{};

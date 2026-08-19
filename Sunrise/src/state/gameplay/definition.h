@@ -246,6 +246,12 @@ struct PeerLink {
     std::uint8_t entityCreateAttempts{};
     /** Tick the most recent guarded create attempt left at. */
     std::uint64_t lastEntityCreate{};
+    /** True once the native occupied map confirms the exact guarded slot was allocated. */
+    bool entityCreateAccepted{};
+    /** True once this host has sent the single staged native transform for the accepted slot. */
+    bool entityUpdateSent{};
+    /** Tick the accepted occupancy bit was first observed. */
+    std::uint64_t entityCreateAcceptedSince{};
     /** Last bounded entity-create gate diagnostic, 0xFF before the first observation. */
     std::uint8_t entityCreateGate{0xFF};
     /** True while a received packet still has to be acknowledged. */

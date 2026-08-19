@@ -9,6 +9,7 @@
 
 #include "../../../client/hooks/network/entity_slot_probe.h"
 #include "../../../client/hooks/network/scheduler_signature_probe.h"
+#include "../../../client/hooks/network/sobject_update_probe.h"
 #include "../../../middleware/crypto/random_bytes.h"
 #include "../../../middleware/encoding/bit_reader.h"
 #include "../../../middleware/encoding/bit_writer.h"
@@ -82,6 +83,10 @@ constexpr std::uint8_t kFirstObjectGeneration = 2;
 constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
 /** A failed decode queues the RSAT; retry the exact same slot after loader service has run. */
 constexpr std::uint64_t kEntityCreateRetryInterval = 2000;
+/** Let the accepted native baseline settle before its exact update-only shortcut leaves. */
+constexpr std::uint64_t kEntityUpdateReadyInterval = 500;
+/** Exact shared-Vandal transform width produced by the native encoder. */
+constexpr std::uint16_t kFirstEntityUpdateBits = 130;
 /** Reject a scheduler layout that only agrees for one transition sample. */
 constexpr std::uint64_t kEntityCreateReadyInterval = 500;
 /** A pristine one-view layout is stable for only ~134 ms before the next regional control burst. */
@@ -144,7 +149,11 @@ struct EntityCreatePlan {
     std::uint8_t objectGeneration{};
     std::uint8_t viewIndex{};
     std::int32_t namespaceId{-1};
+    std::array<std::byte, client::hooks::network::sobject_update_probe::kNearbyUpdateCapacity>
+        updateWire{};
+    std::uint16_t updateBits{};
     bool bootstrapScheduler{};
+    bool updateOnly{};
     bool present{};
 };
 
@@ -173,6 +182,7 @@ struct EntityCreateGateReport {
     std::uint64_t readyAge{};
     std::size_t queueCount{};
     std::uint32_t occupied{};
+    std::uint32_t occupiedLow{};
     std::uint32_t available{};
     std::uint16_t wireBits{};
     std::uint16_t slot{};
@@ -347,6 +357,44 @@ write_scheduler_signature(bits::Writer& writer,
            && writer.write(0, 1);
 }
 
+/** Writes a captured MSB-first native body whose final byte is left-aligned. */
+[[nodiscard]] bool write_native_update(bits::Writer& writer,
+                                       const EntityCreatePlan& plan) noexcept {
+    if (plan.updateBits == 0 || plan.updateBits > plan.updateWire.size() * kByteBits) {
+        return false;
+    }
+    std::size_t remaining = plan.updateBits;
+    std::size_t byteIndex = 0;
+    while (remaining != 0) {
+        const auto width = static_cast<std::uint8_t>(remaining < kByteBits ? remaining : kByteBits);
+        auto value = std::to_integer<std::uint8_t>(plan.updateWire[byteIndex++]);
+        if (width < kByteBits) {
+            value = static_cast<std::uint8_t>(value >> (kByteBits - width));
+        }
+        if (!writer.write(value, width)) {
+            return false;
+        }
+        remaining -= width;
+    }
+    return true;
+}
+
+/** Writes one update-only shortcut for the exact native slot accepted by the preceding create. */
+[[nodiscard]] bool write_entity_update_view(bits::Writer& writer,
+                                            const EntityCreatePlan& plan) noexcept {
+    client::hooks::network::entity_slot_probe::arm_decoder_trace();
+    return writer.write(0, 1) && writer.write(0, 1)
+           && writer.write(0, 1)
+           // Entity lane, one direct 17-bit handle.
+           && writer.write(0, 1) && writer.write(1, 1) && writer.write(plan.slot, 13)
+           && writer.write(plan.handleGeneration, 4)
+           // The flag shortcut denotes update-only. Keep the active spatial cell.
+           && writer.write(1, 1) && writer.write(0, 1)
+           && write_native_update(writer, plan)
+           // End entity lane and leave the fixed-control handler empty.
+           && writer.write(1, 1) && writer.write(0, 1);
+}
+
 /**
  * Writes one direct kind-0 shared Vandal create without an update. Its RSAT differs from the
  * measured Simulated Vandal resource, so the native baseline must establish the new update shape
@@ -354,6 +402,9 @@ write_scheduler_signature(bits::Writer& writer,
  */
 [[nodiscard]] bool write_entity_create_view(bits::Writer& writer,
                                             const EntityCreatePlan& plan) noexcept {
+    if (plan.updateOnly) {
+        return write_entity_update_view(writer, plan);
+    }
     // Trace only the bounded native decoder calls that follow this guarded server emission.
     client::hooks::network::entity_slot_probe::arm_decoder_trace();
 
@@ -574,6 +625,71 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
+/** @return True once the native occupied map contains the exact slot this host created. */
+[[nodiscard]] bool entity_create_accepted(const state::gameplay::PeerLink& peer) noexcept {
+    if (peer.entityCreateAttempts == 0 || peer.entityCreateToken == 0
+        || peer.entityCreateSlot >= 32) {
+        return false;
+    }
+    client::hooks::network::entity_slot_probe::ViewCapture capture{};
+    return client::hooks::network::entity_slot_probe::find(peer.entityCreateToken, capture)
+           && capture.token == peer.entityCreateToken && capture.namespaceId >= 0
+           && (capture.occupiedLow & (1U << peer.entityCreateSlot)) != 0;
+}
+
+/** Builds one update-only shortcut after the exact create slot and native payload are both ready.
+ */
+[[nodiscard]] bool prepare_entity_update(const state::gameplay::PeerLink& peer,
+                                         const SelectedReplicationView& selected,
+                                         EntityCreatePlan& output) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    const state::gameplay::SchedulerSignature& scheduler = peer.entityCreateScheduler;
+    if (!peer.entityCreateAccepted || peer.entityUpdateSent || peer.entityCreateToken == 0
+        || !selected.present || selected.signature.token != peer.entityCreateToken
+        || !selected.capturePresent || !scheduler.present
+        || scheduler.viewCount != kProvenSchedulerViewCount
+        || scheduler.wireBits != kProvenSchedulerWireBits) {
+        return false;
+    }
+
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
+    if (peer.entityCreateSlot >= 32 || capture.namespaceId < 0
+        || capture.schedulerKey != capture.token || capture.token != peer.entityCreateToken
+        || (capture.occupiedLow & (1U << peer.entityCreateSlot)) == 0
+        || !capture.schedulerRemoteSignatureValid
+        || capture.schedulerRemoteSignature != scheduler.value
+        || capture.schedulerRemoteViewCount != scheduler.viewCount
+        || capture.schedulerRemoteViewKeys[0] != scheduler.views[0].key
+        || capture.schedulerRemoteViewTags[0] != scheduler.views[0].tag
+        || scheduler.views[0].key != capture.schedulerKey
+        || scheduler.views[0].tag != capture.schedulerTag) {
+        return false;
+    }
+
+    client::hooks::network::sobject_update_probe::NearbyUpdateCapture update{};
+    if (!client::hooks::network::sobject_update_probe::take_nearby_player_update(kFirstEntityRsat,
+                                                                                 update)
+        || update.bitCount != kFirstEntityUpdateBits) {
+        return false;
+    }
+
+    output.token = capture.token;
+    output.schedulerKey = capture.schedulerKey;
+    output.schedulerTag = capture.schedulerTag;
+    output.rsat = kFirstEntityRsat;
+    output.slot = peer.entityCreateSlot;
+    output.handleGeneration = peer.entityCreateHandleGeneration;
+    output.objectGeneration = kFirstObjectGeneration;
+    output.viewIndex = 0;
+    output.namespaceId = capture.namespaceId;
+    output.updateWire = update.wire;
+    output.updateBits = update.bitCount;
+    output.updateOnly = true;
+    output.present = true;
+    return true;
+}
+
 /** Captures one diagnostic without moving any native or peer state. Callers hold the peer lock. */
 [[nodiscard]] EntityCreateGateReport
 capture_entity_create_gate(const state::gameplay::PeerLink& peer,
@@ -598,6 +714,7 @@ capture_entity_create_gate(const state::gameplay::PeerLink& peer,
     output.candidatePresent = capture.candidatePresent;
     output.namespaceId = capture.namespaceId;
     output.occupied = capture.occupiedCount;
+    output.occupiedLow = capture.occupiedLow;
     output.available = capture.availableCount;
     output.slot = capture.slot;
     output.handleGeneration = capture.handleGeneration;
@@ -1636,6 +1753,9 @@ static void reset_entity_create(state::gameplay::PeerLink& peer) noexcept {
     peer.entityCreateReadySince = 0;
     peer.entityCreateAttempts = 0;
     peer.lastEntityCreate = 0;
+    peer.entityCreateAccepted = false;
+    peer.entityUpdateSent = false;
+    peer.entityCreateAcceptedSince = 0;
     peer.entityCreateGate = 0xFF;
 }
 
@@ -1732,6 +1852,12 @@ void service(std::uint64_t now) noexcept {
         EntityCreatePlan candidate{};
         const SelectedReplicationView selected = select_replication_view(peer);
         const bool firstAttempt = peer.entityCreateAttempts == 0;
+        if (!peer.entityCreateAccepted && entity_create_accepted(peer)) {
+            peer.entityCreateAccepted = true;
+            peer.entityCreateAcceptedSince = now;
+        }
+        const bool controlQueueSettled =
+            peer.outbound.count == 0 && !peer.outbound.awaitingAcknowledgement;
         bool prepared = false;
         EntityCreateGate gate = firstAttempt ? EntityCreateGate::view : EntityCreateGate::attempted;
         if (firstAttempt) {
@@ -1742,8 +1868,6 @@ void service(std::uint64_t now) noexcept {
             // EDZ control bursts recur faster than the conservative settle interval; resetting
             // the timer for each burst makes a stationary create impossible even though both
             // native scheduler layouts, the token, and the slot remain unchanged.
-            const bool controlQueueSettled =
-                peer.outbound.count == 0 && !peer.outbound.awaitingAcknowledgement;
             const bool candidatePrepared = prepare_entity_create(peer, selected, candidate, gate);
             if (!candidatePrepared) {
                 peer.entityCreateReadyToken = 0;
@@ -1781,11 +1905,17 @@ void service(std::uint64_t now) noexcept {
         // An unacknowledged send queue keeps the packet going out until the peer confirms it.
         // Every packet burns one sequence, so the resend is paced.
         const bool resendDue = peer.outbound.count != 0 && now - peer.lastSend >= kResendInterval;
-        const bool entityRetryDue = peer.entityCreateAttempts != 0
+        const bool entityRetryDue = !peer.entityCreateAccepted && peer.entityCreateAttempts != 0
                                     && peer.entityCreateAttempts < kEntityCreateAttemptLimit
                                     && now - peer.lastEntityCreate >= kEntityCreateRetryInterval;
         const bool entityFirstDue = firstAttempt && prepared;
-        const bool due = peer.acknowledgementOwed || resendDue || entityFirstDue || entityRetryDue;
+        const bool entityUpdateReady =
+            peer.entityCreateAccepted && !peer.entityUpdateSent && controlQueueSettled
+            && now - peer.entityCreateAcceptedSince >= kEntityUpdateReadyInterval;
+        const bool entityUpdateDue =
+            entityUpdateReady && prepare_entity_update(peer, selected, candidate);
+        const bool due = peer.acknowledgementOwed || resendDue || entityFirstDue || entityRetryDue
+                         || entityUpdateDue;
         if (!due) {
             continue;
         }
@@ -1803,14 +1933,17 @@ void service(std::uint64_t now) noexcept {
             static_cast<std::uint16_t>((peer.outboundHead + 1) % kPacketSequenceModulus);
         peer.outboundHeadPresent = true;
         peer.lastTick = now;
-        if (!firstAttempt) {
+        if (entityRetryDue) {
             prepared = prepare_entity_retry(peer, selected, candidate);
         }
         const bool sameAttempt = entityRetryDue && prepared
                                  && candidate.token == peer.entityCreateToken
                                  && candidate.slot == peer.entityCreateSlot
                                  && candidate.handleGeneration == peer.entityCreateHandleGeneration;
-        if (entityFirstDue || sameAttempt) {
+        if (entityUpdateDue) {
+            peer.entityUpdateSent = true;
+            entityCreates[count] = candidate;
+        } else if (entityFirstDue || sameAttempt) {
             if (firstAttempt) {
                 peer.entityCreateScheduler = peer.schedulerSignature;
                 peer.entityCreateToken = candidate.token;
@@ -1837,7 +1970,8 @@ void service(std::uint64_t now) noexcept {
                                                     : core::log::Level::debug,
                "ev=gameplay stage=entity-create-gate result=%s token=0x%016llX "
                "queue=%zu/%u signature=%u/%u capture=%u candidate=%u namespace=%d "
-               "occupied=%u available=%u slot=%u gen=%u/%u/%u local=%u/%u remote=%u/%u "
+               "occupied=%u occupied_low=0x%08X available=%u slot=%u gen=%u/%u/%u "
+               "local=%u/%u remote=%u/%u "
                "ready_ms=%llu attempts=%u",
                entity_create_gate_name(gate.gate),
                static_cast<unsigned long long>(gate.token),
@@ -1849,6 +1983,7 @@ void service(std::uint64_t now) noexcept {
                gate.candidatePresent ? 1U : 0U,
                gate.namespaceId,
                gate.occupied,
+               gate.occupiedLow,
                gate.available,
                static_cast<unsigned>(gate.slot),
                static_cast<unsigned>(gate.handleGeneration),
@@ -1864,23 +1999,40 @@ void service(std::uint64_t now) noexcept {
     for (std::size_t index = 0; index < count; ++index) {
         const bool sent = send_acknowledgement(owed[index], entityCreates[index]);
         if (entityCreates[index].present) {
-            report(sent ? core::log::Level::info : core::log::Level::warn,
-                   "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
-                   "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
-                   "rsat=0x%08X cell=inherited update=none update_bits=0 "
-                   "bootstrap=%u",
-                   sent ? "sent" : "fail",
-                   static_cast<unsigned long long>(entityCreates[index].token),
-                   static_cast<unsigned>(owed[index].entityCreateAttempts),
-                   entityCreates[index].namespaceId,
-                   static_cast<unsigned>(entityCreates[index].viewIndex),
-                   static_cast<unsigned long long>(entityCreates[index].schedulerKey),
-                   static_cast<unsigned>(entityCreates[index].schedulerTag),
-                   static_cast<unsigned>(entityCreates[index].slot),
-                   static_cast<unsigned>(entityCreates[index].handleGeneration),
-                   static_cast<unsigned>(entityCreates[index].objectGeneration),
-                   entityCreates[index].rsat,
-                   entityCreates[index].bootstrapScheduler ? 1U : 0U);
+            if (entityCreates[index].updateOnly) {
+                report(sent ? core::log::Level::info : core::log::Level::warn,
+                       "ev=gameplay stage=entity-update-out result=%s token=0x%016llX "
+                       "namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u "
+                       "rsat=0x%08X cell=inherited update_bits=%u",
+                       sent ? "sent" : "fail",
+                       static_cast<unsigned long long>(entityCreates[index].token),
+                       entityCreates[index].namespaceId,
+                       static_cast<unsigned>(entityCreates[index].viewIndex),
+                       static_cast<unsigned long long>(entityCreates[index].schedulerKey),
+                       static_cast<unsigned>(entityCreates[index].schedulerTag),
+                       static_cast<unsigned>(entityCreates[index].slot),
+                       static_cast<unsigned>(entityCreates[index].handleGeneration),
+                       entityCreates[index].rsat,
+                       static_cast<unsigned>(entityCreates[index].updateBits));
+            } else {
+                report(sent ? core::log::Level::info : core::log::Level::warn,
+                       "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
+                       "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u "
+                       "ogen=%u rsat=0x%08X cell=inherited update=none update_bits=0 "
+                       "bootstrap=%u",
+                       sent ? "sent" : "fail",
+                       static_cast<unsigned long long>(entityCreates[index].token),
+                       static_cast<unsigned>(owed[index].entityCreateAttempts),
+                       entityCreates[index].namespaceId,
+                       static_cast<unsigned>(entityCreates[index].viewIndex),
+                       static_cast<unsigned long long>(entityCreates[index].schedulerKey),
+                       static_cast<unsigned>(entityCreates[index].schedulerTag),
+                       static_cast<unsigned>(entityCreates[index].slot),
+                       static_cast<unsigned>(entityCreates[index].handleGeneration),
+                       static_cast<unsigned>(entityCreates[index].objectGeneration),
+                       entityCreates[index].rsat,
+                       entityCreates[index].bootstrapScheduler ? 1U : 0U);
+            }
         }
         if (!sent) {
             report(core::log::Level::debug, "ev=gameplay stage=ack result=fail");

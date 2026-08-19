@@ -2056,6 +2056,27 @@ guarded `dirty bit inconsistency detected` assertion. The second RSAT bit produc
 five-bit body. These results do not identify missing default data and are not carried into the
 Vandal experiment; the one-shot non-transform dirty probes have been removed.
 
+### Shared Vandal create acceptance and staged update
+
+The shared Vandal create-only run succeeded on its first attempt. Namespace 1 decoded one record
+after 77 bits for entity `0x0010000D` and accepted baseline
+`4B205B8101000000AC2200005C000000`. This proves RSAT `0x815B204B`, spatial flag one, derived
+scratch size `0x22AC` (8,876 bytes), and derived profile value `0x5C`. The native occupied count
+advanced from 13 to 14, so slot 13 is an observed allocation rather than an inferred success.
+
+The injected baseline produced a 23-bit all-clean update and a 130-bit transform-dirty update. At
+player position `(509.150787, 30.1287689, 74.6452332)`, the native X+3 transform was 128 flushed
+bits `C01440009A641F107B842954A5C00000` followed by two zero tail bits. This is the exact
+shared-Vandal body; neither the old 112-bit probe nor the Simulated Vandal's 132-bit body is used.
+
+The same run later hit a four-second gameplay receive timeout with 65 corrupt reads. The accepted
+record itself decoded completely, but repeated post-create traffic still makes retries and combined
+create/update packets unsafe. The next build therefore captures the exact low occupancy word,
+stops create retries as soon as bit 13 is observed, waits 500 ms with an empty reliable-control
+queue, and sends one update-only shortcut for that same handle. The update bytes come directly from
+the game encoder in the current run, so they follow the current player position instead of a
+hard-coded prior coordinate. Scheduler output remains absent from ordinary acknowledgements.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2107,12 +2128,11 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run shared Vandal RSAT `0x815B204B` create-only once in the initial EDZ zone without moving.
-   Confirm the bounded retry returns one 77-bit record, capture its derived 16-byte create profile,
-   and record its native clean and transform update widths.
-2. Implement a two-stage publication: first allow the create-only record to occupy the exact
-   selected slot, then send one update-only shortcut for that same handle after the occupancy bit
-   confirms acceptance. Do not combine the resource-loading create and large update again.
+1. Run the two-stage shared-Vandal build once in the initial EDZ zone without moving. Confirm one
+   77-bit `entity-create-out`, an `occupied_low` transition containing bit 13, then exactly one
+   `entity-update-out` with `update_bits=130` after the 500 ms settle interval.
+2. Confirm the update-only decoder returns `result=0 count=1`, reports flags `0x0002`, retains the
+   same entity handle, and does not introduce a corrupt-read burst or four-second channel timeout.
 3. Check visually at the measured nearby-player position. If the object renders but has no AI,
    capture or implement the kind-1 squad/member relationship; sobject allocation alone need not
    start behavior.

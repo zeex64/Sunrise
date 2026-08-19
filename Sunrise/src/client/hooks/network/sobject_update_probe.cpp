@@ -37,6 +37,8 @@ constexpr std::size_t kTransformSecondFloat4Offset = 0x10;
 
 std::array<std::atomic_uint64_t, kSeenCapacity> g_seen{};
 std::atomic_bool g_decodedRecordProbed{};
+SRWLOCK g_nearbyUpdateLock{SRWLOCK_INIT};
+NearbyUpdateCapture g_nearbyUpdate{};
 
 using Encoder = std::uint64_t(__fastcall*)(void*, const void*);
 
@@ -205,7 +207,8 @@ void encode_synthetic_variant(const char* variant,
                               std::span<const std::byte, kCreateBufferSize> create,
                               std::span<const std::byte> component,
                               std::span<const std::byte, kMaskCaptureSize> mask,
-                              std::int32_t dirtyBit) noexcept {
+                              std::int32_t dirtyBit,
+                              bool publishNearby = false) noexcept {
     alignas(16) std::array<std::byte, kSyntheticWireCapacity> wire{};
     alignas(16) std::array<std::byte, kMaskCaptureSize> dirty{};
     alignas(16) std::array<std::byte, kMaskCaptureSize> sent{};
@@ -273,6 +276,18 @@ void encode_synthetic_variant(const char* variant,
     std::memcpy(&metadata, mask.data() + sizeof(std::uint64_t), sizeof metadata);
     std::uint32_t rsat = 0;
     std::memcpy(&rsat, create.data(), sizeof rsat);
+    if (publishNearby && !faulted && result != 0 && writer.totalBits > 0
+        && writer.totalBits <= static_cast<std::int32_t>(kNearbyUpdateCapacity * 8)
+        && completeSize <= kNearbyUpdateCapacity) {
+        NearbyUpdateCapture capture{};
+        std::copy_n(completeWire.begin(), completeSize, capture.wire.begin());
+        capture.rsat = rsat;
+        capture.bitCount = static_cast<std::uint16_t>(writer.totalBits);
+        capture.present = true;
+        AcquireSRWLockExclusive(&g_nearbyUpdateLock);
+        g_nearbyUpdate = capture;
+        ReleaseSRWLockExclusive(&g_nearbyUpdateLock);
+    }
     const unsigned trailing = std::to_integer<unsigned>(create[4]) & 1U;
     std::array<char, 65> componentHex{};
     hex(component.first(component.size() < 32 ? component.size() : 32), componentHex);
@@ -514,8 +529,12 @@ void probe_decoded_record(std::span<const std::byte> create,
                     positionComponent, kTransformSecondFloat4Offset + axis * sizeof(float), value);
         }
         if (playerValid) {
-            encode_synthetic_variant(
-                "spatial-transform-player-x3", spatialCreate, positionComponent, nativeMask, 0);
+            encode_synthetic_variant("spatial-transform-player-x3",
+                                     spatialCreate,
+                                     positionComponent,
+                                     nativeMask,
+                                     0,
+                                     true);
         }
     } else {
         core::log::write(core::log::Channel::client,
@@ -524,11 +543,26 @@ void probe_decoded_record(std::span<const std::byte> create,
     }
 }
 
+bool take_nearby_player_update(std::uint32_t rsat, NearbyUpdateCapture& output) noexcept {
+    output = {};
+    AcquireSRWLockExclusive(&g_nearbyUpdateLock);
+    const bool present = g_nearbyUpdate.present && g_nearbyUpdate.rsat == rsat;
+    if (present) {
+        output = g_nearbyUpdate;
+        g_nearbyUpdate = {};
+    }
+    ReleaseSRWLockExclusive(&g_nearbyUpdateLock);
+    return present;
+}
+
 void reset() noexcept {
     for (std::atomic_uint64_t& seen : g_seen) {
         seen.store(0, std::memory_order_relaxed);
     }
     g_decodedRecordProbed.store(false, std::memory_order_relaxed);
+    AcquireSRWLockExclusive(&g_nearbyUpdateLock);
+    g_nearbyUpdate = {};
+    ReleaseSRWLockExclusive(&g_nearbyUpdateLock);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_update_probe

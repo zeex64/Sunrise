@@ -60,6 +60,7 @@ struct Snapshot {
     std::uint32_t freeCount{};
     std::uint32_t occupiedCount{};
     std::uint32_t availableCount{};
+    std::uint32_t occupiedLow{};
     std::array<Candidate, kCandidateCapacity> candidates{};
     std::size_t candidateCount{};
 };
@@ -270,6 +271,7 @@ void report_decoded_record(const void* recordsAddress, int count) noexcept {
             reinterpret_cast<const std::uint32_t*>(output.manager + kFreeBitsetOffset);
         const auto* const occupiedWords =
             reinterpret_cast<const std::uint32_t*>(output.manager + kOccupiedBitsetOffset);
+        output.occupiedLow = occupiedWords[0];
         for (std::size_t word = 0; word < kBitsetWordCount; ++word) {
             output.freeCount += bit_count(freeWords[word]);
             output.occupiedCount += bit_count(occupiedWords[word]);
@@ -318,6 +320,7 @@ void mix(std::uint64_t& hash, std::uint64_t value) noexcept {
     mix(hash, snapshot.freeCount);
     mix(hash, snapshot.occupiedCount);
     mix(hash, snapshot.availableCount);
+    mix(hash, snapshot.occupiedLow);
     for (const Candidate& candidate : snapshot.candidates) {
         mix(hash, candidate.slot);
         mix(hash, candidate.handleGeneration);
@@ -354,12 +357,14 @@ void report(const Snapshot& snapshot,
     int written = std::snprintf(line.data(),
                                 line.size(),
                                 "ev=gameplay stage=entity-slots manager=%p namespace=%d "
-                                "free=%u occupied=%u available=%u result=%d token=0x%llX "
+                                "free=%u occupied=%u occupied_low=0x%08X available=%u "
+                                "result=%d token=0x%llX "
                                 "key=0x%llX tag=%u",
                                 static_cast<const void*>(snapshot.manager),
                                 snapshot.namespaceId,
                                 snapshot.freeCount,
                                 snapshot.occupiedCount,
+                                snapshot.occupiedLow,
                                 snapshot.availableCount,
                                 result,
                                 static_cast<unsigned long long>(token),
@@ -596,6 +601,7 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
     capture.freeCount = snapshot.freeCount;
     capture.occupiedCount = snapshot.occupiedCount;
     capture.availableCount = snapshot.availableCount;
+    capture.occupiedLow = snapshot.occupiedLow;
     if (snapshot.candidateCount != 0) {
         const Candidate& candidate = snapshot.candidates[0];
         capture.slot = candidate.slot;
@@ -649,7 +655,7 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
             "e0=0x%llX/%u e1=0x%llX/%u e2=0x%llX/%u "
             "remote=%u value=%016llX%016llX count=%u "
             "r0=0x%llX/%u r1=0x%llX/%u r2=0x%llX/%u "
-            "candidate=%u slot=%u hgen=%u rgen=%u ogen=%u",
+            "occupied_low=0x%08X candidate=%u slot=%u hgen=%u rgen=%u ogen=%u",
             static_cast<unsigned long long>(capture.token),
             static_cast<unsigned long long>(capture.schedulerKey),
             static_cast<unsigned>(capture.schedulerTag),
@@ -674,6 +680,7 @@ void observe_view(std::uint64_t token, const void* view) noexcept {
             static_cast<unsigned>(capture.schedulerRemoteViewTags[1]),
             static_cast<unsigned long long>(capture.schedulerRemoteViewKeys[2]),
             static_cast<unsigned>(capture.schedulerRemoteViewTags[2]),
+            capture.occupiedLow,
             capture.candidatePresent ? 1U : 0U,
             static_cast<unsigned>(capture.slot),
             static_cast<unsigned>(capture.handleGeneration),
