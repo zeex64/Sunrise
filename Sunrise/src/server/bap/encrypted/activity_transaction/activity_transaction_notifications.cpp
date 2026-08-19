@@ -37,6 +37,7 @@ namespace {
 
 /** Separates root-membership handling from the citizen descriptor lifecycle it may carry. */
 struct MembershipPublication final {
+    std::uint64_t groupSession{};
     std::int32_t region{-1};
     bool root{};
     bool includesCitizenAdvertisement{};
@@ -54,20 +55,26 @@ membership_publication(const Session& session,
     }
     publication.region =
         push::activity::planned_region(activity.membershipMutation, activity.sessionId).index;
-    if (publication.region < 0 || publication.region == session.activitySettledRegion) {
+    if (publication.region < 0) {
         return publication;
     }
-    const std::uint64_t groupSession =
+    publication.groupSession =
         server::gameplay::group::advertised_group_session(publication.region);
-    publication.settlesCitizenAdvertisement = server::gameplay::group::view_accepted(groupSession);
+    if (push::activity::group_settled(session, publication.groupSession)) {
+        return publication;
+    }
+    publication.settlesCitizenAdvertisement =
+        server::gameplay::group::view_accepted(publication.groupSession)
+        && server::gameplay::group::activity_host_published(publication.groupSession);
     publication.includesCitizenAdvertisement = !publication.settlesCitizenAdvertisement;
     return publication;
 }
 
 /**
  * Appends one membership body. The citizen descriptor remains in every revision until the native
- * gameplay view is bound; the first descriptor-free revision then retires the region after the
- * enclosing transaction and caller copy both succeed.
+ * gameplay view is bound and join-complete has queued its activity-host update. The first
+ * descriptor-free revision then retires the group after the enclosing transaction and caller copy
+ * both succeed.
  */
 [[nodiscard]] bool stage_membership(Session& session,
                                     Scratch& scratch,
@@ -96,9 +103,10 @@ membership_publication(const Session& session,
                                                        response,
                                                        written);
     if (staged && publication.includesCitizenAdvertisement) {
-        push::activity::stage_published_region(session, publication.region);
+        push::activity::stage_published_region(
+            session, publication.region, publication.groupSession);
     } else if (staged && publication.settlesCitizenAdvertisement) {
-        push::activity::stage_settled_region(session, publication.region);
+        push::activity::stage_settled_region(session, publication.region, publication.groupSession);
     }
     return staged;
 }

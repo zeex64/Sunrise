@@ -117,6 +117,33 @@ std::atomic<std::uint64_t> g_admitClock{0};
 SRWLOCK g_admittedLock{SRWLOCK_INIT};
 /** Admitted peers. A join claims a slot and a leave never reclaims one in this POC. */
 std::array<Admitted, kAdmittedCapacity> g_admitted{};
+/** Recently promoted public groups; retained after their admitted row is released. */
+std::array<std::uint64_t, kPublicSessionCapacity> g_activityHostPublished{};
+
+/** Tests the durable activity-host history while the admitted lock is held. */
+[[nodiscard]] bool activity_host_was_published(std::uint64_t sessionId) noexcept {
+    return sessionId != 0
+           && (g_activityHostPublished[0] == sessionId || g_activityHostPublished[1] == sessionId);
+}
+
+/** Retains one promotion across the client's subsequent leave. */
+void remember_activity_host(std::uint64_t sessionId) noexcept {
+    if (sessionId == 0 || g_activityHostPublished[0] == sessionId) {
+        return;
+    }
+    g_activityHostPublished[1] = g_activityHostPublished[0];
+    g_activityHostPublished[0] = sessionId;
+}
+
+/** A fresh attempt for the same group must earn activity-host promotion again. */
+void forget_activity_host(std::uint64_t sessionId) noexcept {
+    if (g_activityHostPublished[0] == sessionId) {
+        g_activityHostPublished[0] = g_activityHostPublished[1];
+        g_activityHostPublished[1] = 0;
+    } else if (g_activityHostPublished[1] == sessionId) {
+        g_activityHostPublished[1] = 0;
+    }
+}
 
 /** Member state this host publishes for every member carrying the join id. */
 constexpr wire::MemberState kJoinMemberState = wire::MemberState::ready;
@@ -346,13 +373,13 @@ void fill_activity_host(wire::ActivityHostParameter& body, std::uint64_t groupSe
  * the corresponding replication slot. Message 40 cannot resolve a view until that event runs.
  */
 [[nodiscard]] bool publish_peer_establish(const Admitted& record) noexcept {
-    const bool sent = send_reliable(
-        record.sessionId,
-        static_cast<std::uint8_t>(wire::SessionMessageId::peerEstablish),
-        wire::kPeerEstablishSize,
-        [&record](bits::Writer& writer) noexcept {
-            return wire::write_session_only(writer, record.sessionId);
-        });
+    const bool sent =
+        send_reliable(record.sessionId,
+                      static_cast<std::uint8_t>(wire::SessionMessageId::peerEstablish),
+                      wire::kPeerEstablishSize,
+                      [&record](bits::Writer& writer) noexcept {
+                          return wire::write_session_only(writer, record.sessionId);
+                      });
     report(sent ? core::log::Level::info : core::log::Level::debug,
            "ev=gameplay stage=establish result=%s direction=out session=0x%016llX",
            sent ? "queued" : "deferred",
@@ -459,8 +486,7 @@ void progress_view(Admitted& record) noexcept {
         (void)send_view_stage(record, kInitialViewStage);
         return;
     }
-    if (record.view.localStage == kFinalViewStage
-        && record.view.remoteStage == kFinalViewStage) {
+    if (record.view.localStage == kFinalViewStage && record.view.remoteStage == kFinalViewStage) {
         complete_view(record);
         return;
     }
@@ -749,6 +775,9 @@ bool consume(const state::gameplay::Endpoint& from,
             // fullest right here, so a refusal is expected and the service slice retries it.
             if (record->joinPublished && !record->activityHostPublished) {
                 record->activityHostPublished = publish_activity_host(*record);
+                if (record->activityHostPublished) {
+                    remember_activity_host(record->sessionId);
+                }
                 record->lastRetry = now;
             }
         }
@@ -846,6 +875,7 @@ bool publish_membership(const state::gameplay::Endpoint& peer,
     Admitted* const record = claim(peer, sessionId);
     bool published = false;
     if (record != nullptr) {
+        forget_activity_host(sessionId);
         // A retried join brings a new join id and drops any player the previous attempt added.
         // It also starts again at `ready`, so the previous attempt's completion does not carry.
         record->joinId = peerJoinId;
@@ -917,6 +947,9 @@ void service(std::uint64_t now) noexcept {
         }
         if (!record.activityHostPublished) {
             record.activityHostPublished = publish_activity_host(record);
+            if (record.activityHostPublished) {
+                remember_activity_host(record.sessionId);
+            }
             continue;
         }
         // Last, so the order the join needs is unchanged. The snapshot carries the player row the
@@ -963,6 +996,24 @@ bool view_accepted(std::uint64_t sessionId) noexcept {
     return peer::view_bound(sessionId);
 }
 
+/** Reports whether join completion and the activity-host update have both been published. */
+bool activity_host_published(std::uint64_t sessionId) noexcept {
+    bool published = false;
+    AcquireSRWLockShared(&g_admittedLock);
+    published = activity_host_was_published(sessionId);
+    if (!published) {
+        for (const Admitted& entry : g_admitted) {
+            if (entry.occupied && entry.sessionId == sessionId) {
+                published =
+                    entry.joinComplete && entry.joinPublished && entry.activityHostPublished;
+                break;
+            }
+        }
+    }
+    ReleaseSRWLockShared(&g_admittedLock);
+    return published;
+}
+
 /** Reports whether a peer has joined one advertised gameplay group. */
 bool session_admitted(std::uint64_t sessionId) noexcept {
     bool admitted = false;
@@ -1002,6 +1053,7 @@ void reset() noexcept {
     reset_host_sessions();
     AcquireSRWLockExclusive(&g_admittedLock);
     g_admitted = {};
+    g_activityHostPublished = {};
     ReleaseSRWLockExclusive(&g_admittedLock);
 }
 

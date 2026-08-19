@@ -1257,14 +1257,13 @@ prologue filler. This is why the run remained in orbit/loading even though the i
 was correct and used the captured 716-bit `edz_freeroam` activity selection.
 
 The marker now means **settled**, not merely **sent**. Every root membership revision continues to
-carry the citizen descriptor until `group::view_accepted` reports that the native gameplay view is
-bound. The first membership after that gate omits the descriptor and records the settled region only
-after the frame reaches the caller. Remembering the settled region prevents the old same-region
-replay even if the group row is later released. Transaction and keepalive publication use the same
-three-state lifecycle: advertise while joining, retire after view bind, retain the retired marker.
-Session wiping explicitly restores the `-1` sentinel because `SecureZeroMemory` bypasses the member
-initializer and region zero is valid. Keepalive diagnostics expose `citizen`, `settle`, and `settled`
-so the next run can prove each transition.
+carry the citizen descriptor until the native gameplay view is bound and join-complete has queued
+its activity-host promotion. The first membership after that combined gate omits the descriptor and
+records the settled group only after the frame reaches the caller. Remembering the settled group
+prevents the old same-session replay even if its advertisement row is later released. Transaction
+and keepalive publication use the same three-state lifecycle: advertise while joining, retire after
+view and host promotion, retain the retired marker. Session wiping explicitly restores the `-1`
+region sentinel because `SecureZeroMemory` bypasses the member initializer and region zero is valid.
 
 The next EDZ run validated the retention boundary: revisions 1 and 2 both consumed 30,992 bits,
 the client started the `PUB80.80` citizen join, sent and received join-complete, and never emitted the
@@ -1276,10 +1275,45 @@ the repeated transition churn and can itself delay the prologue filler even thou
 
 Publication and retirement now use separate delivered markers. `activityPublishedRegion` disarms
 the urgent send as soon as one descriptor-bearing membership reaches the client; transaction-driven
-membership refreshes still include the descriptor until `activitySettledRegion` advances after view
-bind. A separate retirement-due gate emits the one descriptor-free membership needed to settle the
-region. This preserves revision-2 retention without turning every network pump into a membership
-revision. Keepalive diagnostics now report both `published` and `settled`.
+membership refreshes still include the descriptor until the group reaches its combined retirement
+gate. A separate retirement-due gate emits the one descriptor-free membership needed to settle the
+group. This preserves revision-2 retention without turning every network pump into a membership
+revision. Keepalive diagnostics report the legacy region markers plus group-keyed state.
+
+The first cadence-fixed run exposed two more ordering constraints. `PUB96.96` completed its gameplay
+join and view first and retired normally at `t=88428`. The older `PUB80.80` view did not reach stage
+5 until `t=92610`. Its late completion overwrote the single settled-region marker from 96 back to
+80. Because the reported region was still 96, the region-only urgent trigger then emitted roughly
+284 descriptor-free membership revisions in about 6.5 seconds. Public transitions can therefore
+complete out of order; one scalar region cannot describe the lifecycle of the client's current and
+target public groups.
+
+`PUB280.2` proved that view bind is also too early a retirement boundary. The server accepted its
+stage-5 view and removed the descriptor at `t=99349`, but did not receive the client's join-complete
+or queue `activity-host,current-activity` until `t=99476`. In between, at `t=99409`, the client
+declared the transition complete and began gracefully leaving the target group. The late
+activity-host update caused another transition to the same `PUB280.2` at `t=99482`; at `t=99512`
+the world controller found the previous target still leaving and force-disconnected it. Repeated
+same-region transitions then left the client in transition loading.
+
+Ghidra corroborates that sequence. The transition starter is `FUN_140E2B120`; it stores the target
+slice-set, transition type, and incremented token on the manager. Its stop routine
+`FUN_140E2B660` clears the active transition and citizen-join state, calls the region handoff, and
+reports `stopping transition`. The citizen-join pump `FUN_140E1E040` owns persistent target session
+description and join-handle fields, waits on the native group join state, and contains the logged
+force-disconnect path. Consequently, a descriptor retirement that lets the stop routine run before
+activity-host promotion is not benign: the subsequent host update is processed against cleared
+transition state and can reopen the same target.
+
+Citizen publication state is now keyed by the advertised gameplay group session. Each BAP session
+remembers the two most recent published and settled public groups, matching the server's two public
+session records and the client's observed current/target handoff. A late completion for the old
+group can settle that group without changing whether the newer group is published or settled.
+Descriptor retirement now additionally requires the gameplay host to have processed join-complete,
+published the join membership, and queued the activity-host update. Keepalive diagnostics expose
+the selected `group`, `group_published`, `group_settled`, and combined `ready` gate. The gameplay
+host retains its last two successful activity-host promotions after an admitted row is released;
+a fresh join attempt for the same group clears that remembered promotion before it can qualify.
 
 ## Source areas changed
 
@@ -1298,37 +1332,41 @@ The current checkpoint includes work in:
 
 1. Load EDZ and confirm revision 2 still consumes 30,992 bits while the `PUB80.80` citizen join is
    pending, but descriptor-bearing keepalives do not repeat every pump. The first delivered body
-   should advance `published=80`; after both native view sides bind, one keepalive should report
-   `settle=1`, then later lines should retain `settled=80`. There must be no ambassador-zero abort.
-2. Reproduce a busy public-zone handoff and confirm the client never starts a second transition to
-   the same region/session after `leaving session gracefully`; there must be no duplicate managed
-   session warning and every queued join-complete must advance to `sending initial join-complete`.
-3. If `network_update` stalls again, read the first `stage=network-hitch` line. The new
+   should report the PUB80 group with `group_published=1`, `group_settled=0`, and `ready=0` until
+   both view bind and `activityhost result=queued`. Exactly one later body should report `settle=1`
+   and subsequent bodies should retain `group_settled=1`. There must be no ambassador-zero abort.
+2. Reproduce a public-zone handoff in which the older view finishes after the newer one. The late
+   completion may retire the old group once, but it must not generate a rapid stream of
+   `reason=region` revisions or make the new group's `group_settled` value regress.
+3. Confirm a transition is never stopped and its target group gracefully left before the matching
+   server `activityhost result=queued`. There must be no immediate same-region transition restart,
+   `previous target group session was not yet disconnected`, or duplicate managed-session warning.
+4. If `network_update` stalls again, read the first `stage=network-hitch` line. The new
    `managed=active/entered/returned/thread` fields distinguish a stall inside `FUN_14175E520` from
    another child of `network_update`.
-4. Cross one EDZ public-zone boundary and confirm multi-view transitions now keep the channel alive:
+5. Cross one EDZ public-zone boundary and confirm multi-view transitions now keep the channel alive:
    scheduler output should disappear while `scheduler[views=2]`, reliable reports should remain at
    `drop=0`, and no four-second `channel-manager-connected-timeout` should follow.
-5. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
+6. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
    `restart=1`, followed by ordinary stages 1 through 5. If local and remote both pause at stage 4,
    confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
-6. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
+7. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
    must no longer be required.
-7. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
+8. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
-8. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
+9. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
    and that its `entity-view` local and remote layouts are identical immediately beforehand.
-9. Use the captured `stage=entity-record` from the successful 78-bit create to identify the
+10. Use the captured `stage=entity-record` from the successful 78-bit create to identify the
    baseline update buffer's transform, parent, stream-source, and RSAT-defined regions.
-10. Read `sobject-update` captures to identify which named components are present in an initial
+11. Read `sobject-update` captures to identify which named components are present in an initial
    native update and separate their bit spans from the RSAT-defined suffix.
-11. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
+12. Decode the `transform`/`parent`/`stream-source` update body closely enough to place and move the
    successfully created enemy.
-12. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
-    sobject is accepted; do not assume the squad codec can create the underlying native squad.
-13. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
-    or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
-    and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
+13. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
+   sobject is accepted; do not assume the squad codec can create the underlying native squad.
+14. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
+   or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
+   and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
 
 ## Build and verification
 

@@ -92,17 +92,24 @@ bool consume_activity_keepalive(Session& session,
         session.activitySessionId == 0
             ? -1
             : state::activity::membership::reported_region(session.activitySessionId);
-    const bool regionPublicationDue = !session.activityJoinedForeignSession && reportedRegion >= 0
-                                      && reportedRegion != session.activityPublishedRegion;
     const std::int32_t effectiveRegion =
         session.activitySessionId == 0 ? -1 : effective_region(session.activitySessionId).index;
     const std::uint64_t advertisedGroup =
         session.activityJoinedForeignSession
             ? 0
             : server::gameplay::group::advertised_group_session(effectiveRegion);
+    const bool advertisedGroupPublished = group_published(session, advertisedGroup);
+    const bool advertisedGroupSettled = group_settled(session, advertisedGroup);
+    const bool retirementReady =
+        advertisedGroup != 0 && server::gameplay::group::view_accepted(advertisedGroup)
+        && server::gameplay::group::activity_host_published(advertisedGroup);
+    const bool regionPublicationDue =
+        !session.activityJoinedForeignSession && reportedRegion >= 0
+        && (advertisedGroup != 0 ? !advertisedGroupPublished && !advertisedGroupSettled
+                                 : reportedRegion != session.activityPublishedRegion
+                                       && reportedRegion != session.activitySettledRegion);
     const bool citizenRetirementDue = !session.activityJoinedForeignSession && effectiveRegion >= 0
-                                      && effectiveRegion != session.activitySettledRegion
-                                      && server::gameplay::group::view_accepted(advertisedGroup);
+                                      && !advertisedGroupSettled && retirementReady;
     if (session.activitySessionId == 0
         || (!burstDue && !keepaliveDue && !regionPublicationDue && !citizenRetirementDue)) {
         return false;
@@ -113,9 +120,7 @@ bool consume_activity_keepalive(Session& session,
     std::size_t framedSize = 0;
     const auto& key = state::bap().sessionKey;
     bool published = false;
-    // Held until the frame reaches the caller. Encoding alone spends neither lifecycle marker.
-    std::int32_t stagedPublishedRegion = -1;
-    std::int32_t stagedSettledRegion = -1;
+    // Lifecycle markers are staged on the session and committed only after caller delivery.
     std::uint64_t stagedReflectedGroupSession = 0;
     // The burst is what step 36 waits on. When both timers fire together the roster goes out last,
     // because the type-13 key binds to the player message 12 creates.
@@ -179,9 +184,8 @@ bool consume_activity_keepalive(Session& session,
     // Re-sending a stable snapshot instead would make it rebuild every player snapshot.
     const bool rootMembership = !session.activityJoinedForeignSession;
     const bool citizenAdvertisementUnsettled =
-        rootMembership && effectiveRegion >= 0 && effectiveRegion != session.activitySettledRegion;
-    const bool settleCitizenAdvertisement =
-        citizenAdvertisementUnsettled && server::gameplay::group::view_accepted(advertisedGroup);
+        rootMembership && effectiveRegion >= 0 && !advertisedGroupSettled;
+    const bool settleCitizenAdvertisement = citizenAdvertisementUnsettled && retirementReady;
     const bool includeCitizenAdvertisement =
         citizenAdvertisementUnsettled && !settleCitizenAdvertisement;
     const bool publishesMembership =
@@ -213,13 +217,13 @@ bool consume_activity_keepalive(Session& session,
                                                          nextSendNonce,
                                                          scratch.framed,
                                                          framedSize);
-        // Publishing the descriptor disarms only the urgent region trigger. It remains in any later
-        // refresh until a descriptor-free body sent after native view bind retires the region.
+        // Publishing the descriptor disarms only the urgent group trigger. It remains in later
+        // refreshes until view bind and activity-host promotion permit a descriptor-free body.
         if (sent && includeCitizenAdvertisement) {
-            stagedPublishedRegion = effectiveRegion;
+            stage_published_region(session, effectiveRegion, advertisedGroup);
         }
         if (sent && settleCitizenAdvertisement) {
-            stagedSettledRegion = effectiveRegion;
+            stage_settled_region(session, effectiveRegion, advertisedGroup);
         }
         if (sent && reflectedGroup != 0) {
             stagedReflectedGroupSession = reflectedGroup;
@@ -271,7 +275,8 @@ bool consume_activity_keepalive(Session& session,
                       line.size(),
                       "ev=activity stage=keepalive result=%s bytes=%zu membership=%u key=0x%llX "
                       "spawn_state=%d teleport_state=%d teleport_slice=%d token=%u revision=%u "
-                      "advert=%u citizen=%u settle=%u published=%d settled=%d",
+                      "advert=%u citizen=%u settle=%u published=%d settled=%d group=0x%llX "
+                      "group_published=%u group_settled=%u ready=%u",
                       published ? "ok" : "fail",
                       framedSize,
                       hasMembership ? 1U : 0U,
@@ -285,7 +290,11 @@ bool consume_activity_keepalive(Session& session,
                       static_cast<unsigned>(includeCitizenAdvertisement),
                       static_cast<unsigned>(settleCitizenAdvertisement),
                       session.activityPublishedRegion,
-                      session.activitySettledRegion);
+                      session.activitySettledRegion,
+                      static_cast<unsigned long long>(advertisedGroup),
+                      static_cast<unsigned>(advertisedGroupPublished),
+                      static_cast<unsigned>(advertisedGroupSettled),
+                      static_cast<unsigned>(retirementReady));
     if (count > 0) {
         core::log::write(core::log::Channel::server,
                          core::log::Level::debug,
@@ -293,12 +302,12 @@ bool consume_activity_keepalive(Session& session,
     }
     const bool delivered =
         publish_frame(session, scratch, response, written, framedSize, nextSendNonce, published);
-    // A body the client never saw must offer its urgent publication or retirement again.
-    if (delivered && stagedPublishedRegion >= 0) {
-        session.activityPublishedRegion = stagedPublishedRegion;
-    }
-    if (delivered && stagedSettledRegion >= 0) {
-        session.activitySettledRegion = stagedSettledRegion;
+    if (delivered) {
+        commit_staged_published_region(session);
+        commit_staged_settled_region(session);
+    } else {
+        discard_staged_published_region(session);
+        discard_staged_settled_region(session);
     }
     if (delivered && stagedReflectedGroupSession != 0) {
         session.activityReflectedGroupSession = stagedReflectedGroupSession;

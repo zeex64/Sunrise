@@ -31,8 +31,16 @@ append_membership_notification(Scratch& scratch,
                                std::span<std::byte> response,
                                std::size_t& written) noexcept;
 
-/** Records the region named by a transaction-staged citizen descriptor. */
-void stage_published_region(Session& session, std::int32_t region) noexcept;
+/** Returns whether one gameplay group's citizen descriptor reached the client. */
+[[nodiscard]] bool group_published(const Session& session, std::uint64_t groupSession) noexcept;
+
+/** Returns whether one gameplay group's citizen descriptor was safely retired. */
+[[nodiscard]] bool group_settled(const Session& session, std::uint64_t groupSession) noexcept;
+
+/** Records the region and group named by a transaction-staged citizen descriptor. */
+void stage_published_region(Session& session,
+                            std::int32_t region,
+                            std::uint64_t groupSession) noexcept;
 
 /** Publishes the transaction-staged descriptor region after its frame reaches the caller. */
 void commit_staged_published_region(Session& session) noexcept;
@@ -40,8 +48,10 @@ void commit_staged_published_region(Session& session) noexcept;
 /** Drops the transaction-staged descriptor region with its discarded frame. */
 void discard_staged_published_region(Session& session) noexcept;
 
-/** Records a region retired by a transaction-staged membership body. */
-void stage_settled_region(Session& session, std::int32_t region) noexcept;
+/** Records a region and group retired by a transaction-staged membership body. */
+void stage_settled_region(Session& session,
+                          std::int32_t region,
+                          std::uint64_t groupSession) noexcept;
 
 /** Publishes the transaction-staged settled region after its frame reaches the caller. */
 void commit_staged_settled_region(Session& session) noexcept;

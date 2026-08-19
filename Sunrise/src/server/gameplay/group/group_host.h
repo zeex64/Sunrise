@@ -105,6 +105,17 @@ void service(std::uint64_t now) noexcept;
 [[nodiscard]] bool view_accepted(std::uint64_t sessionId) noexcept;
 
 /**
+ * Reports whether the peer completed its join and the activity-host update is on its reliable
+ * channel. A bound view alone can precede join-complete, so it is too early to retire the citizen
+ * descriptor.
+ * @param sessionId Group session the link carries.
+ * The result remains true after the admitted row is released, until its bounded promotion history
+ * is displaced or a fresh attempt for the same group begins.
+ * @return True once join promotion and activity-host publication are both queued.
+ */
+[[nodiscard]] bool activity_host_published(std::uint64_t sessionId) noexcept;
+
+/**
  * Reports whether the gameplay host has admitted the region's group session.
  * A claimed advertisement row alone is earlier than the client's gameplay connection.
  * @param sessionId Group session advertised for the region.

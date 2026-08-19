@@ -90,23 +90,31 @@ struct Session {
      */
     bool activityJoinedForeignSession{};
     /**
-     * Region whose first citizen descriptor reached the client. -1 until then.
-     * This marker controls only the urgent region-change publication; it does not retire the
-     * descriptor from later membership revisions while the gameplay join is still pending.
+     * Last region whose citizen descriptor reached the client. -1 until then. Group-keyed state
+     * is authoritative when a gameplay group exists; this remains a diagnostic and a fallback for
+     * publications whose advertisement has not produced a group session yet.
      */
     std::int32_t activityPublishedRegion{-1};
+    /** Two public gameplay groups whose citizen descriptors reached the client. */
+    std::array<std::uint64_t, 2> activityPublishedGroupSessions{};
     /** Region named by a transaction-staged descriptor, committed after caller delivery. */
     std::int32_t activityPublishedRegionStaged{};
+    /** Gameplay group named by the transaction-staged descriptor. */
+    std::uint64_t activityPublishedGroupSessionStaged{};
     /** True while a transaction owns a published-region update to commit. */
     bool activityPublishedRegionStagedPresent{};
     /**
-     * Region whose citizen advertisement was safely retired after its gameplay view bound.
-     * -1 until then. The descriptor remains present in every root membership refresh while the
-     * client is joining; remembering the region after settlement prevents a same-region replay.
+     * Last region whose citizen advertisement was safely retired after view bind and activity-host
+     * promotion. -1 until then. Group-keyed state prevents out-of-order public view completions
+     * from making this diagnostic scalar reopen a newer group.
      */
     std::int32_t activitySettledRegion{-1};
+    /** Two public gameplay groups whose joins completed and descriptors were retired. */
+    std::array<std::uint64_t, 2> activitySettledGroupSessions{};
     /** Region retired by a transaction-staged membership, committed after caller delivery. */
     std::int32_t activitySettledRegionStaged{};
+    /** Gameplay group retired by the transaction-staged membership. */
+    std::uint64_t activitySettledGroupSessionStaged{};
     /** True while a transaction owns a settled-region publication to commit. */
     bool activitySettledRegionStagedPresent{};
     /** Gameplay group already mirrored into the root membership's remote slot. */

@@ -19,6 +19,21 @@ namespace message = middleware::bap::activity_message::replicate_membership;
 /** The one published member always occupies slot zero of both top-level masks. */
 constexpr std::uint8_t kLocalMemberSlot = 0;
 
+/** Tests one connection's two public-session lifecycle slots. */
+[[nodiscard]] bool contains_group(const std::array<std::uint64_t, 2>& groups,
+                                  std::uint64_t groupSession) noexcept {
+    return groupSession != 0 && (groups[0] == groupSession || groups[1] == groupSession);
+}
+
+/** Remembers the most recent two public groups, matching the client's current/target capacity. */
+void remember_group(std::array<std::uint64_t, 2>& groups, std::uint64_t groupSession) noexcept {
+    if (groupSession == 0 || groups[0] == groupSession) {
+        return;
+    }
+    groups[1] = groups[0];
+    groups[0] = groupSession;
+}
+
 /** Copies one State identity into its wire form. */
 void copy_identity(
     const state::activity::membership::Identity& source,
@@ -154,12 +169,25 @@ bool append_membership_notification(Scratch& scratch,
     return encoded;
 }
 
-/** Records the region named by a transaction-staged citizen descriptor. */
-void stage_published_region(Session& session, std::int32_t region) noexcept {
+/** Returns whether one gameplay group's citizen descriptor reached the client. */
+bool group_published(const Session& session, std::uint64_t groupSession) noexcept {
+    return contains_group(session.activityPublishedGroupSessions, groupSession);
+}
+
+/** Returns whether one gameplay group's citizen descriptor was safely retired. */
+bool group_settled(const Session& session, std::uint64_t groupSession) noexcept {
+    return contains_group(session.activitySettledGroupSessions, groupSession);
+}
+
+/** Records the region and group named by a transaction-staged citizen descriptor. */
+void stage_published_region(Session& session,
+                            std::int32_t region,
+                            std::uint64_t groupSession) noexcept {
     if (region < 0) {
         return;
     }
     session.activityPublishedRegionStaged = region;
+    session.activityPublishedGroupSessionStaged = groupSession;
     session.activityPublishedRegionStagedPresent = true;
 }
 
@@ -169,22 +197,29 @@ void commit_staged_published_region(Session& session) noexcept {
         return;
     }
     session.activityPublishedRegion = session.activityPublishedRegionStaged;
+    remember_group(session.activityPublishedGroupSessions,
+                   session.activityPublishedGroupSessionStaged);
     session.activityPublishedRegionStaged = 0;
+    session.activityPublishedGroupSessionStaged = 0;
     session.activityPublishedRegionStagedPresent = false;
 }
 
 /** Drops the transaction-staged descriptor region with its discarded frame. */
 void discard_staged_published_region(Session& session) noexcept {
     session.activityPublishedRegionStaged = 0;
+    session.activityPublishedGroupSessionStaged = 0;
     session.activityPublishedRegionStagedPresent = false;
 }
 
-/** Records a region retired by a transaction-staged membership body. */
-void stage_settled_region(Session& session, std::int32_t region) noexcept {
+/** Records a region and group retired by a transaction-staged membership body. */
+void stage_settled_region(Session& session,
+                          std::int32_t region,
+                          std::uint64_t groupSession) noexcept {
     if (region < 0) {
         return;
     }
     session.activitySettledRegionStaged = region;
+    session.activitySettledGroupSessionStaged = groupSession;
     session.activitySettledRegionStagedPresent = true;
 }
 
@@ -194,13 +229,16 @@ void commit_staged_settled_region(Session& session) noexcept {
         return;
     }
     session.activitySettledRegion = session.activitySettledRegionStaged;
+    remember_group(session.activitySettledGroupSessions, session.activitySettledGroupSessionStaged);
     session.activitySettledRegionStaged = 0;
+    session.activitySettledGroupSessionStaged = 0;
     session.activitySettledRegionStagedPresent = false;
 }
 
 /** Drops the transaction-staged settled region with its discarded frame. */
 void discard_staged_settled_region(Session& session) noexcept {
     session.activitySettledRegionStaged = 0;
+    session.activitySettledGroupSessionStaged = 0;
     session.activitySettledRegionStagedPresent = false;
 }
 
