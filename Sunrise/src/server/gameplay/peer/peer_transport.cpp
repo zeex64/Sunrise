@@ -84,6 +84,8 @@ constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
 constexpr std::uint64_t kEntityCreateRetryInterval = 2000;
 /** Reject a scheduler layout that only agrees for one transition sample. */
 constexpr std::uint64_t kEntityCreateReadyInterval = 500;
+/** One resend interval lets a pristine client apply its first exact one-view scheduler echo. */
+constexpr std::uint64_t kEntityCreateBootstrapReadyInterval = kResendInterval;
 /** Keeps resource-readiness retries bounded even when the selected RSAT cannot load. */
 constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
 /** Runtime currently proves complete inbound acceptance only for one registered scheduler view. */
@@ -141,6 +143,7 @@ struct EntityCreatePlan {
     std::uint8_t objectGeneration{};
     std::uint8_t viewIndex{};
     std::int32_t namespaceId{-1};
+    bool bootstrapScheduler{};
     bool present{};
 };
 
@@ -295,6 +298,19 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
+/** @return True only before this host has ever populated the client's scheduler view list. */
+[[nodiscard]] bool scheduler_remote_is_pristine(
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture) noexcept {
+    using ViewCapture = client::hooks::network::entity_slot_probe::ViewCapture;
+    constexpr std::array<std::byte, 16> kEmptySignature{};
+    constexpr std::array<std::uint64_t, ViewCapture::kSchedulerViewCapacity> kEmptyKeys{};
+    constexpr std::array<std::uint8_t, ViewCapture::kSchedulerViewCapacity> kEmptyTags{};
+    return capture.schedulerRemoteSignatureValid && capture.schedulerRemoteViewCount == 0
+           && capture.schedulerRemoteSignature == kEmptySignature
+           && capture.schedulerRemoteViewKeys == kEmptyKeys
+           && capture.schedulerRemoteViewTags == kEmptyTags;
+}
+
 /** Builds a create only when the bound token, scheduler entry, and pristine slot all agree. */
 [[nodiscard]] bool prepare_entity_create(const state::gameplay::PeerLink& peer,
                                          EntityCreatePlan& output) noexcept {
@@ -323,8 +339,11 @@ write_scheduler_signature(bits::Writer& writer,
     }
     // The local list drives outbound ordering, while the remote list is what the client currently
     // uses to decode this host. A transition can leave them temporarily different even when their
-    // 128-bit values already match; do not count an empty decode as a create attempt.
-    if (!scheduler_layouts_agree(capture)) {
+    // 128-bit values already match. Only the pristine empty state may bootstrap from the exact
+    // one-view client signature; a stale or partially populated mismatch remains unsafe.
+    const bool schedulerAgrees = scheduler_layouts_agree(capture);
+    const bool bootstrapScheduler = !schedulerAgrees && scheduler_remote_is_pristine(capture);
+    if (!schedulerAgrees && !bootstrapScheduler) {
         return false;
     }
     std::size_t match = capture.schedulerViewKeys.size();
@@ -350,6 +369,7 @@ write_scheduler_signature(bits::Writer& writer,
     output.objectGeneration = kFirstObjectGeneration;
     output.viewIndex = static_cast<std::uint8_t>(match);
     output.namespaceId = capture.namespaceId;
+    output.bootstrapScheduler = bootstrapScheduler;
     output.present = true;
     return true;
 }
@@ -1362,6 +1382,7 @@ void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& si
             peer->entityCreateReadyToken = 0;
             peer->entityCreateReadySlot = 0;
             peer->entityCreateReadyHandleGeneration = 0;
+            peer->entityCreateReadyBootstrap = false;
             peer->entityCreateReadySince = 0;
             peer->entityCreateAttempts = 0;
             peer->lastEntityCreate = 0;
@@ -1420,6 +1441,7 @@ void service(std::uint64_t now) noexcept {
                 peer.entityCreateReadyToken = 0;
                 peer.entityCreateReadySlot = 0;
                 peer.entityCreateReadyHandleGeneration = 0;
+                peer.entityCreateReadyBootstrap = false;
                 peer.entityCreateReadySince = 0;
             } else if (peer.entityCreateReadyToken != candidate.token
                        || peer.entityCreateReadySlot != candidate.slot
@@ -1427,9 +1449,12 @@ void service(std::uint64_t now) noexcept {
                 peer.entityCreateReadyToken = candidate.token;
                 peer.entityCreateReadySlot = candidate.slot;
                 peer.entityCreateReadyHandleGeneration = candidate.handleGeneration;
+                peer.entityCreateReadyBootstrap = candidate.bootstrapScheduler;
                 peer.entityCreateReadySince = now;
                 prepared = false;
-            } else if (now - peer.entityCreateReadySince < kEntityCreateReadyInterval) {
+            } else if (now - peer.entityCreateReadySince
+                       < (peer.entityCreateReadyBootstrap ? kEntityCreateBootstrapReadyInterval
+                                                          : kEntityCreateReadyInterval)) {
                 prepared = false;
             }
         }
@@ -1489,7 +1514,7 @@ void service(std::uint64_t now) noexcept {
             report(sent ? core::log::Level::info : core::log::Level::warn,
                    "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
                    "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
-                   "rsat=0x%08X",
+                   "rsat=0x%08X bootstrap=%u",
                    sent ? "sent" : "fail",
                    static_cast<unsigned long long>(entityCreates[index].token),
                    static_cast<unsigned>(owed[index].entityCreateAttempts),
@@ -1500,7 +1525,8 @@ void service(std::uint64_t now) noexcept {
                    static_cast<unsigned>(entityCreates[index].slot),
                    static_cast<unsigned>(entityCreates[index].handleGeneration),
                    static_cast<unsigned>(entityCreates[index].objectGeneration),
-                   entityCreates[index].rsat);
+                   entityCreates[index].rsat,
+                   entityCreates[index].bootstrapScheduler ? 1U : 0U);
         }
         if (!sent) {
             report(core::log::Level::debug, "ev=gameplay stage=ack result=fail");

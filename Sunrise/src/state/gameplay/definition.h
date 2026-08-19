@@ -237,6 +237,8 @@ struct PeerLink {
     std::uint64_t entityCreateReadyToken{};
     std::uint16_t entityCreateReadySlot{};
     std::uint8_t entityCreateReadyHandleGeneration{};
+    /** Candidate began while the client's host-decoded scheduler was provably pristine. */
+    bool entityCreateReadyBootstrap{};
     std::uint64_t entityCreateReadySince{};
     /** Bounded attempts made against that exact token/slot while its RSAT becomes resident. */
     std::uint8_t entityCreateAttempts{};

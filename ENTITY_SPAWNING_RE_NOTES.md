@@ -1476,6 +1476,24 @@ field. The planner now accepts any nonnegative native namespace that still passe
 one-view signature agreement, 13-object baseline, pristine slot generations, control-queue, and
 500 ms stability gates. Decoder tracing follows the armed view's namespace for the same reason.
 
+### Initial-zone scheduler bootstrap window
+
+The first stationary EDZ test with the namespace restriction removed reached the intended initial
+manager: namespace 1 populated exactly 13 native objects at `t=156509`, collapsed to one local
+scheduler view at `t=156622`, and published its exact scheduler signature at `t=156671`. No create
+left, because the client's host-decoded scheduler was still the pristine zero signature with zero
+logical views. The PUBLIC TARGET activity then appeared automatically at `t=157083`, only 412 ms
+after signature publication, so the existing 500 ms agreement timer could never complete even
+without player movement.
+
+This is a first-echo bootstrap case, not a stale transition mismatch. The create planner now accepts
+an empty remote scheduler only when its 128-bit signature, view count, keys, and tags are all zero
+and the local side already matches the exact captured one-view signature. It remembers that the
+candidate began in this pristine state and waits one 250 ms transport resend interval before
+attaching the create. A nonempty, partial, or stale remote scheduler still requires complete local
+and remote list agreement plus the original 500 ms interval. `stage=entity-create-out` reports
+`bootstrap=1` when this narrow path is used.
+
 ### External NetDuma connection-table capture
 
 The shared `destiny 2.pcapng` is not a packet capture from the Destiny host's gameplay interface.
@@ -1538,6 +1556,8 @@ The current checkpoint includes work in:
    confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
 7. Remain in the initial zone while its first entity namespace finishes native baseline
    population; movement must no longer be required and the namespace does not have to equal 2.
+   The expected first send is namespace 1 with `bootstrap=1` before PUBLIC TARGET adds a second
+   scheduler view.
 8. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
 9. Confirm a create can now fire in the initial settled zone at any logical entry without movement,
