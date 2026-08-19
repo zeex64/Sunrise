@@ -2090,6 +2090,25 @@ convergence during a world transition. Bootstrap now only seeds an empty schedul
 from pristine to agreed resets the candidate timer, and no entity body may leave until the agreed
 layout remains stable for a fresh 500 ms with an empty reliable-control queue.
 
+That correction produced the intended create on the next run. The agreed one-view layout remained
+stable for 534 ms, the 77-bit shared-Vandal create decoded with `result=0 count=1`, and the low
+occupancy word changed from `0x00001FFF` to `0x00003FFF`. The current player X+3 native update was
+130 bits with flushed bytes `C01440009A941F109764294A1F400000` and two zero tail bits.
+
+The staged update still did not enter the client entity decoder. Occupancy was observed at
+`t=80713`, but the 500 ms update delay overlapped new view registration: the local scheduler grew
+from one view to two at `t=81180`. A temporarily busy control queue delayed transmission until
+`t=81480`, where the server sent the cached one-view body against a live two-view local layout. No
+update `entity-record` followed, and nothing rendered. The channel stayed connected and its later
+report counted only 11 corrupt reads, so this is a rejected scheduler context rather than another
+four-second failure.
+
+The baseline and exact update are already available by the time occupancy is published. The next
+build therefore uses a 100 ms post-acceptance gap, which fits the observed 467 ms one-view overlap,
+and refuses the update unless both the live local and remote scheduler layouts still exactly match
+the cached one-view signature. A missed window now leaves the update unsent rather than publishing
+an incompatible scheduler body.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2143,7 +2162,7 @@ The current checkpoint includes work in:
 
 1. Run the two-stage shared-Vandal build once in the initial EDZ zone without moving. Confirm one
    77-bit `entity-create-out`, an `occupied_low` transition containing bit 13, then exactly one
-   `entity-update-out` with `update_bits=130` after the 500 ms settle interval.
+   `entity-update-out` with `update_bits=130` after the 100 ms post-acceptance gap.
 2. Confirm the update-only decoder returns `result=0 count=1`, reports flags `0x0002`, retains the
    same entity handle, and does not introduce a corrupt-read burst or four-second channel timeout.
 3. Check visually at the measured nearby-player position. If the object renders but has no AI,

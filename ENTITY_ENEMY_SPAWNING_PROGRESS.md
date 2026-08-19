@@ -168,6 +168,14 @@ The first live nearby-placement run was accepted but remained invisible:
 - The create gate had retained its 100 ms pristine-bootstrap timer after remote scheduler
   convergence. Bootstrap output now seeds only the empty scheduler. Convergence resets the timer,
   and an entity create requires a fresh 500 ms of the fully agreed one-view layout.
+- That fix worked: create attempt one decoded after 77 bits, and slot 13 changed the low occupied
+  word from `0x00001FFF` to `0x00003FFF`.
+- The 500 ms update delay then missed the one-view window. The local scheduler expanded to two
+  views before a busy control queue cleared; the server sent the cached one-view update afterward,
+  but the client never entered the entity decoder and nothing rendered.
+- The update delay is now 100 ms, and transmission requires both live local and remote layouts to
+  match the cached one-view signature. A changed layout suppresses the packet instead of emitting
+  it into an incompatible scheduler context.
 
 ## Immediate plan
 
@@ -175,9 +183,10 @@ The first live nearby-placement run was accepted but remained invisible:
 
 The current build sends shared Vandal RSAT `0x815B204B` create-only, observes the exact low occupied
 word, and stops retries as soon as its selected slot is allocated. It retains the native X+3 wire
-generated from that accepted baseline, waits 500 ms with an empty control queue, and sends exactly
-one 130-bit update-only shortcut for the same handle. The expected sequence is
-`entity-create-out`, slot 13 occupied, then `entity-update-out update_bits=130`.
+generated from that accepted baseline, waits 100 ms, verifies both scheduler layouts still match
+the cached one-view signature, and sends exactly one 130-bit update-only shortcut for the same
+handle. The expected sequence is `entity-create-out`, slot 13 occupied, then
+`entity-update-out update_bits=130` followed by a decoded update record.
 
 ### 2. Publish one bounded position
 
@@ -230,9 +239,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
 - Current working code sends shared Vandal sobject RSAT `0x815B204B` create-only, inherits the
   active view's spatial cell, confirms the exact occupied slot, and then sends one native-encoded
-  nearby-player update-only record after a 500 ms settle interval.
+  nearby-player update-only record after a 100 ms post-acceptance gap while the one-view layout is
+  still exact on both scheduler sides.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `0b1fc18f1eb2785279967b5a2fa2572c7cf3ebbb8ef1fde2a0b157a562b5be6d`
+- DLL SHA-256: `23ce4af20ae35cd6f97c8411c89693f0f978d3429603f88997b55606e5b4263c`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

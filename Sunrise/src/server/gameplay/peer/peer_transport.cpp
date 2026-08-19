@@ -83,8 +83,9 @@ constexpr std::uint8_t kFirstObjectGeneration = 2;
 constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
 /** A failed decode queues the RSAT; retry the exact same slot after loader service has run. */
 constexpr std::uint64_t kEntityCreateRetryInterval = 2000;
-/** Let the accepted native baseline settle before its exact update-only shortcut leaves. */
-constexpr std::uint64_t kEntityUpdateReadyInterval = 500;
+/** The baseline is ready immediately; retain a short gap before the one-view overlap window closes.
+ */
+constexpr std::uint64_t kEntityUpdateReadyInterval = 100;
 /** Exact shared-Vandal transform width produced by the native encoder. */
 constexpr std::uint16_t kFirstEntityUpdateBits = 130;
 /** Reject a scheduler layout that only agrees for one transition sample. */
@@ -655,6 +656,10 @@ write_scheduler_signature(bits::Writer& writer,
     if (peer.entityCreateSlot >= 32 || capture.namespaceId < 0
         || capture.schedulerKey != capture.token || capture.token != peer.entityCreateToken
         || (capture.occupiedLow & (1U << peer.entityCreateSlot)) == 0
+        || !capture.schedulerSignatureValid || capture.schedulerSignature != scheduler.value
+        || capture.schedulerViewCount != scheduler.viewCount
+        || capture.schedulerViewKeys[0] != scheduler.views[0].key
+        || capture.schedulerViewTags[0] != scheduler.views[0].tag
         || !capture.schedulerRemoteSignatureValid
         || capture.schedulerRemoteSignature != scheduler.value
         || capture.schedulerRemoteViewCount != scheduler.viewCount
