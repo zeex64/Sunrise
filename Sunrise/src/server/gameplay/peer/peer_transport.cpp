@@ -84,6 +84,8 @@ constexpr std::uint8_t kFirstObjectGeneration = 2;
 constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
 /** A failed decode queues the RSAT; retry the exact same slot after loader service has run. */
 constexpr std::uint64_t kEntityCreateRetryInterval = 2000;
+/** Reject a scheduler layout that only agrees for one transition sample. */
+constexpr std::uint64_t kEntityCreateReadyInterval = 500;
 /** Keeps resource-readiness retries bounded even when the selected RSAT cannot load. */
 constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
 /** Runtime currently proves complete inbound acceptance only for one registered scheduler view. */
@@ -1359,6 +1361,10 @@ void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& si
             peer->entityCreateToken = 0;
             peer->entityCreateSlot = 0;
             peer->entityCreateHandleGeneration = 0;
+            peer->entityCreateReadyToken = 0;
+            peer->entityCreateReadySlot = 0;
+            peer->entityCreateReadyHandleGeneration = 0;
+            peer->entityCreateReadySince = 0;
             peer->entityCreateAttempts = 0;
             peer->lastEntityCreate = 0;
         }
@@ -1407,6 +1413,22 @@ void service(std::uint64_t now) noexcept {
         if (firstAttempt) {
             (void)synchronise_scheduler_layout(peer);
             prepared = prepare_entity_create(peer, candidate);
+            if (!prepared) {
+                peer.entityCreateReadyToken = 0;
+                peer.entityCreateReadySlot = 0;
+                peer.entityCreateReadyHandleGeneration = 0;
+                peer.entityCreateReadySince = 0;
+            } else if (peer.entityCreateReadyToken != candidate.token
+                       || peer.entityCreateReadySlot != candidate.slot
+                       || peer.entityCreateReadyHandleGeneration != candidate.handleGeneration) {
+                peer.entityCreateReadyToken = candidate.token;
+                peer.entityCreateReadySlot = candidate.slot;
+                peer.entityCreateReadyHandleGeneration = candidate.handleGeneration;
+                peer.entityCreateReadySince = now;
+                prepared = false;
+            } else if (now - peer.entityCreateReadySince < kEntityCreateReadyInterval) {
+                prepared = false;
+            }
         }
         // An unacknowledged send queue keeps the packet going out until the peer confirms it.
         // Every packet burns one sequence, so the resend is paced.

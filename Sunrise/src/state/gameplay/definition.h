@@ -233,6 +233,11 @@ struct PeerLink {
     std::uint64_t entityCreateToken{};
     std::uint16_t entityCreateSlot{};
     std::uint8_t entityCreateHandleGeneration{};
+    /** Candidate that must remain continuously valid before its first create may leave. */
+    std::uint64_t entityCreateReadyToken{};
+    std::uint16_t entityCreateReadySlot{};
+    std::uint8_t entityCreateReadyHandleGeneration{};
+    std::uint64_t entityCreateReadySince{};
     /** Bounded attempts made against that exact token/slot while its RSAT becomes resident. */
     std::uint8_t entityCreateAttempts{};
     /** Tick the most recent guarded create attempt left at. */

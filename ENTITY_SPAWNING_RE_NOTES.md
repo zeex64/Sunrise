@@ -1113,13 +1113,25 @@ That run also exposed a namespace-1 interval with one scheduler view, matching l
 lists, and a pristine slot. A provisional build allowed the guarded create there to test whether the
 four repeated handlers were namespace-independent.
 
-They are not interchangeable with the currently reconstructed body. At `t=116583` the server sent
-the first namespace-1 create after both layouts converged on token `0x9EAA300100200006` and slot 13.
-No `entity-list-decode`, kind-0 codec, or `entity-record` event followed. Every later gameplay packet
-was rejected, producing 91 corrupt reads and an exact 4,001-ms receive timeout at `t=120554`.
-Attempt two was merely sent into the already-stalled receive path. Namespace 2 remains the only lane
-that has completed the entity-list and kind-0 create decoders, so entity emission is again restricted
-to namespace 2 as well as exactly one scheduler view.
+That provisional runtime condition is not safe for the currently reconstructed body. At `t=116583`
+the server sent the first namespace-1 create after both layouts converged on token
+`0x9EAA300100200006` and slot 13. No `entity-list-decode`, kind-0 codec, or `entity-record` event
+followed. Every later gameplay packet was rejected, producing 91 corrupt reads and an exact
+4,001-ms receive timeout at `t=120554`. Attempt two was merely sent into the already-stalled receive
+path. Namespace 2 remains the only lane that has completed the entity-list and kind-0 create
+decoders, so entity emission is again restricted to namespace 2 as well as exactly one scheduler
+view.
+
+Ghidra adds an important qualification: inbound `FUN_1417A8CE0` iterates the registered views at
+`scheduler + 0xC0` and invokes the same four handler virtuals for every view; it has no namespace
+branch. The namespace-1 failure is therefore evidence against that *transition sample*, not proof
+of a different namespace wire grammar. The scheduler lists first agreed at `t=116578`, only 5 ms
+before Sunrise emitted the create, while a citizen handoff was still in progress. The server did
+not finish the group join until `t=116801`, and the replacement activity view appeared immediately
+afterward. Sunrise now requires the exact token, slot, generation, and all existing preparation
+gates to remain continuously valid for 500 ms before the first create may leave. An idle stable
+zone is polled during that interval; a momentary transition agreement resets it instead of turning
+movement timing into a packet-emission lottery.
 
 Seven later native registrations and create-codec captures resolved to tags `0x815AA673`,
 `0x80FC45CE`, `0x815AA68E`, `0x8157E74D`, `0x8157E747`, `0x815A6C5E`, and `0x815B16E9`.
