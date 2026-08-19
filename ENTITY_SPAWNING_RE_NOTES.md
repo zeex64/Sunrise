@@ -1658,6 +1658,36 @@ at peer offset `+0x18`. Sunrise's checksum replica still left that region zero. 
 copies the peer-session-id into the first 128 bytes of `peer+0x18`; every omitted optional identity
 field remains zero, matching the decoded complete-snapshot state.
 
+The checksum-corrected follow-up completed both public joins and loaded EDZ, proving that the
+peer-session-id arm and its checksum replica are now valid. It did not change account
+classification: the synthetic host still requested a typed identity zero, the desired-account
+snapshot still changed from `1/1` to `2/1`, and cleanup still began about 91 seconds later. The
+captured stack above the publisher was the generic game-tick event drain, not the snapshot builder.
+
+### Desired-account source flags and activity-host pairing
+
+The actual desired-account producer is `FUN_140FCF0B0`. It iterates native identity-map records,
+materializes each 0xD0-byte view through `FUN_140BDE590`/`FUN_140BDE690`, and emits event `0x2F`
+only when its rebuilt 0x210-byte snapshot changes. The byte at materialized offset `+0x40` comes
+from identity-map record offset `+0xC2`. The producer increments header 0 when either flag `0x01`
+or `0x10` is set, but it increments header 1 and writes a SOID/mask entry only for flag `0x01`.
+This exactly explains the observed `2/1`: the synthetic host owns a `0x10`-only record.
+
+`FUN_140BE5830` establishes the direction of those flags. `FUN_140E74F90` returns platform type
+`0x0C` and `FUN_140E74BF0` returns SOID type `0xFF`. Merging a `0x0C -> 0xFF` translation sets
+qword bit 16, which is byte flag `0x01`; merging the reverse `0xFF -> 0x0C` translation sets qword
+bit 20, which is byte flag `0x10`. The host therefore has the reverse association but its zero
+platform handle never receives the forward svc-24 association. The publisher itself is behaving
+correctly; forcing its headers or validator would only hide an incomplete bidirectional mapping.
+
+The next bounded experiment pairs a valid typed-zero request only with
+`live_region_session(activitySessionId)`. It never aliases zero to the local account. The selected
+SOID is distinct and is already the machine/session identity published for the embedded region
+host, giving the native connection path a real key it can plausibly reconcile. The account probe
+now summarizes the first four active connection records as `cN[index=... soid=... state=...]`,
+including zero-valued records, so the experiment can be rejected immediately if the new host SOID
+has no matching connection.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -1711,19 +1741,17 @@ The current checkpoint includes work in:
 
 Immediate stationary EDZ run:
 
-- In the first `networking:session:membership:dump` for `group_target`, peer 0 must show
-  `session_id=Sunrise_<16 hex digits>@x64@activity_host`; peer 1 should not acquire that string.
-  Failure to decode the exact string means the new identity arm or its optional-field terminators
-  are misaligned, and the run should stop before interpreting later account state.
-- Capture every `stage=account-soid-publish` transition. The desired outcome is that the public
-  host no longer causes a typed-zero svc-23 request and the source remains `1/1`. If svc 23 still
-  requests identity zero, it must remain `result=unpaired`; do not alias it to the local SOID. The
-  new repeated `stack=+0x...` fields exclude detour/system frames; the first frame above
-  `+0xFC9033` is the upstream caller that supplied the publisher wrapper's input.
-- If the source still becomes `2/1`, the peer-session-id alone is not its classification key. The
-  next static target is the native identity field that distinguishes a platform peer from the
-  activity host, not an invented account translation. If it becomes `2/2`, verify the two SOIDs
-  are distinct and that both have matching state-4 connection records before waiting 91 seconds.
+- Confirm the zero request logs `stage=translate result=paired source=activity-host`, with a
+  nonzero SOID distinct from the local account and normally equal to the newest public region
+  session. A nonzero platform identity must still log `source=account` and map to the local SOID.
+- `stage=account-soid-publish` should change to `h0=2 h1=2 nonzero=2`, with two distinct source
+  entries. Any `2/1`, duplicate SOIDs, or immediate return to `1/1` rejects the translation.
+- In `stage=account-soids`, require two distinct target SOIDs and find the host SOID in a
+  `cN[...]` connection summary. It must advance to the same live state as the local target. If the
+  host target remains state 1 or has no matching connection, stop the run within 20 seconds; there
+  is no reason to wait for the 91-second expiry.
+- If both targets remain live, stay in the initial zone for at least two minutes. There must be no
+  account timer countdown, peer-subscription validation failure, or world cleanup/disconnect.
 - Capture the expanded `view-readiness` line for token `...002`. Compare `active_count` and the
   first eight `active=` slots with the public manager's `entity-slots occupied=` count. Determine
   which baseline/create acknowledgment is supposed to clear slot 0.

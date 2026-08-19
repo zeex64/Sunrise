@@ -47,12 +47,19 @@ struct AccountEntry {
     std::uint64_t auxiliary{};
 };
 
+struct ConnectionEntry {
+    std::uint64_t soid{};
+    std::int32_t index{-1};
+    std::uint8_t state{};
+};
+
 struct Snapshot {
     const void* manager{};
     const void* source{};
     const void* connectionManager{};
     std::array<AccountEntry, kAccountCapacity> targets{};
     std::array<std::uint64_t, kAccountCapacity> desired{};
+    std::array<ConnectionEntry, kReportEntryCapacity> connections{};
     std::array<std::byte, kConnectionRecordSize> connectionRecord{};
     std::uint64_t managerHeader0{};
     std::uint64_t managerHeader1{};
@@ -67,6 +74,8 @@ struct Snapshot {
     std::size_t targetNonzero{};
     std::size_t targetExpired{};
     std::size_t desiredNonzero{};
+    std::size_t connectionReported{};
+    std::size_t connectionNonzero{};
     bool targetReadable{};
     bool sourceReadable{};
     bool connectionReadable{};
@@ -254,7 +263,7 @@ void report_publisher(const PublisherSnapshot& snapshot,
     core::log::write(core::log::Channel::client, core::log::Level::info, {line.data(), used});
 }
 
-/** Finds the connection record that keeps an account entry in state 2. */
+/** Summarizes the active connection class and retains the first target-matching record. */
 void inspect_connection(std::uint64_t soid, Snapshot& output) noexcept {
     const targets::game::network::Targets& resolved = targets::game::network::get();
     const auto connectionAccessor =
@@ -287,16 +296,24 @@ void inspect_connection(std::uint64_t soid, Snapshot& output) noexcept {
                                    + static_cast<std::size_t>(index) * kConnectionRecordStride;
         std::uint64_t candidate = 0;
         std::memcpy(&candidate, record + kConnectionSoidOffset, sizeof candidate);
-        if (candidate != soid) {
+        std::uint8_t state = 0;
+        std::memcpy(&state, record + kConnectionStateOffset, sizeof state);
+        if (candidate != 0) {
+            ++output.connectionNonzero;
+        }
+        if (output.connectionReported < output.connections.size()) {
+            ConnectionEntry& summary = output.connections[output.connectionReported++];
+            summary.soid = candidate;
+            summary.index = index;
+            summary.state = state;
+        }
+        if (candidate != soid || output.connectionMatched) {
             continue;
         }
         output.connectionIndex = index;
-        std::memcpy(&output.connectionState,
-                    record + kConnectionStateOffset,
-                    sizeof output.connectionState);
+        output.connectionState = state;
         std::memcpy(output.connectionRecord.data(), record, output.connectionRecord.size());
         output.connectionMatched = true;
-        break;
     }
 }
 
@@ -371,6 +388,13 @@ void inspect_connection(std::uint64_t soid, Snapshot& output) noexcept {
     hash = hash_bytes(&snapshot.sourceHeader1, sizeof snapshot.sourceHeader1, hash);
     hash = hash_bytes(&snapshot.connectionState, sizeof snapshot.connectionState, hash);
     hash = hash_bytes(&snapshot.connectionMatched, sizeof snapshot.connectionMatched, hash);
+    for (const ConnectionEntry& entry : snapshot.connections) {
+        hash = hash_bytes(&entry.soid, sizeof entry.soid, hash);
+        hash = hash_bytes(&entry.index, sizeof entry.index, hash);
+        hash = hash_bytes(&entry.state, sizeof entry.state, hash);
+    }
+    hash = hash_bytes(&snapshot.connectionReported, sizeof snapshot.connectionReported, hash);
+    hash = hash_bytes(&snapshot.connectionNonzero, sizeof snapshot.connectionNonzero, hash);
     hash = hash_bytes(&snapshot.targetReadable, sizeof snapshot.targetReadable, hash);
     hash = hash_bytes(&snapshot.sourceReadable, sizeof snapshot.sourceReadable, hash);
 
@@ -477,6 +501,26 @@ void append_desired(const Snapshot& snapshot,
     }
 }
 
+/** Adds a bounded summary of every active connection-class record, including zero SOIDs. */
+void append_connections(const Snapshot& snapshot,
+                        std::array<char, 1280>& line,
+                        std::size_t& used) noexcept {
+    for (std::size_t ordinal = 0; ordinal < snapshot.connectionReported; ++ordinal) {
+        const ConnectionEntry& entry = snapshot.connections[ordinal];
+        const int written = std::snprintf(line.data() + used,
+                                          line.size() - used,
+                                          " c%zu[index=%d soid=0x%llX state=%u]",
+                                          ordinal,
+                                          entry.index,
+                                          static_cast<unsigned long long>(entry.soid),
+                                          static_cast<unsigned>(entry.state));
+        if (written <= 0 || static_cast<std::size_t>(written) >= line.size() - used) {
+            return;
+        }
+        used += static_cast<std::size_t>(written);
+    }
+}
+
 /** Emits one compact comparison of the prerequisite table and the source feeding it. */
 void report(const Snapshot& snapshot, bool predicate, std::uint64_t calls) noexcept {
     std::array<char, 1280> line{};
@@ -491,7 +535,8 @@ void report(const Snapshot& snapshot, bool predicate, std::uint64_t calls) noexc
                       "target_nonzero=%zu target_expired=%zu mh0=0x%llX mh1=0x%llX "
                       "timer=0x%llX/0x%llX source=%p source_readable=%u source_nonzero=%zu "
                       "sh0=0x%llX sh1=0x%llX conn=%p conn_readable=%u conn_start=%d conn_count=%d "
-                      "conn_match=%u conn_index=%d conn_state=%u conn_bytes=%s calls=%llu",
+                      "conn_nonzero=%zu conn_match=%u conn_index=%d conn_state=%u conn_bytes=%s "
+                      "calls=%llu",
                       predicate ? "allow" : "block",
                       snapshot.manager,
                       snapshot.targetReadable ? 1U : 0U,
@@ -510,6 +555,7 @@ void report(const Snapshot& snapshot, bool predicate, std::uint64_t calls) noexc
                       snapshot.connectionReadable ? 1U : 0U,
                       snapshot.connectionStart,
                       snapshot.connectionCount,
+                      snapshot.connectionNonzero,
                       snapshot.connectionMatched ? 1U : 0U,
                       snapshot.connectionIndex,
                       static_cast<unsigned>(snapshot.connectionState),
@@ -521,6 +567,7 @@ void report(const Snapshot& snapshot, bool predicate, std::uint64_t calls) noexc
     std::size_t used = static_cast<std::size_t>(written);
     append_targets(snapshot, line, used);
     append_desired(snapshot, line, used);
+    append_connections(snapshot, line, used);
     core::log::write(core::log::Channel::client, core::log::Level::info, {line.data(), used});
 }
 

@@ -11,6 +11,7 @@
 #include "../../../../middleware/bap/user_message/user_message_response.h"
 #include "../../../../middleware/encoding/byte_order.h"
 #include "../../../../middleware/web_service/messages/opcode505/opcode505_codec.h"
+#include "../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../state/runtime/runtime.h"
 #include "../../../web_service/web_service_runtime.h"
 #include "../activity_host_manager/activity_host_manager_route.h"
@@ -41,8 +42,8 @@ constexpr std::size_t kTranslationReportLimit = 160;
 /**
  * Validates and reads one svc-23 identity. Sunrise hosts one local account, but Destiny requests a
  * translation for both that player and each synthetic activity-host peer. The latter currently
- * carries identity zero. Zero is a missing platform identity, not an alias for the local player:
- * pairing both to one SOID creates two native account records with the same key, and both expire.
+ * carries identity zero. Zero is not an alias for the local player; the service route pairs it
+ * only with the distinct live region-session SOID that already names the synthetic host.
  * @param requestBody Complete svc-23 request body.
  * @param output Receives the identity, including zero for a valid but unpairable request.
  * @return True when the request has one correctly typed identity entry.
@@ -94,17 +95,28 @@ bool process(const ServiceRoute& route,
         const state::AccountState account = state::account_snapshot();
         std::uint64_t identity = 0;
         const bool validIdentity = translation_identity(requestBody, identity);
-        const bool pairs = validIdentity && identity != 0 && account.primarySoid != 0;
-        const std::uint64_t soid = pairs ? account.primarySoid : 0;
+        const std::uint64_t hostSoid =
+            validIdentity && identity == 0 && activitySessionId != 0
+                ? state::activity::membership::live_region_session(activitySessionId)
+                : 0;
+        const bool accountPair = validIdentity && identity != 0 && account.primarySoid != 0;
+        const bool hostPair = validIdentity && identity == 0 && account.primarySoid != 0
+                              && hostSoid != 0 && hostSoid != account.primarySoid;
+        const bool pairs = accountPair || hostPair;
+        const std::uint64_t soid = accountPair ? account.primarySoid : (hostPair ? hostSoid : 0);
+        const char* const source = accountPair ? "account" : (hostPair ? "activity-host" : "none");
         std::array<char, kTranslationReportLimit> line{};
         const int count = std::snprintf(line.data(),
                                         line.size(),
                                         "ev=queuez stage=translate result=%s valid=%u "
-                                        "identity=0x%016llX soid=0x%016llX",
+                                        "source=%s identity=0x%016llX soid=0x%016llX "
+                                        "activity=0x%016llX",
                                         pairs ? "paired" : "unpaired",
                                         validIdentity ? 1U : 0U,
+                                        source,
                                         static_cast<unsigned long long>(identity),
-                                        static_cast<unsigned long long>(soid));
+                                        static_cast<unsigned long long>(soid),
+                                        static_cast<unsigned long long>(activitySessionId));
         if (count > 0 && static_cast<std::size_t>(count) < line.size()) {
             core::log::write(core::log::Channel::server,
                              core::log::Level::info,
