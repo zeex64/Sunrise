@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 8dd4ae90c238d8a233871fcb39d3ce7d20bec9ede5a23e49633140fd2d26e390
+SHA-256 86237857afb6a544b086258b6841ecd6b01f9d13e3b6c4e38e9c6b0052407172
 ```
 
 ## Confirmed high-level path
@@ -1218,6 +1218,12 @@ therefore reconstruction of the identity-1 authored-mode descriptor/director sta
 capturing the native sobject sequence it produces. A hand-built minimal create remains useful as a
 wire probe, but it is not an encounter substitute.
 
+The local `DemonWare` source tree is release 1.80-era generic middleware for Win32, PS2, PSP,
+Xbox 360, PS3, Matchmaking+, and the State Engine. It is useful background for DemonWare buffer,
+transport, lobby, and peer conventions, but repository-wide searches contain no Destiny activity
+mode, activity-global-state, destination-selection, or activity-host schema. It therefore cannot
+supply the missing D2-specific authored descriptor directly.
+
 Service-6 selection diagnostics now report the client-authored request kind, activity and element
 indices, skull count, descriptor width, package-name bit offset, and trailing flag. The next native
 EDZ launch can therefore establish whether Sunrise captured and replayed a wide authored descriptor
@@ -1231,6 +1237,23 @@ fallback) and passes that definition to the setter. This proves at least one eng
 mode is content-defined. It does not yet prove that this function is the same identity-1 mode named
 by the external paper, so its definition lookup must be traced to the service-6/global-state input
 before changing the wire format.
+
+The selector's exact ABI is `void(uint16 primaryActivity, int32 modeIndex,
+uint16 fallbackActivity)`. Both initialization callers (`FUN_140DC2340` and `FUN_140DC23A0`) load
+those values from the activity singleton at offsets `+0x354A`, `+0x3550`, and `+0x354C`,
+respectively. The selector resolves the first and third IDs through the activity-definition table.
+When the primary record has a mode array, it uses `modeIndex * 0x38` and reads the definition at
+entry `+0x30`; otherwise it tries the primary record's `+0xDC`, then the fallback record's `+0xDC`,
+then the global default. Static analysis has not yet proven which decoded global-state fields write
+the singleton offsets, so the names describe their native use rather than an assumed wire mapping.
+
+Two passive network-group hooks now capture this boundary without changing it. The selector probe
+logs `stage=activity-mode primary=... index=... fallback=...`; the only callee's setter probe logs
+`stage=activity-mode-definition result=ok|fail definition=0x...`. The selector signature is the
+unique 27-byte prefix at `FUN_140BEA850`; the setter signature is the unique 15-byte prefix at
+`FUN_140BEA6D0`. The current service-6 request selected activity 8 from activity 8 and omitted its
+element index, but only the runtime probe can show whether native `modeIndex` is also absent/default
+or was populated independently later.
 
 ### Same-region citizen-advertisement replay fix
 
@@ -1364,7 +1387,12 @@ The current checkpoint includes work in:
    successfully created enemy.
 13. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
    sobject is accepted; do not assume the squad codec can create the underlying native squad.
-14. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
+14. On the next EDZ load, capture one `stage=activity-mode` and its following
+   `stage=activity-mode-definition`. Compare `primary`, `fallback`, and `index` with service 6's
+   `activity=8`, `from_activity=8`, and absent `element=-1`. A failed definition or implausible
+   index is the first direct evidence of an incomplete global-state descriptor; a successful
+   definition means the missing director startup is downstream.
+15. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
    or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
    and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
 

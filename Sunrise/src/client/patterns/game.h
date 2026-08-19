@@ -36,6 +36,8 @@ enum class Id : std::size_t {
     viewChannelAccessor,
     activityHostDecoder,
     activityHostConnectionState,
+    activityModeSelector,
+    activityModeSetter,
     contentIdTokenLoad,
     queuezObjectResolver,
     queuezFamily5Subscribe,

@@ -219,6 +219,21 @@ constexpr std::string_view kActivityHostConnectionStateText =
 constexpr auto kActivityHostConnectionState =
     signature<signature_length(kActivityHostConnectionStateText)>(kActivityHostConnectionStateText);
 
+// Matches the activity-mode definition selector. The fixed prefix preserves all three selector
+// inputs before the first position-dependent call and is unique in the current runtime image.
+constexpr std::string_view kActivityModeSelectorText =
+    "48 89 5C 24 10 55 56 57 48 83 EC 20 41 0F B7 F8 48 63 EA 0F B7 F1 BB C5 9D 1C 81";
+/** Compiled pattern bytes of the activity-mode selector signature above. */
+constexpr auto kActivityModeSelector =
+    signature<signature_length(kActivityModeSelectorText)>(kActivityModeSelectorText);
+
+// Matches the activity-mode definition setter called by the selector above. Its fixed prefix
+// saves the definition pointer and prepares the installed-resource lookup before the first call.
+constexpr std::string_view kActivityModeSetterText = "40 53 57 48 83 EC 28 48 8B D9 48 8D 4C 24 40";
+/** Compiled pattern bytes of the activity-mode setter signature above. */
+constexpr auto kActivityModeSetter =
+    signature<signature_length(kActivityModeSetterText)>(kActivityModeSetterText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -286,6 +301,8 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"view_channel_accessor", kViewChannelAccessor},
     patterns::Pattern{"activity_host_decoder", kActivityHostDecoder},
     patterns::Pattern{"activity_host_connection_state", kActivityHostConnectionState},
+    patterns::Pattern{"activity_mode_selector", kActivityModeSelector},
+    patterns::Pattern{"activity_mode_setter", kActivityModeSetter},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},

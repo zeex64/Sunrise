@@ -43,6 +43,8 @@ constexpr std::array<const char*, kHandleCount> kSlotNames{
     "view_creation",
     "activity_host_decoder",
     "activity_host_connection_state",
+    "activity_mode_selector",
+    "activity_mode_setter",
     "signon_readiness_failure",
     "signon_readiness_ready",
 };

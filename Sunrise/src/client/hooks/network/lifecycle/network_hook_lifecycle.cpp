@@ -1,5 +1,6 @@
 #include "../../external_server/route.h"
 #include "../activity_host_probe.h"
+#include "../activity_mode_probe.h"
 #include "../content_config/runtime.h"
 #include "../coordinator/network_call_coordinator.h"
 #include "../entity_create_probe.h"
@@ -147,6 +148,7 @@ bool uninstall() noexcept {
         sobject_update_probe::reset();
         view_creation_probe::reset();
         activity_host_probe::reset();
+        activity_mode_probe::reset();
         view_membership_probe::reset();
         view_message_probe::reset();
         view_signature::reset();
