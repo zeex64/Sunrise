@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 
 #include "../../../core/logging/log.h"
 #include "coordinator/network_call_coordinator.h"
@@ -19,6 +20,8 @@ namespace {
 constexpr std::size_t kIdentityOffset = 0x854;
 /** This byte in the 0xa8-byte start record selects local zero versus authored nonzero. */
 constexpr std::size_t kRecordRouteOffset = 0x12;
+/** Exact size registered for requested-remote-join-data and remote-join-data. */
+constexpr std::size_t kRecordSize = 0xA8;
 /** Unexpected identities share the high observation bit without losing normal slots 0 through 7. */
 constexpr std::uint32_t kUnexpectedIdentityBit = 0x80000000U;
 
@@ -67,13 +70,14 @@ std::atomic<std::uint32_t> g_authoredFailed{};
     return (observations.fetch_or(bit, std::memory_order_relaxed) & bit) == 0;
 }
 
-/** Reads the proven route byte without trusting an unavailable or stale native record. */
-[[nodiscard]] bool read_record_route(std::int64_t record, std::uint8_t& route) noexcept {
+/** Copies one native route record without trusting an unavailable or stale pointer. */
+[[nodiscard]] bool read_record(std::int64_t record,
+                               std::array<std::byte, kRecordSize>& output) noexcept {
     if (record == 0) {
         return false;
     }
     __try {
-        route = *reinterpret_cast<const std::uint8_t*>(record + kRecordRouteOffset);
+        std::memcpy(output.data(), reinterpret_cast<const void*>(record), output.size());
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         return false;
@@ -94,20 +98,58 @@ std::atomic<std::uint32_t> g_authoredFailed{};
     }
 }
 
-/** Emits the raw selector that the managed-session pump uses for its constructor branch. */
-void report_record(std::int32_t identity, std::uint8_t selector) noexcept {
-    std::array<char, 160> line{};
-    const int written = std::snprintf(
+/** Reads an unaligned little-endian native value from the already-safe record copy. */
+template <typename Value>
+[[nodiscard]] Value record_value(const std::array<std::byte, kRecordSize>& record,
+                                 std::size_t offset) noexcept {
+    Value value{};
+    std::memcpy(&value, record.data() + offset, sizeof value);
+    return value;
+}
+
+/** Emits the decoded bounds plus a one-shot raw record for field mapping. */
+void report_record(std::int32_t identity,
+                   const std::array<std::byte, kRecordSize>& record) noexcept {
+    const std::uint8_t selector = std::to_integer<std::uint8_t>(record[kRecordRouteOffset]);
+    std::array<char, 640> line{};
+    int written = std::snprintf(
         line.data(),
         line.size(),
-        "ev=gameplay stage=activity-route-record result=ok identity=%d selector=%u route=%s",
+        "ev=gameplay stage=activity-route-record result=ok identity=%d selector=%u route=%s "
+        "f00=%u f04=%u f08=%u f0c=0x%08X f10=%u f11=%u f13=%u id=0x%016llX "
+        "a0=%u a1=%u a2=%u a3=%u bytes=",
         identity,
         static_cast<unsigned>(selector),
-        selector == 0 ? "local" : "authored");
-    if (written > 0) {
-        core::log::write(core::log::Channel::client,
-                         core::log::Level::info,
-                         {line.data(), static_cast<std::size_t>(written)});
+        selector == 0 ? "local" : "authored",
+        record_value<std::uint32_t>(record, 0x00),
+        record_value<std::uint32_t>(record, 0x04),
+        record_value<std::uint32_t>(record, 0x08),
+        record_value<std::uint32_t>(record, 0x0C),
+        static_cast<unsigned>(std::to_integer<std::uint8_t>(record[0x10])),
+        static_cast<unsigned>(std::to_integer<std::uint8_t>(record[0x11])),
+        static_cast<unsigned>(std::to_integer<std::uint8_t>(record[0x13])),
+        static_cast<unsigned long long>(record_value<std::uint64_t>(record, 0x18)),
+        static_cast<unsigned>(std::to_integer<std::uint8_t>(record[0xA0])),
+        static_cast<unsigned>(std::to_integer<std::uint8_t>(record[0xA1])),
+        static_cast<unsigned>(std::to_integer<std::uint8_t>(record[0xA2])),
+        static_cast<unsigned>(std::to_integer<std::uint8_t>(record[0xA3])));
+    if (written <= 0) {
+        return;
+    }
+    std::size_t used = static_cast<std::size_t>(written);
+    for (const std::byte value : record) {
+        if (used + 2 >= line.size()) {
+            break;
+        }
+        written = std::snprintf(
+            line.data() + used, line.size() - used, "%02X", std::to_integer<unsigned>(value));
+        if (written != 2) {
+            break;
+        }
+        used += 2;
+    }
+    if (used > 0) {
+        core::log::write(core::log::Channel::client, core::log::Level::info, {line.data(), used});
     }
 }
 
@@ -140,12 +182,13 @@ __declspec(noinline) std::int64_t __fastcall record_body(std::int32_t identity,
         if (call != nullptr) {
             record = call(identity, manager);
         }
-        std::uint8_t selector = 0;
-        if (lease.accepting && read_record_route(record, selector)) {
+        std::array<std::byte, kRecordSize> value{};
+        if (lease.accepting && read_record(record, value)) {
+            const std::uint8_t selector = std::to_integer<std::uint8_t>(value[kRecordRouteOffset]);
             std::atomic<std::uint32_t>& observations =
                 selector == 0 ? g_recordLocal : g_recordAuthored;
             if (first(observations, identity)) {
-                report_record(identity, selector);
+                report_record(identity, value);
             }
         }
     } __finally {

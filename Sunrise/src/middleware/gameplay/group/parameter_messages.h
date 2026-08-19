@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
 #include "../../encoding/bit_reader.h"
 #include "../../encoding/bit_writer.h"
+#include "../descriptor/join_descriptor.h"
 #include "parameter_registry.h"
 
 namespace sunrise::middleware::gameplay::group {
@@ -52,6 +54,7 @@ struct ParameterRequestHeader {
 inline constexpr std::uint64_t kEncodableParameters =
     (std::uint64_t{1} << static_cast<std::uint8_t>(Parameter::activityHost))
     | (std::uint64_t{1} << static_cast<std::uint8_t>(Parameter::currentActivity))
+    | (std::uint64_t{1} << static_cast<std::uint8_t>(Parameter::remoteJoinData))
     | (std::uint64_t{1} << static_cast<std::uint8_t>(Parameter::publicSessionReservations));
 
 /**
@@ -72,6 +75,44 @@ struct ActivityHostParameter {
 };
 
 /**
+ * Body of registry parameter 13 `remote-join-data`.
+ *
+ * The names stay offset-based until native consumers prove their semantics. The runtime codec and
+ * validation ranges are exact: FUN_1417BC570 writes this 0xa8-byte value and FUN_1417BC410 reads
+ * it. `route` at native offset 0x12 selects the local (zero) or authored (nonzero) initializer.
+ */
+struct RemoteJoinDataParameter {
+    /** Native +0x00, four wire bits; the decoder accepts values 0 through 8. */
+    std::uint32_t field00{};
+    /** Native +0x04, two wire bits; the decoder accepts values 0 through 2. */
+    std::uint32_t field04{};
+    /** Native +0x08, two wire bits; the decoder accepts values 0 through 2. */
+    std::uint32_t field08{};
+    /** Native +0x0c. UINT32_MAX is absent; otherwise the two-bit value is 0 through 2. */
+    std::uint32_t optional0C{UINT32_MAX};
+    /** Native +0x10, three wire bits. */
+    std::uint8_t field10{};
+    /** Native +0x11, two wire bits. */
+    std::uint8_t field11{};
+    /** Native +0x12. Zero selects the local route; one selects the authored route. */
+    bool route{};
+    /** Native +0x13, one wire bit. */
+    bool field13{};
+    /** Native +0x18, written as a raw memory-order 64-bit field. */
+    std::uint64_t identifier{};
+    /** Native +0x20. This is the same 128-byte join descriptor used by region advertisements. */
+    std::array<std::byte, descriptor::kDescriptorSize> descriptor{};
+    /** Native +0xa0, three wire bits; the decoder accepts values 0 through 4. */
+    std::uint8_t descriptorIndex{};
+    /** Native +0xa1, five wire bits; the decoder accepts values 0 through 18. */
+    std::uint8_t fieldA1{};
+    /** Native +0xa2, five wire bits; the decoder accepts values 0 through 18. */
+    std::uint8_t fieldA2{};
+    /** Native +0xa3, one wire bit. */
+    bool fieldA3{};
+};
+
+/**
  * Body of a parameter update.
  * A joining peer needs one applied to finish its join, whatever the update names.
  */
@@ -86,6 +127,8 @@ struct ParameterUpdate {
     std::uint64_t carriedMask{};
     /** Read only when `carriedMask` names `activityHost`. */
     ActivityHostParameter activityHost{};
+    /** Read only when `carriedMask` names `remoteJoinData`. */
+    RemoteJoinDataParameter remoteJoinData{};
 };
 
 /**

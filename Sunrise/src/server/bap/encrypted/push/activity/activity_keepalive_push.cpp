@@ -98,8 +98,16 @@ bool consume_activity_keepalive(Session& session,
         session.activityJoinedForeignSession
             ? 0
             : server::gameplay::group::advertised_group_session(effectiveRegion);
-    const bool advertisedGroupPublished = group_published(session, advertisedGroup);
-    const bool advertisedGroupSettled = group_settled(session, advertisedGroup);
+    // Published/settled group arrays are durable history, while a patrol can return to the same
+    // region and reuse that region's group. The scalar region markers supply the visit generation:
+    // a group settled on an older visit must be advertised once again after another region has
+    // occupied those markers.
+    const bool advertisedGroupPublished =
+        group_published(session, advertisedGroup)
+        && session.activityPublishedRegion == effectiveRegion;
+    const bool advertisedGroupSettled =
+        group_settled(session, advertisedGroup)
+        && session.activitySettledRegion == effectiveRegion;
     const bool retirementReady =
         advertisedGroup != 0 && server::gameplay::group::view_accepted(advertisedGroup)
         && server::gameplay::group::activity_host_published(advertisedGroup);
@@ -108,8 +116,11 @@ bool consume_activity_keepalive(Session& session,
         && (advertisedGroup != 0 ? !advertisedGroupPublished && !advertisedGroupSettled
                                  : reportedRegion != session.activityPublishedRegion
                                        && reportedRegion != session.activitySettledRegion);
+    // A reused group retains its old ready state. Do not let that historical state retire the new
+    // visit before its descriptor-bearing membership has actually reached the client.
     const bool citizenRetirementDue = !session.activityJoinedForeignSession && effectiveRegion >= 0
-                                      && !advertisedGroupSettled && retirementReady;
+                                      && advertisedGroupPublished && !advertisedGroupSettled
+                                      && retirementReady;
     if (session.activitySessionId == 0
         || (!burstDue && !keepaliveDue && !regionPublicationDue && !citizenRetirementDue)) {
         return false;
@@ -185,7 +196,8 @@ bool consume_activity_keepalive(Session& session,
     const bool rootMembership = !session.activityJoinedForeignSession;
     const bool citizenAdvertisementUnsettled =
         rootMembership && effectiveRegion >= 0 && !advertisedGroupSettled;
-    const bool settleCitizenAdvertisement = citizenAdvertisementUnsettled && retirementReady;
+    const bool settleCitizenAdvertisement = citizenAdvertisementUnsettled
+                                            && advertisedGroupPublished && retirementReady;
     const bool includeCitizenAdvertisement =
         citizenAdvertisementUnsettled && !settleCitizenAdvertisement;
     const bool publishesMembership =

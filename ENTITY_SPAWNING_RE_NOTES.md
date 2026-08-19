@@ -1214,8 +1214,63 @@ The separately supplied `Decrypt_and_label_encrypted_ptrs.py` is IDAPython. It d
 encrypted-string stub forms, decodes their text, then heuristically labels one associated global
 pointer; it does not decrypt arbitrary function pointers or recover missing function boundaries.
 Its default `APPLY=True` rename mode and fixed Windows JSON output path are also unsuitable for the
-current Ghidra project. Its stub formulas are useful reference for hidden diagnostics, but the
-script is not run against this database and does not replace the native route analysis above.
+current Ghidra project. A read-only standalone port of its string formula found 1,227 stubs and
+decoded 1,001 strings in this exact runtime dump. Those strings supplied useful manager names but
+no parameter-body codec. The script has not modified the Ghidra database and does not replace the
+native route analysis above.
+
+### `remote-join-data` parameter and exact wire codec
+
+The 0xA8 activity-start record is not merely adjacent to group parameters: it is the exact value of
+registry parameter 13, `remote-join-data`. `FUN_1417A9820` constructs the 25 wrapper table at
+parameter-manager subobject `+0xB968`; entry 13 points at the wrapper whose current value is exposed
+at native manager `+0x19068`. `FUN_14175A880` tests both parameters 12 and 13, and the managed-session
+pump obtains the live record through the parameter-13 wrapper before choosing the `+0x12` route.
+
+Message 38 (`parameters-update`) is registered by `FUN_1416E1640` with decoded size `0xAC20`.
+Its encoder `FUN_1417A28F0` writes grouped release/carry masks and dispatches each carried body
+through a 0x50-byte codec-registry entry. Its decoder `FUN_1417A2670` performs the inverse. The
+registry is initialized by `FUN_1417BAE60`; parameter 13 has size `0xA8`, encoder
+`FUN_1417BC570`, and decoder `FUN_1417BC410`. This proves the complete body format:
+
+- `+0x00`: 4 bits, valid 0 through 8;
+- `+0x04`: 2 bits, valid 0 through 2;
+- `+0x08`: 2 bits, valid 0 through 2;
+- `+0x0C`: one presence bit, then a 2-bit value when present; absent decodes as `UINT32_MAX`;
+- `+0x10`: 3 bits;
+- `+0x12`: one route bit;
+- `+0x11`: 2 bits;
+- `+0x13`: one bit;
+- `+0x18`: one raw memory-order 64-bit value;
+- `+0xA0`: 3 bits, valid 0 through 4;
+- `+0xA1` and `+0xA2`: 5 bits each, valid 0 through 18;
+- `+0xA3`: one bit;
+- `+0x20`: the 128-byte endpoint descriptor, encoded last through `FUN_1403EB460`.
+
+The endpoint descriptor is the same layout Sunrise already publishes for a region: 8-byte machine
+id, 86-byte `NetAddr`, 16-byte join key, and 18-byte online-session tail. Its codec writes one bit
+for an entirely empty descriptor. Otherwise it writes the machine id and join key raw, the four-bit
+NetAddr method plus 41 direct-method bytes (85 bytes for relay methods 6/7), and a presence bit plus
+the 18-byte session tail. This lets Sunrise reuse `descriptor::build` rather than manufacture a
+second address layout.
+
+The decoded update then reaches `FUN_141788050`, which passes the carry mask and message body to
+`FUN_1417A4BE0`. That routine walks all 25 wrappers, advances each value by
+`align8(size + 8)`, and applies the value through wrapper vtable slot `+0x58`. The native outbound
+path `FUN_14176E5A0` performs the corresponding wrapper copy and sends message 38. Parameter 13 is
+therefore the normal authority-to-peer call that supplies the activity-start record; a separate
+custom entity RPC is not involved.
+
+Sunrise now contains the exact parameter-13 encoder, including native range checks and descriptor
+compression. It is intentionally not included in automatic parameter-request answers yet. A zeroed
+record is valid on the wire but chooses the local route and can recreate the missing-director state.
+The passive route probe now logs the complete 0xA8 record once per identity/branch, along with all
+bounded fields. One native EDZ exemplar is required to populate the server record without guessing.
+
+There are two different native name tables. The wrapper table calls entries 22 and 23
+`clan-lobby-data` and entry 24 `network_quality`; the codec registry calls the same indices
+`matchmaking-data`, `matchmaking-peer-data`, and `network-quality`. Sunrise's diagnostic registry
+uses the codec names and is therefore not renamed from the wrapper labels.
 
 ### Complete activity-logic archive
 
@@ -1392,6 +1447,21 @@ the selected `group`, `group_published`, `group_settled`, and combined `ready` g
 host retains its last two successful activity-host promotions after an admitted row is released;
 a fresh join attempt for the same group clears that remembered promotion before it can qualify.
 
+The next long patrol run exposed a different lifecycle generation bug. The initial visits to
+regions 80, 96, and 24 completed, but a later return to region 96 reused its deterministic gameplay
+group. That group still appeared in the durable settled-history array, so the keepalive suppressed
+the new descriptor even though the scalar markers still named `published=88` and `settled=24`.
+Once the client had no target descriptor, it repeatedly completed and restarted `PUB96.96`: tokens
+20 through 122 advanced in about 2.5 seconds. This transition storm is the concrete cause of that
+run's apparent lockup and is upstream of entity creation.
+
+Group history is now qualified by the scalar region marker to form a visit generation. Returning
+to a previously settled region therefore publishes its descriptor again. A reused group also keeps
+durable view/host readiness, so retirement additionally requires that the descriptor was published
+on the current visit; historical readiness can no longer erase it from the very first re-entry
+membership. The following delivered membership may retire it normally. This retains group-keyed
+out-of-order protection while rearming deterministic region sessions on patrol loops.
+
 ## Source areas changed
 
 The current checkpoint includes work in:
@@ -1418,6 +1488,8 @@ The current checkpoint includes work in:
 3. Confirm a transition is never stopped and its target group gracefully left before the matching
    server `activityhost result=queued`. There must be no immediate same-region transition restart,
    `previous target group session was not yet disconnected`, or duplicate managed-session warning.
+   Re-enter a previously visited public region as part of this check: it must receive a new
+   descriptor-bearing membership and must not spin through same-region transition tokens.
 4. If `network_update` stalls again, read the first `stage=network-hitch` line. The new
    `managed=active/entered/returned/thread` fields distinguish a stall inside `FUN_14175E520` from
    another child of `network_update`.
@@ -1442,10 +1514,12 @@ The current checkpoint includes work in:
 13. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
    sobject is accepted; do not assume the squad codec can create the underlying native squad.
 14. On the next EDZ load, capture all `stage=activity-route-record` and `stage=activity-route`
-   lines. Identity 1 with `selector=0 route=local` proves the decoded start record chose the wrong
-   branch. A nonzero selector followed by `route=authored called` without `ok` localizes a stall
-   inside its native initializer; `route=authored result=ok` moves the next boundary downstream to
-   authored component/director startup.
+   lines. The record line now includes bounded fields `f00..a3` and the complete 0xA8 `bytes=`
+   exemplar needed to populate parameter 13. Identity 1 with `selector=0 route=local` proves the
+   decoded start record chose the wrong branch. A nonzero selector followed by
+   `route=authored called` without `ok` localizes a stall inside its native initializer;
+   `route=authored result=ok` moves the next boundary downstream to authored component/director
+   startup.
 15. Capture one `stage=activity-mode`, its following
    `stage=activity-mode-definition`, and the distinct `stage=activity-type` pairs. Compare
    `source`, `destination`, and `element` with service 6's `from_activity=8`, `activity=8`, and absent

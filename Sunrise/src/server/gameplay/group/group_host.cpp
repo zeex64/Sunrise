@@ -34,6 +34,15 @@ constexpr std::size_t kBodyCapacity = 128;
 constexpr std::size_t kMembershipBodyCapacity = 512;
 /** Only the low 25 bitmap bits name a registry parameter. */
 constexpr std::uint64_t kParameterMaskBits = 0x1FFFFFF;
+/**
+ * Values safe to synthesize when the peer requests them.
+ * Parameter 13 has a proven encoder now, but its authored-route fields are deliberately withheld
+ * until one native record establishes their values. Sending a cleared record would select the
+ * local route and recreate the missing-director failure.
+ */
+constexpr std::uint64_t kAnswerableParameters =
+    wire::kEncodableParameters
+    & ~(std::uint64_t{1} << static_cast<std::uint8_t>(wire::Parameter::remoteJoinData));
 /** Room for every registry name plus its separators. */
 constexpr std::size_t kParameterNameCapacity = 640;
 /** Member index this host takes, and the index it nominates to succeed it. */
@@ -591,7 +600,7 @@ void accept_view(const state::gameplay::Endpoint& from,
  * @param requested Requested parameter mask, already reduced to its meaningful bits.
  */
 void answer_parameters(std::uint64_t sessionId, std::uint64_t requested) noexcept {
-    std::uint64_t carried = requested & wire::kEncodableParameters;
+    std::uint64_t carried = requested & kAnswerableParameters;
     // Claims the region's slot rather than only reading it, so a request arriving before the
     // advertisement still makes the service slice allocate one.
     if (activity_host_session(sessionId, kUnknownRegion) == state::activity::kAbsentSessionId) {
