@@ -421,7 +421,10 @@ __declspec(noinline) int __fastcall decode_list(void* context,
     __try {
         if (lease.accepting) {
             manager = manager_from_context(context, namespaceId);
-            trace = namespaceId == 2 && g_decodeTraceBudget.load(std::memory_order_relaxed) != 0
+            // FUN_141718510 is the shared direct-entity decoder for every scheduler namespace.
+            // The armed server create is already restricted to one stable view, so trace whichever
+            // namespace owns that view instead of silently discarding an initial-zone capture.
+            trace = namespaceId >= 0 && g_decodeTraceBudget.load(std::memory_order_relaxed) != 0
                     && inspect_reader(reader, before) && claim_decode_trace();
         }
         if (call != nullptr) {

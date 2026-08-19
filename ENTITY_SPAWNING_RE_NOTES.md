@@ -1462,6 +1462,20 @@ on the current visit; historical readiness can no longer erase it from the very 
 membership. The following delivered membership may retire it normally. This retains group-keyed
 out-of-order protection while rearming deterministic region sessions on patrol loops.
 
+The same run explains why `entity-create-out` previously required extensive zone movement. The
+initial EDZ content populated namespace 1 to 13 occupied native slots at `t=72588`, then that view
+converged to the supported single-view scheduler layout. Namespace 2 did not exist until the next
+public-region join and began with zero occupied slots. Sunrise nevertheless required namespace 2
+in both its create planner and its decoder trace, so it ignored the ready initial-zone manager and
+waited for unrelated movement to populate the hard-coded namespace.
+
+Ghidra resolves the hooked direct entity-list decoder to `FUN_141718510`. Its manager comes from the
+context and all slot/anchor/create handling is shared; the routine contains no namespace-specific
+codec branch. The create writer also emits one selected scheduler view and carries no namespace
+field. The planner now accepts any nonnegative native namespace that still passes the existing
+one-view signature agreement, 13-object baseline, pristine slot generations, control-queue, and
+500 ms stability gates. Decoder tracing follows the armed view's namespace for the same reason.
+
 ## Source areas changed
 
 The current checkpoint includes work in:
@@ -1499,8 +1513,8 @@ The current checkpoint includes work in:
 6. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
    `restart=1`, followed by ordinary stages 1 through 5. If local and remote both pause at stage 4,
    confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
-7. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
-   must no longer be required.
+7. Remain in the initial zone while its first entity namespace finishes native baseline
+   population; movement must no longer be required and the namespace does not have to equal 2.
 8. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
    directly, without waiting for unrelated BAP or zone-transition traffic.
 9. Confirm a create can now fire in the initial settled zone at any logical entry without movement,

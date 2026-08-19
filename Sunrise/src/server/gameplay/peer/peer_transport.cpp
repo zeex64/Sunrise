@@ -72,11 +72,9 @@ constexpr std::size_t kExternalProbeByteCapacity = 256;
  * sequences ahead of its window, so this host must not send faster than the peer does.
  */
 constexpr std::uint64_t kResendInterval = 250;
-/** Only namespace 2 has completed the native entity-list and kind-0 create decoders. */
-constexpr std::int32_t kFirstEntityNamespace = 2;
 /** Common placed EDZ NPC sobject RSAT selected from the installed scenario graph. */
 constexpr std::uint32_t kFirstEntityRsat = 0x80C4FEAD;
-/** EDZ namespace 2 owns thirteen native objects before a server-authored slot is safe. */
+/** The first EDZ entity view owns thirteen native objects before a server-authored slot is safe. */
 constexpr std::uint32_t kFirstEntityBaselineOccupied = 13;
 /** A pristine slot's first native allocation advances object generation zero to two. */
 constexpr std::uint8_t kFirstObjectGeneration = 2;
@@ -310,7 +308,7 @@ write_scheduler_signature(bits::Writer& writer,
 
     client::hooks::network::entity_slot_probe::ViewCapture capture{};
     if (!client::hooks::network::entity_slot_probe::find(peer.view.token, capture)
-        || !capture.candidatePresent || capture.namespaceId != kFirstEntityNamespace
+        || !capture.candidatePresent || capture.namespaceId < 0
         || capture.occupiedCount < kFirstEntityBaselineOccupied || capture.slot >= 0x2000
         || capture.availableCount == 0 || capture.handleGeneration != 0
         || capture.reservedGeneration != 0 || capture.objectGeneration != 0) {
