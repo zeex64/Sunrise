@@ -1881,6 +1881,26 @@ The clean five-bit form was accepted by the decoder but then triggered a repeati
 framing proof and must not remain on the published path. The next build replaces it with the exact
 112-bit native default-transform form. Its predicted accepted entity-list size is 190 bits.
 
+The transform-bearing live run then returned `result=0 count=1` after exactly 190 bits. Its decoded
+mask began with `01`, namespace occupancy advanced from 13 to 14, and the repeating blank-update
+assertion disappeared. The decoded transform prefix was:
+
+```text
+0000000000000000880FC93BC4FE7F3F00000000000000000000000000000000
+```
+
+The first float4 is the quantized quaternion, approximately `[0, 0, 0.0061, 0.99998]`; the second
+float4 remains zero. This validates both the reconstructed 112-bit wire and transform dirty-bit
+behavior. The next diagnostic privately changes each element of that second float4 to `1.0` in
+turn and invokes the same native encoder. It also combines flushed bytes with pending accumulator
+bits into one complete wire string, so X/Y/Z/W payloads can be compared directly without mutating
+the live object.
+
+At `t=105336`, during a later regional transition, the channel timed out after four seconds without
+a valid receive and reported 146 corrupt reads. Server send calls continued to return success. The
+accepted transform record did not leave a partial entity decode, but the channel result means packet
+hygiene remains a parallel blocker and visibility experiments must stay bounded.
+
 An intermediate channel report counted `14 ok, 290 discard-expected, 75 corrupt`, but there was no
 four-second gameplay timeout. Valid gameplay and BAP traffic continued. The activity-host failure
 at `t=173667` followed an activity-host change, and the later failures at shutdown were ordinary
@@ -1964,8 +1984,9 @@ The current checkpoint includes work in:
 2. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
    passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
    required by actual enemies; object allocation alone does not start AI.
-3. If it remains invisible, privately encode controlled changes to the decoded transform's second
-   float4 to recover the position fields and then publish a position near the player.
+3. Capture the four `spatial-transform-second-{x,y,z,w}1` private probe lines and compare their
+   complete native wire strings. Identify the translation fields, then publish one bounded position
+   only after its encoder results are internally consistent.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.

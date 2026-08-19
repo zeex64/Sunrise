@@ -82,16 +82,26 @@ The create-plus-clean-update run then completed exactly as predicted:
   with a blank mask. Traffic continued, but the assertion loop confirms that an empty update must
   not be published as the object's initial update.
 
+The following transform-bearing run also matched its prediction:
+
+- Attempt 2 returned `result=0 count=1` after exactly 190 bits.
+- The record retained flags `0x0003` and its decoded mask began with `01`, proving transform dirty.
+- Namespace 1 advanced from 13 to 14 occupied objects and the blank-update assertion disappeared.
+- Quaternion decompression produced approximately `[0, 0, 0.0061, 0.99998]`; the second float4
+  remained `[0, 0, 0, 0]` and is now the controlled position-probe target.
+- The gameplay channel later reported 146 corrupt reads and a four-second receive timeout during a
+  regional transition. The transform record itself decoded cleanly, but channel hygiene is not yet
+  considered solved.
+
 ## Immediate plan
 
-### 1. Validate the transform-bearing initial update
+### 1. Recover native position encoding
 
-The current build replaces the invalid five-bit blank update with the exact 112-bit native default
-transform update. The predicted entity-list size is 190 bits: the proven 78-bit create plus the
-112-bit update. The record should retain flags `0x0003`, create flag 1, and update size 217, while
-its decoded dirty mask now marks transform instead of triggering the blank-mask assertion loop.
+The current build keeps the validated 112-bit default transform on the live path and privately sets
+each element of the transform's second float4 to `1.0`. Comparing those four native encodings will
+identify which fields carry X/Y/Z position without publishing speculative coordinates.
 
-### 2. Publish a minimal spatial update
+### 2. Publish one bounded position
 
 After validating the transform probe output, recover:
 
@@ -102,9 +112,10 @@ After validating the transform probe output, recover:
 - the initial native update and dirty-component masks;
 - whether a kind-1 squad relationship is additionally required.
 
-After validating the default transform on the live path, use private native encoding of controlled
-transform source values to recover position fields before publishing a location near the player.
-Keep retries bounded and do not hand-author compressed transform fields.
+The diagnostic also reconstructs flushed and pending writer state into one complete wire hex
+string. No perturbed transform is published. Use those native results to identify position fields
+before publishing a location near the player. Keep retries bounded and do not hand-author
+compressed transform fields.
 
 ### 3. Complete safe scheduler support
 
@@ -137,10 +148,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code sends the exact 112-bit native default-transform update recovered from the
-  private encoder probe.
+- Current working code sends the exact 112-bit native default-transform update and privately probes
+  each element of its second float4 to recover position encoding.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `667eeeb07f1386816104fa65e4c68648c62f14893c0ba171b0c4b67354ec3817`
+- DLL SHA-256: `56748fe9e2395bcfe58219fbc848721183f257943244eafc59c31d19358601bb`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

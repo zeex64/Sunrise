@@ -30,6 +30,8 @@ constexpr std::size_t kSyntheticComponentCapacity = 0x200;
 constexpr std::size_t kSyntheticWireCapacity = 0x100;
 /** Native update contexts extend through the diagnostic byte at +0x54. */
 constexpr std::size_t kSyntheticContextSize = 0x60;
+/** The decoded transform stores its second float4 immediately after the quaternion. */
+constexpr std::size_t kTransformSecondFloat4Offset = 0x10;
 
 std::array<std::atomic_uint64_t, kSeenCapacity> g_seen{};
 std::atomic_bool g_decodedRecordProbed{};
@@ -182,6 +184,14 @@ void set_context_pointer(std::span<std::byte> context,
     std::memcpy(context.data() + offset, &value, sizeof value);
 }
 
+/** Changes one private transform float without depending on host floating-point behavior. */
+void set_component_one(std::span<std::byte> component, std::size_t offset) noexcept {
+    constexpr std::uint32_t kFloatOne = 0x3F800000;
+    if (offset <= component.size() - sizeof kFloatOne) {
+        std::memcpy(component.data() + offset, &kFloatOne, sizeof kFloatOne);
+    }
+}
+
 /**
  * Runs the game's own update encoder against private copies and reports its exact bit result.
  * The dirty and sent masks keep the decoded mask's native metadata but contain no dirty fields.
@@ -238,6 +248,21 @@ void encode_synthetic_variant(const char* variant,
     }
     std::array<char, kSyntheticWireCapacity * 2 + 1> wireHex{};
     hex(std::span<const std::byte>{wire.data(), flushed}, wireHex);
+    std::array<std::byte, kSyntheticWireCapacity> completeWire{};
+    const std::size_t copied = flushed < completeWire.size() ? flushed : completeWire.size();
+    std::copy_n(wire.begin(), copied, completeWire.begin());
+    std::uint32_t pending = writer.pendingBits;
+    std::size_t completeSize = copied;
+    while (pending != 0 && completeSize < completeWire.size()) {
+        const std::uint32_t width = pending < 8 ? pending : 8;
+        const std::uint32_t shift = pending - width;
+        const std::uint64_t mask = (1ULL << width) - 1ULL;
+        const auto value = static_cast<std::uint8_t>((writer.accumulator >> shift) & mask);
+        completeWire[completeSize++] = static_cast<std::byte>(value << (8 - width));
+        pending -= width;
+    }
+    std::array<char, kSyntheticWireCapacity * 2 + 1> completeWireHex{};
+    hex(std::span<const std::byte>{completeWire.data(), completeSize}, completeWireHex);
     std::uint32_t metadata = 0;
     std::memcpy(&metadata, mask.data() + sizeof(std::uint64_t), sizeof metadata);
     std::uint32_t rsat = 0;
@@ -252,7 +277,7 @@ void encode_synthetic_variant(const char* variant,
         line.size(),
         "ev=gameplay stage=sobject-native-update-probe variant=%s result=%llu fault=%u "
         "rsat=0x%08X flag=%u dirty0=%u mask_meta=0x%08X bits=%d flushed=%d pending=%u "
-        "accum=0x%016llX bytes=%zu hex=%s component0=%s",
+        "accum=0x%016llX bytes=%zu hex=%s full_bytes=%zu full_hex=%s component0=%s",
         variant,
         static_cast<unsigned long long>(result),
         faulted ? 1U : 0U,
@@ -266,6 +291,8 @@ void encode_synthetic_variant(const char* variant,
         static_cast<unsigned long long>(writer.accumulator),
         flushed,
         wireHex.data(),
+        completeSize,
+        completeWireHex.data(),
         componentHex.data());
     if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
         core::log::write(core::log::Channel::client,
@@ -425,6 +452,24 @@ void probe_decoded_record(std::span<const std::byte> create,
     encode_synthetic_variant("spatial-clean", spatialCreate, spatialComponent, nativeMask, false);
     encode_synthetic_variant(
         "spatial-transform-default", spatialCreate, spatialComponent, nativeMask, true);
+
+    // Perturb each element of the transform's second float4 independently. These private calls
+    // identify translation/auxiliary fields and recover exact native wire without touching the
+    // object that the live decoder just accepted.
+    std::array<std::byte, kSyntheticComponentCapacity> positionComponent = spatialComponent;
+    constexpr std::array<const char*, 4> kPositionVariants{
+        "spatial-transform-second-x1",
+        "spatial-transform-second-y1",
+        "spatial-transform-second-z1",
+        "spatial-transform-second-w1",
+    };
+    for (std::size_t index = 0; index < kPositionVariants.size(); ++index) {
+        positionComponent = spatialComponent;
+        set_component_one(positionComponent,
+                          kTransformSecondFloat4Offset + index * sizeof(std::uint32_t));
+        encode_synthetic_variant(
+            kPositionVariants[index], spatialCreate, positionComponent, nativeMask, true);
+    }
 }
 
 void reset() noexcept {
