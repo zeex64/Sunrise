@@ -137,19 +137,27 @@ The first live nearby-placement run was accepted but remained invisible:
 - The Vandal RSAT carries 55 serialized component descriptors versus 2 in the old RSAT. The old
   112-bit transform update cannot frame that suffix safely. The next build sends one bounded
   Vandal create with no update and logs its native derived create profile.
+- That create-only run was accepted on attempt two after exactly 77 bits. Its native profile is
+  `22545B8101000000BC2200005E000000`: an 8,892-byte update scratch and derived value `0x5E`.
+  Namespace 1 advanced from 13 to 14 occupied objects.
+- The injected baseline let the private encoder recover the Vandal-specific wire safely. Its clean
+  update is 25 bits; its transform-dirty update is 132 bits. The exact nearby-player X+3 wire is
+  `C01440009A941F109724294A1F400000` followed by four zero bits.
+- The next build carries that exact update with the Vandal create. The create-only missing-update
+  assertions are no longer expected.
 
 ## Immediate plan
 
-### 1. Validate the Simulated Vandal create profile
+### 1. Validate the transform-bearing Simulated Vandal
 
-The current build selects RSAT `0x815B5422`, preserves the spatial create flag, and deliberately
-publishes no update. It still emits only one entity and retains the existing bounded loader retry
-behavior. The expected evidence is an attempt-one resource queue followed by one accepted
-create-only record whose `+0x08/+0x0C` fields reveal the Vandal's derived scratch layout.
+The current build selects RSAT `0x815B5422` and publishes its exact 132-bit native transform at the
+captured player position plus three units on X. It still emits only one entity and retains the
+existing bounded loader retry behavior. The predicted accepted record is 209 bits with flags
+`0x0003`, update size 8,892, transform dirty, and no missing-update assertions.
 
 ### 2. Publish one bounded position
 
-After validating the Vandal create profile, recover:
+After validating the Vandal transform, recover:
 
 - world transform and position;
 - parent relationship;
@@ -158,9 +166,9 @@ After validating the Vandal create profile, recover:
 - the initial native update and dirty-component masks;
 - whether a kind-1 squad relationship is additionally required.
 
-Measure the Vandal's all-clean and transform-dirty body through the native encoder, then place it at
-the already-proven nearby-player position. Keep retries bounded and do not append the old RSAT's
-two-field suffix to the Vandal's 55-component profile.
+Check the captured nearby-player position for rendering or registration evidence. If allocation and
+transform succeed but nothing renders, investigate lifecycle and stream registration before adding
+component fields. If it renders without behavior, the next boundary is the squad/member relation.
 
 ### 3. Complete safe scheduler support
 
@@ -195,11 +203,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code sends one create-only Simulated Vandal sobject RSAT `0x815B5422`, inherits
-  the active view's spatial cell, and retains bounded load retries. It does not yet publish a
-  Vandal update.
+- Current working code sends Simulated Vandal sobject RSAT `0x815B5422` with its exact 132-bit
+  nearby-player transform, inherits the active view's spatial cell, and retains bounded retries.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `05eac5a5d28369ec15f8cf433479957ed9dfef76f00bbd0cdc669279f32d823b`
+- DLL SHA-256: `cc56ab1604286e7911fab927a7ef59b82a752b55e36845d23fe3e3f1bdbe7a45`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

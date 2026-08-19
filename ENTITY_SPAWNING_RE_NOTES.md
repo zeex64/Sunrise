@@ -2018,6 +2018,22 @@ The next bounded build sends the Vandal create without an update, preserving the
 flag. A successful native decode will expose the Vandal-derived byte and bit layout in the existing
 16-byte `entity-record` create capture before any new update body is published.
 
+That create-only run succeeded exactly at the bounded retry. Attempt two consumed 77 bits and
+returned `result=0 count=1` for entity `0x0010000D`. The decoded create profile was
+`22545B8101000000BC2200005E000000`: RSAT `0x815B5422`, spatial flag one, derived update scratch
+size `0x22BC` (8,892 bytes), and derived profile value `0x5E`. The client injected its baseline,
+then namespace 1 occupancy advanced from 13 to 14. The missing-update assertions are expected for
+this diagnostic and disappear once the measured update is carried with the create.
+
+The injected baseline was sufficient for the private native encoder even though the report copies
+only the first 256 bytes of the 8,892-byte scratch. The Vandal all-clean update is 25 zero bits,
+showing that only 22 of its RSAT-derived decisions join transform, parent, and stream-source at the
+top update boundary. Marking only transform dirty produced 132 bits without a fault. At the current
+EDZ player position `(509.15094, 30.129612, 74.3163147)`, the exact X+3 wire is 128 flushed bits
+`C01440009A941F109724294A1F400000` plus four pending zero bits. The next build publishes those
+exact 132 bits with the accepted Vandal create; it does not infer the count from the 55 serialized
+descriptor records.
+
 The final old-RSAT component probe also clarified what not to add. Parent encoded in 49 bits and
 stream-source in 18 bits, while marking the first RSAT-defined field dirty raised the game's
 guarded `dirty bit inconsistency detected` assertion. The second RSAT bit produced only the clean
@@ -2075,14 +2091,15 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the create-only Simulated Vandal RSAT `0x815B5422` once in the initial EDZ zone without
-   moving. Confirm the first attempt queues the resource, a bounded retry returns one decoded
-   record, and the record's 16-byte create profile contains stable derived `+0x08/+0x0C` values.
-2. Use that accepted Vandal profile and the native private encoder to measure its all-clean and
-   transform-bearing updates. Do not reuse the old RSAT's two-field suffix.
-3. Publish one Vandal transform at the captured nearby-player position only after its complete
-   native component tail is known. If the object renders but has no AI, capture or implement the
-   kind-1 squad/member relationship; sobject allocation alone need not start behavior.
+1. Run the transform-bearing Simulated Vandal RSAT `0x815B5422` once in the initial EDZ zone
+   without moving. Confirm attempt two consumes 209 bits, returns one record with flags `0x0003`,
+   preserves update size 8,892, and advances namespace occupancy from 13 to 14 without either
+   missing-update assertion.
+2. Check visually three units along X from the captured initial EDZ position. If the Vandal still
+   does not render, distinguish lifecycle/stream registration from the already-proven definition,
+   RSAT, allocation, and transform layers before changing the payload again.
+3. If the object renders but has no AI, capture or implement the kind-1 squad/member relationship;
+   sobject allocation alone need not start behavior.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.
