@@ -1682,11 +1682,20 @@ correctly; forcing its headers or validator would only hide an incomplete bidire
 
 The next bounded experiment pairs a valid typed-zero request only with
 `live_region_session(activitySessionId)`. It never aliases zero to the local account. The selected
-SOID is distinct and is already the machine/session identity published for the embedded region
-host, giving the native connection path a real key it can plausibly reconcile. The account probe
+SOID is distinct and already names the live public activity session associated with the embedded
+region host, giving the native connection path a real server-owned key it can plausibly reconcile.
+The account probe
 now summarizes the first four active connection records as `cN[index=... soid=... state=...]`,
 including zero-valued records, so the experiment can be rejected immediately if the new host SOID
 has no matching connection.
+
+The first run of that experiment did not exercise the pairing. Svc 23 is sent over the primary BAP
+connection, and that connection's route-local `activitySessionId` remains zero even while private
+and public activity clients are both established. An overly strict nonzero guard therefore left
+every zero identity `source=none`, kept the source at `2/1`, and reproduced the same timeout. The
+connection summary confirmed one local record and 31 empty records. The corrected lookup always
+scans shared activity State for the newest region session; the zero route-local value is now only
+the fallback when that scan finds nothing.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the

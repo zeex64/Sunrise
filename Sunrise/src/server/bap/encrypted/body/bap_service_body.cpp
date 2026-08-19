@@ -95,8 +95,11 @@ bool process(const ServiceRoute& route,
         const state::AccountState account = state::account_snapshot();
         std::uint64_t identity = 0;
         const bool validIdentity = translation_identity(requestBody, identity);
+        // Account translation is requested on the primary BAP connection, whose session-local
+        // activity capability remains zero even after the public activity link is live. Scan the
+        // shared activity state first; the route-local id is only a fallback for other callers.
         const std::uint64_t hostSoid =
-            validIdentity && identity == 0 && activitySessionId != 0
+            validIdentity && identity == 0
                 ? state::activity::membership::live_region_session(activitySessionId)
                 : 0;
         const bool accountPair = validIdentity && identity != 0 && account.primarySoid != 0;
