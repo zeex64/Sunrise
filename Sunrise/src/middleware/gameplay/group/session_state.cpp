@@ -57,6 +57,12 @@ constexpr std::size_t kPeerValueOffset = 4;
 constexpr std::size_t kPeerCompatibilityOffset = 8;
 /** Join timestamp. */
 constexpr std::size_t kPeerTimestampOffset = 16;
+/** Native peer identity follows the connection group. */
+constexpr std::size_t kPeerIdentityOffset = 24;
+/** The peer-session-id is the first field of that identity. */
+constexpr std::size_t kPeerSessionIdOffset = 0;
+/** Native storage includes room for the terminating zero. */
+constexpr std::size_t kPeerSessionIdCapacity = 128;
 
 // --- Player table -----------------------------------------------------------------------------
 // Mirrors the peer table. An applied row also sets two words to all ones.
@@ -173,6 +179,16 @@ void build_session_state(const MembershipUpdate& body, SessionState& output) noe
                           sizeof(std::uint32_t));
             write_integer(
                 output, peer + kPeerTimestampOffset, member.joinTimestamp, sizeof(std::uint64_t));
+        }
+        // The complete-snapshot apply writes the decoded 0x108-byte identity at peer +0x18. The
+        // output replica starts cleared, so the optional identity arms Sunrise omits remain zero;
+        // only the proven peer-session-id bytes need to be mirrored for the trailing checksum.
+        const std::size_t peerSessionIdSize = member.peerSessionId.size() < kPeerSessionIdCapacity
+                                                  ? member.peerSessionId.size()
+                                                  : kPeerSessionIdCapacity - 1;
+        for (std::size_t byte = 0; byte < peerSessionIdSize; ++byte) {
+            output[peer + kPeerIdentityOffset + kPeerSessionIdOffset + byte] =
+                static_cast<std::byte>(static_cast<unsigned char>(member.peerSessionId[byte]));
         }
     }
 

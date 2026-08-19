@@ -1650,6 +1650,14 @@ does not overwrite its local native identity with guessed values. This is the sm
 change that can test whether the native account publisher was classifying a blank-identity host as
 an ordinary account-bearing peer.
 
+The first identity run decoded the string exactly, but exposed a checksum dependency before the
+join could proceed. The client calculated a different membership checksum, reported `no membership
+information`, disconnected, and retried the same citizen join every half second. The native peer
+table begins at state offset `0x1750`, has a `0x120` stride, and stores the decoded `0x108` identity
+at peer offset `+0x18`. Sunrise's checksum replica still left that region zero. The replica now
+copies the peer-session-id into the first 128 bytes of `peer+0x18`; every omitted optional identity
+field remains zero, matching the decoded complete-snapshot state.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
