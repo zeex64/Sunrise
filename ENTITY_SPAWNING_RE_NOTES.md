@@ -1,6 +1,6 @@
 # Server Entity Spawning / Native View Reverse-Engineering Notes
 
-Last updated: 2026-08-18
+Last updated: 2026-08-19
 
 ## Goal
 
@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 59918d13ce4f5957da8edb5c5477fa826d77c087734ba4c3484134a1b8550195
+SHA-256 1551506548c3d8cdaa41ebf2889b2b5e9218a9b069ad7ed607df6cb704980f73
 ```
 
 ## Confirmed high-level path
@@ -1748,6 +1748,21 @@ unsupported local layout and jumped to the attempt limit. The client remote sche
 same accepted one-view token throughout. The selected create now caches that exact one-view wire
 signature and validates the unchanged token, candidate slot/generations, remote signature, remote
 view count, key, and tag before each bounded retry. It does not publish a multi-view layout.
+
+The cached-layout run proved that the bounded retry itself now survives the local overlap view.
+Without movement, the first create left at `t=65559` and attempt two left at `t=67573`, both for
+token `0x9EAA300100200002`, namespace 1, slot 13, and the same key, generations, and RSAT. This
+removes scheduler-layout drift as the reason the retry was missing.
+
+That run also exposed an independent transport hazard. The native entity-list decoder returned
+result 2 after consuming 19 bits from the first create, and every ordinary acknowledgement carrying
+the echoed one-view scheduler continued entering the same pending decoder. It returned result 2
+and consumed 19 bits repeatedly until the channel reported `79 discard-expected, 66 corrupt` and
+timed out. The later namespace occupancy increase from 13 to 14 is inconclusive because no accepted
+entity record or visible enemy accompanied it. Ordinary acknowledgements now suppress the scheduler
+after the first entity attempt. Only an actual bounded create/retry packet carries the cached
+one-view scheduler, isolating pending resource decodes while allowing acknowledgement-only traffic
+to keep the channel alive.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the

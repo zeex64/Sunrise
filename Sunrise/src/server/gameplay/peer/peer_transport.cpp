@@ -1490,7 +1490,14 @@ void consume_established(const state::gameplay::Endpoint& from,
     // ordinary transport acknowledgements healthy while the multi-view handler tail is unmapped.
     const SelectedReplicationView selected = select_replication_view(peer);
     const bool viewPresent = selected.present && selected.signature.token != 0;
-    const bool schedulerPresent = viewPresent && peer.schedulerSignature.present
+    // Once an entity create has been attempted, its native decoder may retain a pending body
+    // while the requested RSAT loads. Repeating an otherwise empty scheduler body on every
+    // acknowledgement makes each of those packets enter the pending decoder again and the
+    // channel eventually classifies the stream as corrupt. Keep ordinary acknowledgements free
+    // of scheduler data between bounded attempts; an actual retry carries the exact cached
+    // one-view layout through entityCreate.present.
+    const bool schedulerWanted = entityCreate.present || peer.entityCreateAttempts == 0;
+    const bool schedulerPresent = schedulerWanted && viewPresent && peer.schedulerSignature.present
                                   && peer.schedulerSignature.viewCount == kProvenSchedulerViewCount;
     std::size_t size = 0;
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
