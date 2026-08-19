@@ -1606,6 +1606,22 @@ slot lifecycle around it. The readiness probe now reports the full active-bit co
 active slots. Do not force stage 5 or clear those bits: they represent native entity initialization
 that the server still needs to satisfy.
 
+The publisher probe made the account failure causal rather than correlational. A healthy svc-23
+translation at `t=37352` is followed by a native `1/1` snapshot. When the synthetic public host is
+added, svc 23 returns `unpaired` at `t=66655`; the publisher emits `2/1` at `t=66754` and the global
+timer starts immediately afterward. The server handler contained an explicit process-wide gate
+that paired only the first identity and returned an empty svc-24 response for every distinct later
+identity. That policy has been removed. In Sunrise's one-account loopback topology, every nonzero
+identity requested for the player or a synthetic activity host now maps to the local account SOID;
+malformed and zero identities still receive the empty response. Translation logs include the
+identity and selected SOID so duplicate-source behavior remains observable.
+
+The same run showed the public namespace active set start at slot 0, then grow to exactly 13
+contiguous slots `0..12` when twelve additional native sobjects register. It never clears, so the
+public view remains pending. A separate namespace-2 view with `active_count=0` immediately reports
+ready. The next entity boundary is therefore completion/acknowledgment of those 13 public native
+objects, not the readiness virtual or a general view flag.
+
 ### External NetDuma connection-table capture
 
 The shared `destiny 2.pcapng` is not a packet capture from the Destiny host's gameplay interface.

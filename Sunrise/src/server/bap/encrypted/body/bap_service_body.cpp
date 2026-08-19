@@ -1,5 +1,4 @@
 #include <array>
-#include <atomic>
 #include <cstdio>
 
 #include "../../../../core/logging/log.h"
@@ -30,34 +29,23 @@ constexpr std::size_t kTranslationIdentityOffset = 4;
 /** A request shorter than this carries no identity to read. */
 constexpr std::size_t kTranslationRequestSize =
     kTranslationIdentityOffset + middleware::encoding::kU64Size;
+/** One translation report carries the requested identity and selected account SOID. */
+constexpr std::size_t kTranslationReportLimit = 160;
 
 /**
- * Identity already paired with the account soid, or zero before the first pairing.
- * There is one account, so this is process-wide rather than per connection.
- */
-std::atomic<std::uint64_t> g_translatedIdentity{0};
-
-/**
- * Reports whether one svc-23 request may be paired with the account soid.
- * The reply writes the soid into a queuez roster member. Two identities on one soid put two
- * family-zero source entries on it, and every lookup then resolves only the first.
+ * Reads one svc-23 identity. Sunrise hosts one local account, but Destiny requests a translation
+ * for both that player and each synthetic activity-host peer. They must all resolve to the local
+ * account: returning an empty answer increments the native peer header without emitting its
+ * matching account entry, producing the fatal 2/1 account-SOID table.
  * @param requestBody Complete svc-23 request body.
- * @return True when this identity is the one paired, or the first to ask.
+ * @return Requested identity, or zero when the body cannot name one.
  */
-[[nodiscard]] bool pairs_identity(std::span<const std::byte> requestBody) noexcept {
+[[nodiscard]] std::uint64_t translation_identity(std::span<const std::byte> requestBody) noexcept {
     if (requestBody.size() < kTranslationRequestSize) {
-        return false;
+        return 0;
     }
-    const std::uint64_t identity = middleware::encoding::read_u64_be(
+    return middleware::encoding::read_u64_be(
         requestBody.subspan<kTranslationIdentityOffset, middleware::encoding::kU64Size>());
-    if (identity == 0) {
-        return false;
-    }
-    std::uint64_t claimed = 0;
-    // A repeat of the same identity still pairs: the peer re-asks until the flag sticks.
-    return g_translatedIdentity.compare_exchange_strong(
-               claimed, identity, std::memory_order_relaxed)
-           || claimed == identity;
 }
 
 } // namespace
@@ -89,14 +77,22 @@ bool process(const ServiceRoute& route,
         return true;
     case BodyCodec::accountTranslationResponse: {
         const state::AccountState account = state::account_snapshot();
-        // A zero soid makes the encoder write its zero-entry answer. That refuses an unpaired
-        // request without leaving the peer waiting.
-        const bool pairs = pairs_identity(requestBody);
+        const std::uint64_t identity = translation_identity(requestBody);
+        const bool pairs = identity != 0 && account.primarySoid != 0;
         const std::uint64_t soid = pairs ? account.primarySoid : 0;
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::info,
-                         pairs ? "ev=queuez stage=translate result=paired"
-                               : "ev=queuez stage=translate result=unpaired");
+        std::array<char, kTranslationReportLimit> line{};
+        const int count = std::snprintf(line.data(),
+                                        line.size(),
+                                        "ev=queuez stage=translate result=%s identity=0x%016llX "
+                                        "soid=0x%016llX",
+                                        pairs ? "paired" : "unpaired",
+                                        static_cast<unsigned long long>(identity),
+                                        static_cast<unsigned long long>(soid));
+        if (count > 0 && static_cast<std::size_t>(count) < line.size()) {
+            core::log::write(core::log::Channel::server,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
         return middleware::bap::account_translation::encode_response(
             requestBody, soid, output, written);
     }
