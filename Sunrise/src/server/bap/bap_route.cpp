@@ -63,6 +63,9 @@ void publish_account_mutation(Session& origin) noexcept {
 /** @param session Its secrets and identity are wiped. */
 void clear_session(Session& session) noexcept {
     SecureZeroMemory(&session, sizeof session);
+    // This sentinel cannot come from the member initializer because sessions are securely wiped.
+    // Region zero is valid, so leaving the field zero would suppress its first advertisement.
+    session.activityAdvertisedRegion = -1;
 }
 
 /**

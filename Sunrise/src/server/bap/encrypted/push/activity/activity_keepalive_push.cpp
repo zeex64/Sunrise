@@ -123,28 +123,28 @@ bool consume_activity_keepalive(Session& session,
     // publishing it during initial slice loading makes the root membership wait on a peer that the
     // world controller has not created yet.
     const std::int32_t effectiveRegion = effective_region(session.activitySessionId).index;
-    const std::uint64_t advertisedGroup = session.activityJoinedForeignSession
-                                              ? 0
-                                              : server::gameplay::group::advertised_group_session(
-                                                    effectiveRegion);
+    const std::uint64_t advertisedGroup =
+        session.activityJoinedForeignSession
+            ? 0
+            : server::gameplay::group::advertised_group_session(effectiveRegion);
     const std::uint64_t reflectedGroup =
         server::gameplay::group::session_admitted(advertisedGroup) ? advertisedGroup : 0;
     const bool groupReflectionChanged =
         reflectedGroup != 0 && reflectedGroup != session.activityReflectedGroupSession;
     // The client applies one membership update per revision and drops repeats. Either a new region
     // or a newly admitted gameplay host therefore needs a fresh root-membership revision.
-    const bool regionRepublishReady =
-        regionChanged
-        && server::gameplay::advertisement_state(reportedRegion)
-               == server::gameplay::AdvertisementState::ready;
+    const bool regionRepublishReady = regionChanged
+                                      && server::gameplay::advertisement_state(reportedRegion)
+                                             == server::gameplay::AdvertisementState::ready;
     if ((regionRepublishReady || groupReflectionChanged)
         && state::activity::membership::acknowledged(session.activitySessionId)
         && state::activity::membership::republish(session.activitySessionId)) {
-        core::log::write(core::log::Channel::server,
-                         core::log::Level::info,
-                         groupReflectionChanged
-                             ? "ev=gameplay stage=membership result=republished reason=gameplay-host"
-                             : "ev=gameplay stage=membership result=republished reason=region");
+        core::log::write(
+            core::log::Channel::server,
+            core::log::Level::info,
+            groupReflectionChanged
+                ? "ev=gameplay stage=membership result=republished reason=gameplay-host"
+                : "ev=gameplay stage=membership result=republished reason=region");
     }
     // Membership only becomes publishable after the client sends its identity, so it joins the
     // keepalive instead of the join reply.
@@ -175,12 +175,14 @@ bool consume_activity_keepalive(Session& session,
         hasMembership
         && (regionChanged || groupReflectionChanged
             || !state::activity::membership::acknowledged(session.activitySessionId));
+    const bool rootMembership = !session.activityJoinedForeignSession;
+    const bool includeCitizenAdvertisement = rootMembership && effectiveRegion >= 0
+                                             && effectiveRegion != session.activityAdvertisedRegion;
     // Resolved the way the body resolves it, not from the reported field. Before the first report
     // the arrival slice set stands in, and that first push carries a descriptor too.
     const server::gameplay::AdvertisementState advertisement =
-        publishesMembership && !session.activityJoinedForeignSession
-            ? server::gameplay::advertisement_state(
-                  effective_region(session.activitySessionId).index)
+        publishesMembership && includeCitizenAdvertisement
+            ? server::gameplay::advertisement_state(effectiveRegion)
             : server::gameplay::AdvertisementState::absent;
     if (publishesMembership && advertisement == server::gameplay::AdvertisementState::pending) {
         // The client applies one membership update per revision, so a push made while the
@@ -195,15 +197,16 @@ bool consume_activity_keepalive(Session& session,
         plan.membershipMutation = refresh;
         const bool sent = append_membership_notification(scratch,
                                                          plan,
-                                                         !session.activityJoinedForeignSession,
+                                                         rootMembership,
+                                                         includeCitizenAdvertisement,
                                                          key,
                                                          nextSendNonce,
                                                          scratch.framed,
                                                          framedSize);
         // Only `pending` leaves the trigger armed, because only `pending` is transient. `absent`
         // means this channel advertises nothing, so re-arming there republishes on every poll.
-        if (sent && reportedRegion >= 0) {
-            stagedAdvertisedRegion = reportedRegion;
+        if (sent && includeCitizenAdvertisement) {
+            stagedAdvertisedRegion = effectiveRegion;
         }
         if (sent && reflectedGroup != 0) {
             stagedReflectedGroupSession = reflectedGroup;
@@ -225,17 +228,16 @@ bool consume_activity_keepalive(Session& session,
         // This session is already the destination advertised by its parent. Membership creates
         // the native slot; another citizen advertisement or roster would recursively transition.
         std::array<char, core::log::kLineCapacity> line{};
-        const int count =
-            std::snprintf(line.data(),
-                          line.size(),
-                          "ev=activity stage=keepalive result=%s foreign=1 bytes=%zu "
-                          "membership=%u key=0x%llX token=%u revision=%u",
-                          published ? "ok" : "fail",
-                          framedSize,
-                          hasMembership ? 1U : 0U,
-                          static_cast<unsigned long long>(session.activityMemberKey),
-                          static_cast<unsigned>(reportedToken),
-                          reportedRevision);
+        const int count = std::snprintf(line.data(),
+                                        line.size(),
+                                        "ev=activity stage=keepalive result=%s foreign=1 bytes=%zu "
+                                        "membership=%u key=0x%llX token=%u revision=%u",
+                                        published ? "ok" : "fail",
+                                        framedSize,
+                                        hasMembership ? 1U : 0U,
+                                        static_cast<unsigned long long>(session.activityMemberKey),
+                                        static_cast<unsigned>(reportedToken),
+                                        reportedRevision);
         if (count > 0) {
             core::log::write(core::log::Channel::server,
                              core::log::Level::debug,

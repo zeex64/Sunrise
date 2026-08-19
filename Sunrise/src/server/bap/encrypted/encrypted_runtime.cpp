@@ -11,6 +11,7 @@
 #include "activity_transaction/activity_transaction_notifications.h"
 #include "bap_connection_publication.h"
 #include "internal.h"
+#include "push/activity/activity_membership_push.h"
 #include "push/activity/activity_roster_push.h"
 #include "queuez/queuez_outcome_staging.h"
 #include "transactions/service_outcome_commit.h"
@@ -217,6 +218,7 @@ bool consume(Session& session,
             publish_connection_fields(session, publication, connection);
             // The caller copy is done, so what the staged roster body owes is settled here.
             push::activity::commit_staged_roster(session);
+            push::activity::commit_staged_advertised_region(session);
             session.accountMutationPublished = mutatesAccount;
             if (transaction_if<EquipmentSwapTransaction>(outcome) != nullptr) {
                 std::array<char, core::log::kLineCapacity> line{};
@@ -346,6 +348,7 @@ bool consume(Session& session,
     if (!handled) {
         // The staged body is dropped, so its grant and its state byte go back for the next push.
         push::activity::discard_staged_roster(session);
+        push::activity::discard_staged_advertised_region(session);
     }
     clear_prefix(scratch.plaintext, plaintextSize);
     clear_prefix(scratch.responseBody, responseBodySize);

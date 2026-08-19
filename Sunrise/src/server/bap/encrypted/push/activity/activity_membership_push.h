@@ -13,7 +13,8 @@ namespace sunrise::server::bap::encrypted::push::activity {
  * Appends one current membership svc9 notification and advances its local nonce.
  * @param scratch Lock-owned transform buffers.
  * @param activity Session and prepared State snapshot picked by the svc8 route.
- * @param includeCitizenAdvertisement Whether the region record may advertise another activity.
+ * @param rootMembership Whether this is the active root membership rather than a foreign copy.
+ * @param includeCitizenAdvertisement Whether the root record carries a new citizen descriptor.
  * @param key Active AES-GCM session key.
  * @param nonce Local send nonce advanced only after the complete notification exists.
  * @param response Lock-owned complete-frame staging storage.
@@ -23,10 +24,20 @@ namespace sunrise::server::bap::encrypted::push::activity {
 [[nodiscard]] bool
 append_membership_notification(Scratch& scratch,
                                const activity_message::ActivityPlan& activity,
+                               bool rootMembership,
                                bool includeCitizenAdvertisement,
                                std::span<const std::byte, state::kAesKeySize> key,
                                std::array<std::byte, state::kBapNonceSize>& nonce,
                                std::span<std::byte> response,
                                std::size_t& written) noexcept;
+
+/** Records the region named by a transaction-staged citizen descriptor. */
+void stage_advertised_region(Session& session, std::int32_t region) noexcept;
+
+/** Publishes the transaction-staged advertised region after its frame reaches the caller. */
+void commit_staged_advertised_region(Session& session) noexcept;
+
+/** Drops the transaction-staged advertised region with its discarded frame. */
+void discard_staged_advertised_region(Session& session) noexcept;
 
 } // namespace sunrise::server::bap::encrypted::push::activity

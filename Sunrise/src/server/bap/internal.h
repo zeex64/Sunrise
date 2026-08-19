@@ -95,6 +95,10 @@ struct Session {
      * leaves the region-change trigger armed for the next poll.
      */
     std::int32_t activityAdvertisedRegion{-1};
+    /** Region named by a transaction-staged citizen descriptor, committed after caller delivery. */
+    std::int32_t activityAdvertisedRegionStaged{};
+    /** True while a transaction owns a citizen-advertisement publication to settle. */
+    bool activityAdvertisedRegionStagedPresent{};
     /** Gameplay group already mirrored into the root membership's remote slot. */
     std::uint64_t activityReflectedGroupSession{};
     /**

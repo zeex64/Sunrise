@@ -1179,6 +1179,66 @@ full roughly 620-bit authored descriptor, while this branch only renames a captu
 clears the bits when no compatible capture exists. Treat that builder as external/unpublished work,
 not as code already available here.
 
+### Complete activity-logic archive
+
+The separate `destiny2-complete-activity-logic-archive` adds strong static package evidence, but it
+does not contain the missing server runtime. Its manifest covers 140,816 entity resources and 53
+component-class pairs. The archive itself distinguishes strong serialized links from name-affinity
+heuristics and explicitly cannot prove engine-only or server-only behavior.
+
+The active Sunrise destination is the archive's `edz_freeroam`, not `ambient_edz`: runtime logged
+both `successfully changed world to: edz_freeroam` and root roster bodies with
+`dest=edz_freeroam`. The archive identifies it as scenario `80B2F00A`, root `80B2EF39`, with
+12,376 entity definitions. Those include 1,443 spawn definitions, 1,863 squad definitions, 543
+trigger sources, 2,861 condition monitors, 1,011 action targets, and 651 objectives. This is direct
+evidence that the loaded patrol content contains enemy encounter logic; the absence of enemies is
+not because Sunrise accidentally selected the smaller `ambient_edz` scenario.
+
+One compact authored example under activity resource `80B2F02A` is:
+
+- `80B2E99F`: `pf2_simple_encounter._trigger_volume`, class `808099C8/808099C9`;
+- `80B2E997`: `pf2_simple_encounter._spawn_rule`, class `808094CF/808094D0`;
+- `80B2E99A`: the corresponding fallback spawn rule;
+- `80B2E9A2`: `pf2_simple_encounter._squad[0]`, class `80809A3B/8080948F`;
+- `80B9ABAE`: `pf2_simple_encounter._objective`;
+- a serialized WorldID placement links `80B2E997` to placed entity tag `80C5111C`.
+
+These hashes occupy different layers. `80B2E997` is an authored spawn-rule definition and
+`80C5111C` is a placed map entity; neither is evidence for the 40-bit RSAT field consumed by the
+runtime kind-0 sobject-create codec. The currently proven runtime RSAT `80C4FEAD` does not occur in
+this archive, which is expected because the archive inventories authored activity logic rather than
+the live sobject catalog observed by the client hook. Do not substitute an archive tag into the
+entity packet merely because its name says `spawn_rule`.
+
+The combined boundary is now clearer: Sunrise's 78-bit kind-0 create proves the gameplay transport,
+scheduler, handle, and sobject allocation path. Actual enemies should originate after the authored
+activity/director instance evaluates a trigger, spawn rule, and squad definition, then creates the
+native squad/member sobjects that use that replication path. The next spawning milestone is
+therefore reconstruction of the identity-1 authored-mode descriptor/director startup, followed by
+capturing the native sobject sequence it produces. A hand-built minimal create remains useful as a
+wire probe, but it is not an encounter substitute.
+
+### Same-region citizen-advertisement replay fix
+
+The no-entity freeze run isolated a separate control-plane bug. After the first `PUB448.4` join had
+completed, the client gracefully began leaving it. A root membership refresh then carried the same
+citizen descriptor again, causing a second transition to the same `PUB448.4` group session. The
+world controller force-disconnected the still-leaving target, the managed-session pump reported
+`Cannot create: Managed session with this identifier already exists`, and the replacement join
+stopped after `Queuing join-complete`. `network_update` later remained stalled. Ghidra confirms that
+the duplicate-identifier path is below managed-session pump `FUN_14175E520`; it is not in the entity
+sender, which emitted nothing in that run.
+
+The server bug was that `includeCitizenAdvertisement` also selected root-versus-foreign membership.
+Every root refresh consequently rebuilt the descriptor even when the region had already received
+it. Membership serialization now has two independent decisions: root records always retain their
+root identity and admitted gameplay-host reflection, while the citizen descriptor appears only when
+the planned region differs from the last region actually delivered. Transaction paths stage that
+region and publish it only after State commit and the caller copy succeed; discarded frames re-arm
+it. Keepalive publication uses the same one-shot rule. Session wiping now explicitly restores the
+`-1` sentinel, because `SecureZeroMemory` bypassed the member initializer and could otherwise make
+valid region zero look pre-advertised.
+
 ## Source areas changed
 
 The current checkpoint includes work in:
@@ -1194,16 +1254,18 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Cross one EDZ public-zone boundary and confirm multi-view transitions now keep the channel alive:
+1. Reproduce a busy public-zone handoff and confirm the client never starts a second transition to
+   the same region/session after `leaving session gracefully`; there must be no duplicate managed
+   session warning and every queued join-complete must advance to `sending initial join-complete`.
+2. If `network_update` stalls again, read the first `stage=network-hitch` line. The new
+   `managed=active/entered/returned/thread` fields distinguish a stall inside `FUN_14175E520` from
+   another child of `network_update`.
+3. Cross one EDZ public-zone boundary and confirm multi-view transitions now keep the channel alive:
    scheduler output should disappear while `scheduler[views=2]`, reliable reports should remain at
    `drop=0`, and no four-second `channel-manager-connected-timeout` should follow.
-2. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
+4. Load EDZ free roam and confirm a regressed client stage 1 produces one inbound view report with
    `restart=1`, followed by ordinary stages 1 through 5. If local and remote both pause at stage 4,
    confirm Sunrise does not send a second stage 4 and the native initiator eventually publishes 5.
-3. If `network_update` stalls again, read the one `stage=network-hitch` line. `observer=0 native=0`
-   excludes both log paths; nonzero `native` means the reported entered site never returned.
-4. Reproduce the PUB448-to-PUB96 or equivalent preempted handoff and confirm the join advances from
-   `Queuing join-complete` to `sending initial join-complete` and then `received`.
 5. Remain in the initial zone while namespace 2 finishes its native baseline population; movement
    must no longer be required.
 6. Confirm the first `stage=entity-create-out` follows the post-baseline `stage=entity-view` update
@@ -1218,9 +1280,9 @@ The current checkpoint includes work in:
    successfully created enemy.
 11. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
     sobject is accepted; do not assume the squad codec can create the underlying native squad.
-12. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime before using
-    its Towerfall conclusions for patrol. Locate or reconstruct the missing authored descriptor
-    builder separately; it is not present in this branch.
+12. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
+    or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
+    and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
 
 ## Build and verification
 

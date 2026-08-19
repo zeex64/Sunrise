@@ -33,6 +33,66 @@ namespace {
     return true;
 }
 
+/** Separates root-membership handling from the one-shot citizen descriptor it may carry. */
+struct MembershipPublication final {
+    std::int32_t region{-1};
+    bool root{};
+    bool includesCitizenAdvertisement{};
+};
+
+/** Resolves whether this transaction still owes a citizen advertisement for its planned region. */
+[[nodiscard]] MembershipPublication
+membership_publication(const Session& session,
+                       const activity_message::ActivityPlan& activity) noexcept {
+    MembershipPublication publication{};
+    publication.root = !session.activityJoinedForeignSession;
+    if (!publication.root || !activity.membershipMutation.hasSnapshot) {
+        return publication;
+    }
+    publication.region =
+        push::activity::planned_region(activity.membershipMutation, activity.sessionId).index;
+    publication.includesCitizenAdvertisement =
+        publication.region >= 0 && publication.region != session.activityAdvertisedRegion;
+    return publication;
+}
+
+/**
+ * Appends one membership body without replaying a citizen descriptor already delivered for the
+ * same region. A newly named region is staged on the connection until the enclosing transaction
+ * and caller copy both succeed.
+ */
+[[nodiscard]] bool stage_membership(Session& session,
+                                    Scratch& scratch,
+                                    const activity_message::ActivityPlan& activity,
+                                    std::span<const std::byte, state::kAesKeySize> key,
+                                    std::array<std::byte, state::kBapNonceSize>& nonce,
+                                    std::span<std::byte> response,
+                                    std::size_t& written,
+                                    bool& held) noexcept {
+    held = false;
+    if (!activity.membershipMutation.hasSnapshot) {
+        return false;
+    }
+    const MembershipPublication publication = membership_publication(session, activity);
+    held = publication.includesCitizenAdvertisement && advertisement_pending(activity);
+    if (held) {
+        return false;
+    }
+    const bool staged =
+        push::activity::append_membership_notification(scratch,
+                                                       activity,
+                                                       publication.root,
+                                                       publication.includesCitizenAdvertisement,
+                                                       key,
+                                                       nonce,
+                                                       response,
+                                                       written);
+    if (staged && publication.includesCitizenAdvertisement) {
+        push::activity::stage_advertised_region(session, publication.region);
+    }
+    return staged;
+}
+
 /**
  * Stages the whole host snapshot the client's state-refresh request asks for.
  * The order matches the keepalive: the global state, then membership, then the roster, because the
@@ -55,17 +115,9 @@ namespace {
                                  std::size_t& written) noexcept {
     bool staged = push::activity::append_global_state_notification(
         scratch, activity.sessionId, key, nonce, response, written);
-    const bool includeCitizenAdvertisement = !session.activityJoinedForeignSession;
-    if (activity.membershipMutation.hasSnapshot
-        && (!includeCitizenAdvertisement || !advertisement_pending(activity))) {
-        staged = push::activity::append_membership_notification(
-                     scratch,
-                     activity,
-                     includeCitizenAdvertisement,
-                     key,
-                     nonce,
-                     response,
-                     written)
+    if (activity.membershipMutation.hasSnapshot) {
+        bool held = false;
+        staged = stage_membership(session, scratch, activity, key, nonce, response, written, held)
                  || staged;
     }
     return session.activityJoinedForeignSession
@@ -97,18 +149,8 @@ namespace {
                                        std::size_t& written) noexcept {
     bool staged = false;
     bool held = false;
-    const bool includeCitizenAdvertisement = !session.activityJoinedForeignSession;
     if (activity.membershipMutation.hasSnapshot) {
-        held = includeCitizenAdvertisement && advertisement_pending(activity);
-        if (!held) {
-            staged = push::activity::append_membership_notification(scratch,
-                                                                    activity,
-                                                                    includeCitizenAdvertisement,
-                                                                    key,
-                                                                    nonce,
-                                                                    response,
-                                                                    written);
-        }
+        staged = stage_membership(session, scratch, activity, key, nonce, response, written, held);
     }
     if (activity.regionMoved && !session.activityJoinedForeignSession) {
         staged = push::activity::append_roster_notification(
@@ -156,13 +198,11 @@ bool stage_notifications(Session& session,
                                                                written);
     }
     if (activity.delivery == activity_message::Delivery::membershipNotification) {
-        return push::activity::append_membership_notification(scratch,
-                                                              activity,
-                                                              !session.activityJoinedForeignSession,
-                                                              key,
-                                                              nonce,
-                                                              response,
-                                                              written);
+        bool held = false;
+        const bool staged =
+            stage_membership(session, scratch, activity, key, nonce, response, written, held);
+        // A held membership is published by the next keepalive once its gameplay host exists.
+        return staged || held;
     }
     if (activity.delivery == activity_message::Delivery::refreshNotifications) {
         return stage_refresh(session, scratch, activity, key, nonce, response, written);
