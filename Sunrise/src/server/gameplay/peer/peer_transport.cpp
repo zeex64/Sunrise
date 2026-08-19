@@ -92,6 +92,15 @@ constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
 constexpr std::uint8_t kProvenSchedulerViewCount = 1;
 /** One-view scheduler wire is its update bit plus schema 0x80806AEA's 202-bit body. */
 constexpr std::uint16_t kProvenSchedulerWireBits = 203;
+/**
+ * Native schema 0x80809F75 encoding of the decoded default transform, followed by clear parent,
+ * stream-source, and two RSAT-defined presence fields. The client encoder measured this as 112
+ * bits: eight flushed bytes plus 48 pending zero bits.
+ */
+constexpr std::array<std::uint8_t, 14> kFirstEntityTransformUpdateWire{
+    0xC0, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
 
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
@@ -348,7 +357,17 @@ write_scheduler_signature(bits::Writer& writer,
            && writer.write(0, 1);
 }
 
-/** Writes one direct kind-0 sobject create plus an all-clean spatial update. */
+/** Replays the exact native default-transform update recovered by the private encoder probe. */
+[[nodiscard]] bool write_first_entity_transform_update(bits::Writer& writer) noexcept {
+    for (const std::uint8_t value : kFirstEntityTransformUpdateWire) {
+        if (!writer.write(value, kByteBits)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Writes one direct kind-0 sobject create plus its native default-transform update. */
 [[nodiscard]] bool write_entity_create_view(bits::Writer& writer,
                                             const EntityCreatePlan& plan) noexcept {
     // Trace only the bounded native decoder calls that follow this guarded server emission.
@@ -371,11 +390,9 @@ write_scheduler_signature(bits::Writer& writer,
         || !writer.write(plan.objectGeneration, 8) || !writer.write(0, 2)
         || !writer.write(kInstalledTagDiscriminator, 6) || !writer.write(1, 1)
         || !writer.write(plan.rsat, 32)
-        // Enable the named spatial layout, then carry the native-proven all-clean update:
-        // transform, parent, stream-source, and the two RSAT-defined presence bits.
-        || !writer.write(1, 1) || !writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1)
-        || !writer.write(0, 1)
-        || !writer.write(0, 1)
+        // Enable the named spatial layout. Its update begins immediately after this create flag.
+        || !writer.write(1, 1)
+        || !write_first_entity_transform_update(writer)
         // End entity lane and leave the fixed-control handler empty.
         || !writer.write(1, 1) || !writer.write(0, 1)) {
         return false;
@@ -1867,7 +1884,7 @@ void service(std::uint64_t now) noexcept {
             report(sent ? core::log::Level::info : core::log::Level::warn,
                    "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
                    "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u ogen=%u "
-                   "rsat=0x%08X bootstrap=%u",
+                   "rsat=0x%08X update=transform-default update_bits=%zu bootstrap=%u",
                    sent ? "sent" : "fail",
                    static_cast<unsigned long long>(entityCreates[index].token),
                    static_cast<unsigned>(owed[index].entityCreateAttempts),
@@ -1879,6 +1896,7 @@ void service(std::uint64_t now) noexcept {
                    static_cast<unsigned>(entityCreates[index].handleGeneration),
                    static_cast<unsigned>(entityCreates[index].objectGeneration),
                    entityCreates[index].rsat,
+                   kFirstEntityTransformUpdateWire.size() * kByteBits,
                    entityCreates[index].bootstrapScheduler ? 1U : 0U);
         }
         if (!sent) {

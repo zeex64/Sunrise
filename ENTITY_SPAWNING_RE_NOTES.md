@@ -1858,6 +1858,29 @@ claim. The decoder capture now retains 256 bytes so the expected `0x90 + 73 = 21
 scratch is complete. A second private pass then sets only dirty bit zero and asks the native encoder
 to emit `spatial-transform-default`, exposing the transform payload without sending it.
 
+That experiment completed as predicted. Attempt two returned `result=0 count=1`, consumed 83 bits,
+and produced a flags-`0x0003` record with a 217-byte update scratch. Its first 32 bytes are:
+
+```text
+0000000000000000000000000000803F00000000000000000000000000000000
+```
+
+Interpreted as eight little-endian floats, this is `[0, 0, 0, 1, 0, 0, 0, 0]`: an identity
+quaternion followed by zero translation/auxiliary values. The private transform-only re-encode
+returned 1 with `fault=0`, `bits=112`, `flushed=64`, `pending=48`, and accumulator zero. The first
+eight bytes were `C010000000000000`; the pending 48 zero bits complete the exact native wire as:
+
+```text
+C010000000000000000000000000
+```
+
+Because the update codec is the top-level kind-0 spatial encoder, those 112 bits include transform
+presence and payload followed by clear parent, stream-source, and two RSAT-defined presence fields.
+The clean five-bit form was accepted by the decoder but then triggered a repeating client assertion:
+`Injecting an update into gameworld with a blank update mask.` It is therefore useful only as a
+framing proof and must not remain on the published path. The next build replaces it with the exact
+112-bit native default-transform form. Its predicted accepted entity-list size is 190 bits.
+
 An intermediate channel report counted `14 ok, 290 discard-expected, 75 corrupt`, but there was no
 four-second gameplay timeout. Valid gameplay and BAP traffic continued. The activity-host failure
 at `t=173667` followed an activity-host change, and the later failures at shutdown were ordinary
@@ -1936,30 +1959,27 @@ The current checkpoint includes work in:
 ## Next investigation
 
 1. Run the current build once in the initial EDZ zone without moving. Confirm the retry reaches
-   `result=0 count=1`, consumes 83 bits, reports record flags `0x0003`, create flag 1, and update size
-   217. Occupancy should advance exactly once.
-2. Capture `spatial-clean` and `spatial-transform-default`. The clean variant must remain five zero
-   bits. The transform variant must return 1 without a fault; retain its component prefix, flushed
-   bytes, pending-bit count, and accumulator.
-3. Reconstruct the native transform bitstream and inspect the 32-byte source value. Publish it only
-   after the bit count, dirty-mask behavior, and decoded transform values are internally consistent.
-4. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
+   `result=0 count=1`, consumes 190 bits, reports record flags `0x0003`, create flag 1, update size
+   217, and a nonblank transform dirty mask. The repeating blank-update assertion must disappear.
+2. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
    passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
    required by actual enemies; object allocation alone does not start AI.
-5. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
+3. If it remains invisible, privately encode controlled changes to the decoded transform's second
+   float4 to recover the position fields and then publish a position near the player.
+4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
    suppressing scheduler output during two-view transitions, and treat any four-second timeout or
    new corrupt-read burst as a framing regression.
-6. Trace the activity-host lifecycle after the already-successful EDZ mode selection
+5. Trace the activity-host lifecycle after the already-successful EDZ mode selection
    (`definition=0x0109ED6B`, activity type 6) and public remote-session constructor. Identify which
    missing host state or server publication starts director/encounter evaluation. Do not modify the
    correct local-posse versus remote-public route selectors.
-7. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
+6. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
    squad `0x80B2E9A2` only to validate authored relationships. None is interchangeable with the
    runtime sobject RSAT field.
-8. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
+7. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
    exact native body. Its physics host and activity receipts can then become useful downstream,
    after visible entity replication is proven.
-9. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
+8. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
    before activity launch through initial zone load. The existing NetDuma file contains counters,
    not entity packets.
 

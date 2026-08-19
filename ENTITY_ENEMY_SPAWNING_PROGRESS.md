@@ -18,7 +18,7 @@ squads, and encounters before publishing native objects through the replication 
 | Gameplay session and views | Working and substantially stabilized |
 | Replication scheduler | One-view layout understood; the 203-bit framing correction is validated |
 | Native entity creation | A stationary 78-bit create now allocates an object reliably after one resource-load retry |
-| Entity placement and updates | Named-component order and scratch offsets are known; exact wire payload remains to be captured |
+| Entity placement and updates | Default transform wire recovered; transform-bearing create is ready for runtime validation |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
 
 ## Confirmed progress
@@ -69,20 +69,27 @@ The first private native re-encoding run then resolved the update-presence bound
 - Both variants returned 1 with `fault=0`; no hidden alignment, length, or payload bits occur in an
   all-clean update.
 
+The create-plus-clean-update run then completed exactly as predicted:
+
+- Attempt 2 returned `result=0 count=1`, consumed 83 bits, and decoded flags `0x0003`.
+- The decoded spatial scratch is 217 bytes and begins with the default transform
+  `0000000000000000000000000000803F00000000000000000000000000000000`, i.e. an identity
+  quaternion followed by zero translation/auxiliary values.
+- The private `spatial-transform-default` encoder returned 1 without a fault and produced 112 bits.
+  Its exact complete wire is `C010000000000000000000000000`: eight flushed bytes
+  `C010000000000000` followed by 48 pending zero bits.
+- The five-bit clean update caused the client to assert repeatedly that it was injecting an update
+  with a blank mask. Traffic continued, but the assertion loop confirms that an empty update must
+  not be published as the object's initial update.
+
 ## Immediate plan
 
-### 1. Validate create-plus-update framing
+### 1. Validate the transform-bearing initial update
 
-The current build changes the bounded record from create-only to create plus update, sets the
-spatial-layout flag, and appends the native-proven five zero presence bits. The expected accepted
-record has flags `0x0003`, create flag 1, and a 217-byte update scratch whose RSAT-defined region
-begins at `+0x90`. Its entity-list decode should consume 83 bits.
-
-The same run privately re-encodes that full spatial scratch twice:
-
-- `spatial-clean` should remain the proven 5-bit all-zero body;
-- `spatial-transform-default` marks only transform dirty and reveals the game's exact transform
-  payload without publishing it.
+The current build replaces the invalid five-bit blank update with the exact 112-bit native default
+transform update. The predicted entity-list size is 190 bits: the proven 78-bit create plus the
+112-bit update. The record should retain flags `0x0003`, create flag 1, and update size 217, while
+its decoded dirty mask now marks transform instead of triggering the blank-mask assertion loop.
 
 ### 2. Publish a minimal spatial update
 
@@ -95,9 +102,9 @@ After validating the transform probe output, recover:
 - the initial native update and dirty-component masks;
 - whether a kind-1 squad relationship is additionally required.
 
-First send a create-plus-update whose named presence bits are all clear, then use the native encoder
-to generate an identity transform with only the transform dirty bit set. Keep retries bounded and
-do not hand-author compressed transform fields.
+After validating the default transform on the live path, use private native encoding of controlled
+transform source values to recover position fields before publishing a location near the player.
+Keep retries bounded and do not hand-author compressed transform fields.
 
 ### 3. Complete safe scheduler support
 
@@ -130,10 +137,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code sends the native-proven spatial-clean update and privately measures the
-  decoded default transform.
+- Current working code sends the exact 112-bit native default-transform update recovered from the
+  private encoder probe.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `4d2c48d67f63afa9ad974d8aa9219714cba38dbe40c4b8d5c47b58001313072e`
+- DLL SHA-256: `667eeeb07f1386816104fa65e4c68648c62f14893c0ba171b0c4b67354ec3817`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.
