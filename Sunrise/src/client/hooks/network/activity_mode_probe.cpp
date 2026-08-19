@@ -15,9 +15,9 @@ namespace sunrise::client::hooks::network::activity_mode_probe {
 namespace {
 
 struct Observation {
-    std::uint16_t primaryActivity{};
-    std::int32_t modeIndex{};
-    std::uint16_t fallbackActivity{};
+    std::uint16_t sourceActivity{};
+    std::int32_t elementIndex{};
+    std::uint16_t destinationActivity{};
     bool occupied{};
 };
 
@@ -49,9 +49,9 @@ using TypeResolver = std::int32_t(__fastcall*)(std::int16_t);
 [[nodiscard]] bool observe(const Observation& value) noexcept {
     bool report = false;
     AcquireSRWLockExclusive(&g_observationLock);
-    if (!g_observation.occupied || g_observation.primaryActivity != value.primaryActivity
-        || g_observation.modeIndex != value.modeIndex
-        || g_observation.fallbackActivity != value.fallbackActivity) {
+    if (!g_observation.occupied || g_observation.sourceActivity != value.sourceActivity
+        || g_observation.elementIndex != value.elementIndex
+        || g_observation.destinationActivity != value.destinationActivity) {
         g_observation = value;
         g_observation.occupied = true;
         report = true;
@@ -103,18 +103,18 @@ using TypeResolver = std::int32_t(__fastcall*)(std::int16_t);
 }
 
 /** Preserves native mode selection and reports only its content-derived selector inputs. */
-__declspec(noinline) void __fastcall selector_body(std::uint16_t primaryActivity,
-                                                   std::int32_t modeIndex,
-                                                   std::uint16_t fallbackActivity) noexcept {
+__declspec(noinline) void __fastcall selector_body(std::uint16_t sourceActivity,
+                                                   std::int32_t elementIndex,
+                                                   std::uint16_t destinationActivity) noexcept {
     coordinator::CallLease lease{};
     coordinator::g_callIngress(
         lease, HookSlot::activityModeSelector, coordinator::ConsumerKind::none);
     const auto call = reinterpret_cast<Selector>(lease.original);
     __try {
         const Observation observation{
-            primaryActivity,
-            modeIndex,
-            fallbackActivity,
+            sourceActivity,
+            elementIndex,
+            destinationActivity,
             true,
         };
         if (lease.accepting && observe(observation)) {
@@ -122,10 +122,10 @@ __declspec(noinline) void __fastcall selector_body(std::uint16_t primaryActivity
             const int written = std::snprintf(
                 line.data(),
                 line.size(),
-                "ev=gameplay stage=activity-mode result=called primary=%u index=%d fallback=%u",
-                static_cast<unsigned>(primaryActivity),
-                modeIndex,
-                static_cast<unsigned>(fallbackActivity));
+                "ev=gameplay stage=activity-mode result=called source=%u element=%d destination=%u",
+                static_cast<unsigned>(sourceActivity),
+                elementIndex,
+                static_cast<unsigned>(destinationActivity));
             if (written > 0) {
                 core::log::write(core::log::Channel::client,
                                  core::log::Level::info,
@@ -133,7 +133,7 @@ __declspec(noinline) void __fastcall selector_body(std::uint16_t primaryActivity
             }
         }
         if (call != nullptr) {
-            call(primaryActivity, modeIndex, fallbackActivity);
+            call(sourceActivity, elementIndex, destinationActivity);
         }
     } __finally {
         coordinator::g_callEgress();

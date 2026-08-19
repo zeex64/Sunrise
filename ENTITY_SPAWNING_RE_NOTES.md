@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 401df54087d5edaaa058b62b21698dc235ea10e059dbd27f0066124883a82e0a
+SHA-256 8bcb9f74cc14490a65f3737a4d91df84dcbb75645999eba6c44b8611edebcec0
 ```
 
 ## Confirmed high-level path
@@ -1238,17 +1238,24 @@ mode is content-defined. It does not yet prove that this function is the same id
 by the external paper, so its definition lookup must be traced to the service-6/global-state input
 before changing the wire format.
 
-The selector's exact ABI is `void(uint16 primaryActivity, int32 modeIndex,
-uint16 fallbackActivity)`. Both initialization callers (`FUN_140DC2340` and `FUN_140DC23A0`) load
-those values from the activity singleton at offsets `+0x354A`, `+0x3550`, and `+0x354C`,
-respectively. The selector resolves the first and third IDs through the activity-definition table.
-When the primary record has a mode array, it uses `modeIndex * 0x38` and reads the definition at
-entry `+0x30`; otherwise it tries the primary record's `+0xDC`, then the fallback record's `+0xDC`,
-then the global default. Static analysis has not yet proven which decoded global-state fields write
-the singleton offsets, so the names describe their native use rather than an assumed wire mapping.
+The selector's exact ABI is `void(uint16 sourceActivity, int32 elementIndex,
+uint16 destinationActivity)`. Both initialization callers (`FUN_140DC2340` and `FUN_140DC23A0`)
+load those values from the activity singleton at offsets `+0x354A`, `+0x3550`, and `+0x354C`,
+respectively. These offsets are the `+0x02`, `+0x08`, and `+0x04` fields of the 0x118-byte startup
+selection initialized by `FUN_1404D53A0`. `FUN_1404D58A0` formats that object as source,
+`(element %d) -->`, destination, which proves the wire mapping independently of Sunrise's parser.
+`FUN_1404F8FD0` copies the same object into the service-6 request. Its leading layout is reason at
+`+0x00`, source activity at `+0x02`, destination activity at `+0x04`, and optional element index at
+`+0x08`, exactly matching the decoded service-6 descriptor order.
+
+The selector resolves the source and destination IDs through the activity-definition table. When
+the source record has a mode array, it uses `elementIndex * 0x38` and reads the definition at entry
+`+0x30`; otherwise it tries the source record's `+0xDC`, then the destination record's `+0xDC`, then
+the global default. This maps the content-defined activity mode to the authored request without
+assuming that an external paper's identity-1 mode is a literal standalone wire bit.
 
 Two passive network-group hooks now capture this boundary without changing it. The selector probe
-logs `stage=activity-mode primary=... index=... fallback=...`; the only callee's setter probe logs
+logs `stage=activity-mode source=... element=... destination=...`; the only callee's setter probe logs
 `stage=activity-mode-definition result=ok|fail definition=0x...`. The selector signature is the
 unique 27-byte prefix at `FUN_140BEA850`; the setter signature is the unique 15-byte prefix at
 `FUN_140BEA6D0`. The current service-6 request selected activity 8 from activity 8 and omitted its
@@ -1398,7 +1405,7 @@ The current checkpoint includes work in:
    sobject is accepted; do not assume the squad codec can create the underlying native squad.
 14. On the next EDZ load, capture one `stage=activity-mode`, its following
    `stage=activity-mode-definition`, and the distinct `stage=activity-type` pairs. Compare
-   `primary`, `fallback`, and `index` with service 6's `activity=8`, `from_activity=8`, and absent
+   `source`, `destination`, and `element` with service 6's `from_activity=8`, `activity=8`, and absent
    `element=-1`. A failed definition, implausible index, or disabled type is the first direct
    evidence of an incomplete global-state descriptor; a successful definition plus enabled type
    means the missing director startup is downstream.
