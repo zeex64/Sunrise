@@ -35,7 +35,8 @@ constexpr std::size_t kDecodedRecordUpdateOffset = 0x38;
 constexpr std::size_t kDecodedRecordFlagsOffset = 0x40;
 constexpr std::size_t kDecodedRecordMaskBytes = 16;
 constexpr std::size_t kDecodedRecordCreateBytes = 16;
-constexpr std::size_t kDecodedRecordUpdateBytes = 192;
+/** Spatial scratch is 0x90 named-component bytes plus the bounded RSAT-defined region. */
+constexpr std::size_t kDecodedRecordUpdateBytes = 256;
 
 std::array<std::atomic_uint64_t, kSeenSnapshotCapacity> g_seenSnapshots{};
 std::atomic_uint32_t g_decodeTraceBudget{};

@@ -348,7 +348,7 @@ write_scheduler_signature(bits::Writer& writer,
            && writer.write(0, 1);
 }
 
-/** Writes one direct, create-only kind-0 sobject record into the entity handler. */
+/** Writes one direct kind-0 sobject create plus an all-clean spatial update. */
 [[nodiscard]] bool write_entity_create_view(bits::Writer& writer,
                                             const EntityCreatePlan& plan) noexcept {
     // Trace only the bounded native decoder calls that follow this guarded server emission.
@@ -360,8 +360,8 @@ write_scheduler_signature(bits::Writer& writer,
         // Entity lane continues with a direct (non-anchor) 17-bit handle.
         || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(plan.slot, 13)
         || !writer.write(plan.handleGeneration, 4)
-        // Explicit flags: create only; no update, trailing flag, lifecycle state, or anchor.
-        || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(0, 1) || !writer.write(0, 1)
+        // Explicit flags: create plus update; no remove, lifecycle state, or anchor.
+        || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(1, 1) || !writer.write(0, 1)
         || !writer.write(0, 1)
         || !writer.write(0, 1)
         // Force the global/default spatial cell independently of the client's current cell.
@@ -371,6 +371,10 @@ write_scheduler_signature(bits::Writer& writer,
         || !writer.write(plan.objectGeneration, 8) || !writer.write(0, 2)
         || !writer.write(kInstalledTagDiscriminator, 6) || !writer.write(1, 1)
         || !writer.write(plan.rsat, 32)
+        // Enable the named spatial layout, then carry the native-proven all-clean update:
+        // transform, parent, stream-source, and the two RSAT-defined presence bits.
+        || !writer.write(1, 1) || !writer.write(0, 1) || !writer.write(0, 1) || !writer.write(0, 1)
+        || !writer.write(0, 1)
         || !writer.write(0, 1)
         // End entity lane and leave the fixed-control handler empty.
         || !writer.write(1, 1) || !writer.write(0, 1)) {

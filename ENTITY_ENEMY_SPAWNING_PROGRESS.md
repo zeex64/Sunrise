@@ -60,25 +60,33 @@ The run of commit `b46dabce` completed the stationary-create milestone:
   expected to use the local constructor; identity 2 is the public group join and successfully uses
   the authored/remote constructor. Forcing identity 1 to the other branch is not the next step.
 
+The first private native re-encoding run then resolved the update-presence boundary:
+
+- `plain-clean` encoded successfully in exactly 2 zero bits. These are the two RSAT-defined
+  presence fields for `0x80C4FEAD`.
+- `spatial-clean` encoded successfully in exactly 5 zero bits. The three additional bits are
+  transform, parent, and stream-source, in that order.
+- Both variants returned 1 with `fault=0`; no hidden alignment, length, or payload bits occur in an
+  all-clean update.
+
 ## Immediate plan
 
-### 1. Recover the native update body without guessing
+### 1. Validate create-plus-update framing
 
-The current build adds a read-only native re-encoding probe. After the next successful decoded
-record, it passes private copies to the game's own update encoder twice:
+The current build changes the bounded record from create-only to create plus update, sets the
+spatial-layout flag, and appends the native-proven five zero presence bits. The expected accepted
+record has flags `0x0003`, create flag 1, and a 217-byte update scratch whose RSAT-defined region
+begins at `+0x90`. Its entity-list decode should consume 83 bits.
 
-- `plain-clean`: create flag zero, so RSAT-defined update scratch begins at offset zero;
-- `spatial-clean`: create flag one, with transform/parent/stream-source scratch reserved and the
-  same RSAT scratch moved to aligned offset `0x90`.
+The same run privately re-encodes that full spatial scratch twice:
 
-Both variants use an empty dirty mask and publish nothing. Their bit counts and bytes will identify
-the exact presence-bit boundary before any live transform is attempted.
-
-Expected log stage: `sobject-native-update-probe`.
+- `spatial-clean` should remain the proven 5-bit all-zero body;
+- `spatial-transform-default` marks only transform dirty and reveals the game's exact transform
+  payload without publishing it.
 
 ### 2. Publish a minimal spatial update
 
-After validating the native probe output:
+After validating the transform probe output, recover:
 
 - world transform and position;
 - parent relationship;
@@ -122,9 +130,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code adds the private native update re-encoding probe described above.
+- Current working code sends the native-proven spatial-clean update and privately measures the
+  decoded default transform.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `677570e2b90985323fd4eec09ba966c3f7e928807f0cb3cfe19eca024b63be8f`
+- DLL SHA-256: `4d2c48d67f63afa9ad974d8aa9219714cba38dbe40c4b8d5c47b58001313072e`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.

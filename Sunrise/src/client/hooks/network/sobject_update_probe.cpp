@@ -189,7 +189,8 @@ void set_context_pointer(std::span<std::byte> context,
 void encode_synthetic_variant(const char* variant,
                               std::span<const std::byte, kCreateBufferSize> create,
                               std::span<const std::byte> component,
-                              std::span<const std::byte, kMaskCaptureSize> mask) noexcept {
+                              std::span<const std::byte, kMaskCaptureSize> mask,
+                              bool transformDirty) noexcept {
     alignas(16) std::array<std::byte, kSyntheticWireCapacity> wire{};
     alignas(16) std::array<std::byte, kMaskCaptureSize> dirty{};
     alignas(16) std::array<std::byte, kMaskCaptureSize> sent{};
@@ -199,6 +200,9 @@ void encode_synthetic_variant(const char* variant,
     // The first eight bytes are the inline bits for this 64-entry mask. Preserve only its shape.
     std::fill_n(dirty.begin(), sizeof(std::uint64_t), std::byte{});
     std::fill_n(sent.begin(), sizeof(std::uint64_t), std::byte{});
+    if (transformDirty) {
+        dirty[0] = std::byte{0x01};
+    }
 
     NativeWriter writer{};
     writer.begin = wire.data();
@@ -235,30 +239,34 @@ void encode_synthetic_variant(const char* variant,
     std::array<char, kSyntheticWireCapacity * 2 + 1> wireHex{};
     hex(std::span<const std::byte>{wire.data(), flushed}, wireHex);
     std::uint32_t metadata = 0;
-    std::memcpy(&metadata, dirty.data() + sizeof(std::uint64_t), sizeof metadata);
+    std::memcpy(&metadata, mask.data() + sizeof(std::uint64_t), sizeof metadata);
     std::uint32_t rsat = 0;
     std::memcpy(&rsat, create.data(), sizeof rsat);
     const unsigned trailing = std::to_integer<unsigned>(create[4]) & 1U;
+    std::array<char, 65> componentHex{};
+    hex(component.first(component.size() < 32 ? component.size() : 32), componentHex);
 
     std::array<char, core::log::kLineCapacity> line{};
     const int written = std::snprintf(
         line.data(),
         line.size(),
         "ev=gameplay stage=sobject-native-update-probe variant=%s result=%llu fault=%u "
-        "rsat=0x%08X flag=%u mask_meta=0x%08X bits=%d flushed=%d pending=%u "
-        "accum=0x%016llX bytes=%zu hex=%s",
+        "rsat=0x%08X flag=%u dirty0=%u mask_meta=0x%08X bits=%d flushed=%d pending=%u "
+        "accum=0x%016llX bytes=%zu hex=%s component0=%s",
         variant,
         static_cast<unsigned long long>(result),
         faulted ? 1U : 0U,
         rsat,
         trailing,
+        transformDirty ? 1U : 0U,
         metadata,
         writer.totalBits,
         writer.flushedBits,
         static_cast<unsigned>(writer.pendingBits),
         static_cast<unsigned long long>(writer.accumulator),
         flushed,
-        wireHex.data());
+        wireHex.data(),
+        componentHex.data());
     if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
         core::log::write(core::log::Channel::client,
                          faulted ? core::log::Level::warn : core::log::Level::info,
@@ -396,14 +404,27 @@ void probe_decoded_record(std::span<const std::byte> create,
     spatialCreate = plainCreate;
     std::copy(mask.begin(), mask.end(), nativeMask.begin());
     std::copy(update.begin(), update.end(), plainComponent.begin());
-    std::copy(update.begin(), update.end(), spatialComponent.begin() + kNamedComponentRsatOffset);
 
     // Flag zero starts the RSAT-defined scratch at component offset zero. Flag one reserves the
     // transform, parent, and stream-source regions and moves that same scratch to aligned +0x90.
     plainCreate[4] &= std::byte{0xFE};
     spatialCreate[4] |= std::byte{0x01};
-    encode_synthetic_variant("plain-clean", plainCreate, plainComponent, nativeMask);
-    encode_synthetic_variant("spatial-clean", spatialCreate, spatialComponent, nativeMask);
+    const bool incomingSpatial = (std::to_integer<unsigned>(create[4]) & 1U) != 0;
+    if (!incomingSpatial) {
+        std::copy(
+            update.begin(), update.end(), spatialComponent.begin() + kNamedComponentRsatOffset);
+        encode_synthetic_variant("plain-clean", plainCreate, plainComponent, nativeMask, false);
+        encode_synthetic_variant(
+            "spatial-clean", spatialCreate, spatialComponent, nativeMask, false);
+        return;
+    }
+
+    // A decoded spatial record already owns the complete named + RSAT scratch layout. Re-encode it
+    // once clean, then privately mark only transform dirty to recover the exact native payload.
+    std::copy(update.begin(), update.end(), spatialComponent.begin());
+    encode_synthetic_variant("spatial-clean", spatialCreate, spatialComponent, nativeMask, false);
+    encode_synthetic_variant(
+        "spatial-transform-default", spatialCreate, spatialComponent, nativeMask, true);
 }
 
 void reset() noexcept {

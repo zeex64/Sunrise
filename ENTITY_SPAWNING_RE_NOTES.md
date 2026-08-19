@@ -1845,6 +1845,19 @@ The `sobject-native-update-probe` lines will provide exact native bit counts, fl
 bits, and accumulator values for the plain and spatial-capable empty update shapes. Nothing from
 this probe is published to the gameplay channel.
 
+That probe completed exactly. `plain-clean` returned 1 without a fault and emitted two zero bits.
+`spatial-clean` also returned 1 without a fault and emitted five zero bits. The three-bit difference
+matches the transform, parent, and stream-source presence calls in `FUN_141725140`; the remaining
+two bits are the RSAT-defined fields walked by `FUN_140A00AA0`. An all-clean update therefore has no
+hidden alignment, length, or payload fields.
+
+The next bounded record sets both create and update flags, changes the create trailing byte to one,
+and appends those exact five zero bits. Its predicted entity-list size is 83 bits: the accepted
+78-bit create plus the five-bit spatial-clean update. This is a framing experiment, not a visibility
+claim. The decoder capture now retains 256 bytes so the expected `0x90 + 73 = 217` byte spatial
+scratch is complete. A second private pass then sets only dirty bit zero and asks the native encoder
+to emit `spatial-transform-default`, exposing the transform payload without sending it.
+
 An intermediate channel report counted `14 ok, 290 discard-expected, 75 corrupt`, but there was no
 four-second gameplay timeout. Valid gameplay and BAP traffic continued. The activity-host failure
 at `t=173667` followed an activity-host change, and the later failures at shutdown were ordinary
@@ -1922,16 +1935,14 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the current build once in the initial EDZ zone without moving. Confirm the existing bounded
-   create reaches `result=0 count=1`, then capture both `stage=sobject-native-update-probe` lines.
-   `plain-clean` must complete without a fault. `spatial-clean` should complete with exactly three
-   additional named-component presence bits before the same RSAT-defined suffix.
-2. Reconstruct both probe bitstreams from their flushed bytes, pending-bit count, and accumulator.
-   Add a create-plus-update experiment using only the native-produced all-clean update. This first
-   validates the outer create+update flag and payload boundary; it should not be expected to render.
-3. Extend the private native probe with an identity transform and only the transform dirty bit set.
-   Keep parent and stream-source absent. Publish the native-produced payload only after its encoder
-   result, mask advancement, and bit count are internally consistent.
+1. Run the current build once in the initial EDZ zone without moving. Confirm the retry reaches
+   `result=0 count=1`, consumes 83 bits, reports record flags `0x0003`, create flag 1, and update size
+   217. Occupancy should advance exactly once.
+2. Capture `spatial-clean` and `spatial-transform-default`. The clean variant must remain five zero
+   bits. The transform variant must return 1 without a fault; retain its component prefix, flushed
+   bytes, pending-bit count, and accumulator.
+3. Reconstruct the native transform bitstream and inspect the 32-byte source value. Publish it only
+   after the bit count, dirty-mask behavior, and decoded transform values are internally consistent.
 4. If the transform-bearing sobject becomes visible, determine whether RSAT `0x80C4FEAD` is a
    passive placed object or an NPC member. Then capture or implement the kind-1 squad relationship
    required by actual enemies; object allocation alone does not start AI.
