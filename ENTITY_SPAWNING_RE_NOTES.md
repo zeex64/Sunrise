@@ -1518,8 +1518,8 @@ returned the client to orbit. Ghidra maps prerequisite 22 through `FUN_140D3EB60
 `_connection_failure_suicide` lines are consequences of cleanup, not its cause.
 
 Sunrise's message-30 membership writer currently emits the full player identity arm but explicitly
-writes the player-profile arm as absent. That is the first concrete server-side mismatch capable
-of explaining why the gameplay peer never acquires an account SOID.
+writes the player-profile arm as absent. This remains a plausible upstream mismatch, but the later
+native analysis below means it is not yet proven to be the direct account-SOID failure.
 
 ### Native message-30 profile and view-readiness capture
 
@@ -1540,6 +1540,34 @@ Two passive probes now preserve the original native calls and record the missing
 
 Both new signatures were checked against the pinned Ghidra image and each resolves uniquely at its
 expected function entry. These probes do not mutate membership, entity state, or view stages.
+
+The stationary solo run attached both hooks, but `membership-native-profile` never appeared. That
+is expected for a solo fireteam: there is no remote fireteam peer to which the client must encode a
+native message-30 membership update. Capturing a game-authored profile exemplar therefore requires
+a genuine second client/peer and is not an efficient next step for the current solo server path.
+
+The readiness hook did fire. Token `0x9EAA300100200002` remained pending for more than 90 seconds
+with manager gate 4 and active slot 0, while token `...003` returned ready with no active slot. The
+global view gate is therefore correct; the initial entity handler is specifically waiting for the
+native resource/codec associated with slot 0.
+
+### Account-SOID prerequisite table
+
+Ghidra now identifies the exact data consumed by the 91-second disconnect predicate. The validator
+`FUN_140BE2070` scans 32 records beginning at its manager `+0x210`, with a `0x20` stride. A record is
+a valid account SOID only when its qword at `+0x00` is nonzero and the low state byte at `+0x08`
+equals 3. This is the actual final test behind prerequisite `ENUM(22)`.
+
+An upstream reconciler obtains a desired-SOID singleton from `FUN_140FCC6E0`. Its 32 desired IDs
+begin at singleton `+0x10` with a `0x10` stride. The reconciler creates target records in state 1,
+uses the connection manager to advance them, and eventually produces state 3. A new passive
+`stage=account-soids` probe hooks only the final validator and compares both tables without changing
+them. It reports target/source nonzero counts plus the first four records, their state, and timer
+fields. This distinguishes an absent desired identity from a present identity stuck in state 1/2.
+
+The readiness probe now also resolves the first active slot through the native descriptor table and
+logs its type key, mapped type, kind bytes, namespace mask, and flags. Both new signatures resolve
+uniquely in the pinned Ghidra image.
 
 ### External NetDuma connection-table capture
 
@@ -1581,13 +1609,15 @@ The current checkpoint includes work in:
 
 Immediate stationary EDZ run:
 
-- Confirm both new hooks attach as `view_readiness_scan` and `membership_update_encoder`.
-- Capture `membership-native-profile result=capture`; this is the byte-exact exemplar needed to
-  implement the server's profile arm and remove the 91-second account-SOID failure.
-- Capture `view-readiness` from the initial token. If it remains pending, use `first_active` and the
-  native type table to identify the resource virtual that blocks stage 5. If it reports ready while
-  the view remains at stage 4, the remaining blocker is the `view-slots gate`, which must equal 4.
-- The run may stop once those lines appear; waiting for another forced disconnect adds no evidence.
+- Confirm `account_soid_validator` attaches and capture `stage=account-soids`. If
+  `source_nonzero=0`, trace the local account identity publisher feeding the desired singleton. If
+  the source is populated but `target_nonzero=0`, trace the reconciler invocation. If the target is
+  present in state 1/2, trace the connection-record state checked by `FUN_140E06000`.
+- Capture the expanded `view-readiness` line for token `...002`. Its `type_key`, `mapped_type`, and
+  kind/flag fields identify slot 0's exact codec family for the next readiness call-site trace.
+- `membership-native-profile` is not expected in a solo run. Retain the hook for a future real
+  multi-peer capture; do not wait on it now.
+- The run may stop after several `account-soids` samples and one expanded pending readiness line.
 
 1. Load EDZ and confirm revision 2 still consumes 30,992 bits while the `PUB80.80` citizen join is
    pending, but descriptor-bearing keepalives do not repeat every pump. The first delivered body
@@ -1676,6 +1706,7 @@ view-state
 view-codecs
 view-readiness
 membership-native-profile
+account-soids
 sobject-create
 sobject-update
 sobject-native

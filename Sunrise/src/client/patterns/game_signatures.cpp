@@ -179,14 +179,31 @@ constexpr std::string_view kActivityMembershipQueueText =
 constexpr auto kActivityMembershipQueue =
     signature<signature_length(kActivityMembershipQueueText)>(kActivityMembershipQueueText);
 
-// Matches message 30's native encoder. Local host sessions provide the byte-exact player-profile
-// exemplar that the embedded gameplay host needs to publish a valid account SOID.
+// Matches message 30's native encoder. A remote fireteam peer is required before a solo client
+// exercises this path, so the probe remains useful for a future multi-peer exemplar capture.
 constexpr std::string_view kMembershipUpdateEncoderText =
     "48 8B C4 53 48 81 EC 80 00 00 00 48 89 68 08 45 33 C9 48 89 70 10 49 8B E8 "
     "4C 89 70 F0 BE 40 00 00 00";
 /** Compiled pattern bytes of the signature text above. */
 constexpr auto kMembershipUpdateEncoder =
     signature<signature_length(kMembershipUpdateEncoderText)>(kMembershipUpdateEncoderText);
+
+// Matches the prerequisite predicate that scans 32 account-SOID records at manager +0x210.
+// Its complete save sequence and 0x470-byte frame are unique in the current runtime image.
+constexpr std::string_view kAccountSoidValidatorText =
+    "40 55 53 56 41 55 41 57 48 8D AC 24 90 FC FF FF 48 81 EC 70 04 00 00 "
+    "48 8B 05 ? ? ? ? 48 33 C4 48 89 85 60 03 00 00";
+/** Compiled pattern bytes of the account-SOID validator signature above. */
+constexpr auto kAccountSoidValidator =
+    signature<signature_length(kAccountSoidValidatorText)>(kAccountSoidValidatorText);
+
+// Matches the tiny accessor for the desired account-SOID singleton. The adjacent function prefix
+// makes the two-instruction tail-call wrapper unique without retaining either displacement.
+constexpr std::string_view kAccountSoidSourceText =
+    "48 8D 0D ? ? ? ? E9 ? ? ? ? CC 48 89 5C 48 8B D1 48 8D 0D ? ? ? ? E9";
+/** Compiled pattern bytes of the desired account-SOID source accessor signature above. */
+constexpr auto kAccountSoidSource =
+    signature<signature_length(kAccountSoidSourceText)>(kAccountSoidSourceText);
 
 // Matches the view creator driven by session-membership synchronization. It is the only path that
 // allocates and binds a per-peer native view before message 40 can find it.
@@ -349,6 +366,8 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},
     patterns::Pattern{"membership_update_encoder", kMembershipUpdateEncoder},
+    patterns::Pattern{"account_soid_validator", kAccountSoidValidator},
+    patterns::Pattern{"account_soid_source", kAccountSoidSource},
     patterns::Pattern{"view_creator", kViewCreator},
     patterns::Pattern{"view_address_resolver", kViewAddressResolver},
     patterns::Pattern{"view_channel_validator", kViewChannelValidator},

@@ -42,6 +42,7 @@ constexpr std::array<const char*, kHandleCount> kSlotNames{
     "activity_membership_decoder",
     "activity_membership_queue",
     "membership_update_encoder",
+    "account_soid_validator",
     "view_creation",
     "activity_host_decoder",
     "activity_host_connection_state",

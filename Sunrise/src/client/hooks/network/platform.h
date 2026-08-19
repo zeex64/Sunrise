@@ -35,6 +35,7 @@ enum class HookSlot : std::size_t {
     activityMembershipDecoder,
     activityMembershipQueue,
     membershipUpdateEncoder,
+    accountSoidValidator,
     viewCreation,
     activityHostDecoder,
     activityHostConnectionState,

@@ -32,6 +32,8 @@ enum class Id : std::size_t {
     activityMembershipDecoder,
     activityMembershipQueue,
     membershipUpdateEncoder,
+    accountSoidValidator,
+    accountSoidSource,
     viewCreator,
     viewAddressResolver,
     viewChannelValidator,

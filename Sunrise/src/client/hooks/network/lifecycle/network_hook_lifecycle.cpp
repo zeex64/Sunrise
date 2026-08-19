@@ -1,4 +1,5 @@
 #include "../../external_server/route.h"
+#include "../account_soid_probe.h"
 #include "../activity_host_probe.h"
 #include "../activity_mode_probe.h"
 #include "../activity_route_probe.h"
@@ -143,6 +144,7 @@ bool uninstall() noexcept {
     const auto gameProtectedEntries = lifecycle::game_protected_entries();
     const bool removed = lifecycle::uninstall_group(lifecycle::kGameSlots, gameProtectedEntries);
     if (removed) {
+        account_soid_probe::reset();
         entity_create_probe::reset();
         entity_slot_probe::reset();
         membership_update_probe::reset();

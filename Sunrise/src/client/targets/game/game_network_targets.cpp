@@ -75,6 +75,9 @@ bool derive(std::span<const patterns::ImageRange> image,
         matches[index(patterns::game::Id::activityMembershipQueue)].address;
     resolved.membershipUpdateEncoder =
         matches[index(patterns::game::Id::membershipUpdateEncoder)].address;
+    resolved.accountSoidValidator =
+        matches[index(patterns::game::Id::accountSoidValidator)].address;
+    resolved.accountSoidSource = matches[index(patterns::game::Id::accountSoidSource)].address;
     resolved.viewCreator = matches[index(patterns::game::Id::viewCreator)].address;
     resolved.viewAddressResolver = matches[index(patterns::game::Id::viewAddressResolver)].address;
     resolved.viewChannelValidator =

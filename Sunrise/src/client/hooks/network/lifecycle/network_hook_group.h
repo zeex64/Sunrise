@@ -31,6 +31,7 @@ inline constexpr std::array kGameSlots{
     HookSlot::activityMembershipDecoder,
     HookSlot::activityMembershipQueue,
     HookSlot::membershipUpdateEncoder,
+    HookSlot::accountSoidValidator,
     HookSlot::viewCreation,
     HookSlot::activityHostDecoder,
     HookSlot::activityHostConnectionState,

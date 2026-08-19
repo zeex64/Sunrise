@@ -2,6 +2,7 @@
 
 #include "../../../targets/game.h"
 #include "../../../targets/steam_targets.h"
+#include "../account_soid_probe.h"
 #include "../activity_host_probe.h"
 #include "../activity_mode_probe.h"
 #include "../activity_route_probe.h"
@@ -45,6 +46,7 @@ namespace {
         view_membership_probe::wire_entry_point(),
         view_membership_probe::decoded_entry_point(),
         membership_update_probe::encoder_entry_point(),
+        account_soid_probe::validator_entry_point(),
         view_creation_probe::creator_entry_point(),
         activity_host_probe::decoder_entry_point(),
         activity_host_probe::connection_state_entry_point(),
@@ -92,17 +94,18 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.activityMembershipDecoder, replacements[15]},
         hooking::detour::Spec{resolved.activityMembershipQueue, replacements[16]},
         hooking::detour::Spec{resolved.membershipUpdateEncoder, replacements[17]},
-        hooking::detour::Spec{resolved.viewCreator, replacements[18]},
-        hooking::detour::Spec{resolved.activityHostDecoder, replacements[19]},
-        hooking::detour::Spec{resolved.activityHostConnectionState, replacements[20]},
-        hooking::detour::Spec{resolved.activityRouteRecord, replacements[21]},
-        hooking::detour::Spec{resolved.activityRouteLocal, replacements[22]},
-        hooking::detour::Spec{resolved.activityRouteAuthored, replacements[23]},
-        hooking::detour::Spec{resolved.activityModeSelector, replacements[24]},
-        hooking::detour::Spec{resolved.activityModeSetter, replacements[25]},
-        hooking::detour::Spec{resolved.activityTypeResolver, replacements[26]},
-        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[27]},
-        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[28]},
+        hooking::detour::Spec{resolved.accountSoidValidator, replacements[18]},
+        hooking::detour::Spec{resolved.viewCreator, replacements[19]},
+        hooking::detour::Spec{resolved.activityHostDecoder, replacements[20]},
+        hooking::detour::Spec{resolved.activityHostConnectionState, replacements[21]},
+        hooking::detour::Spec{resolved.activityRouteRecord, replacements[22]},
+        hooking::detour::Spec{resolved.activityRouteLocal, replacements[23]},
+        hooking::detour::Spec{resolved.activityRouteAuthored, replacements[24]},
+        hooking::detour::Spec{resolved.activityModeSelector, replacements[25]},
+        hooking::detour::Spec{resolved.activityModeSetter, replacements[26]},
+        hooking::detour::Spec{resolved.activityTypeResolver, replacements[27]},
+        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[28]},
+        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[29]},
     };
 }
 
