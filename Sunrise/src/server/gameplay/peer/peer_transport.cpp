@@ -76,6 +76,8 @@ constexpr std::size_t kExternalProbeByteCapacity = 256;
 constexpr std::uint64_t kResendInterval = 250;
 /** The first EDZ entity view owns thirteen native objects before a server-authored slot is safe. */
 constexpr std::uint32_t kFirstEntityBaselineOccupied = 13;
+/** Bubble ordinal for the selected EDZ Town arrival (name hash 0xB8459D59). */
+constexpr std::uint8_t kFirstEntitySpatialCell = 51;
 /** A pristine slot's first native allocation advances object generation zero to two. */
 constexpr std::uint8_t kFirstObjectGeneration = 2;
 /** Package-backed tag discriminator used by schema 0x80800014. */
@@ -149,6 +151,7 @@ struct EntityCreatePlan {
     std::array<std::byte, client::hooks::network::sobject_update_probe::kNearbyUpdateCapacity>
         updateWire{};
     std::uint16_t updateBits{};
+    std::uint8_t spatialCell{};
     bool bootstrapScheduler{};
     bool updateOnly{};
     bool present{};
@@ -388,8 +391,10 @@ write_scheduler_signature(bits::Writer& writer,
            // Entity lane, one direct 17-bit handle.
            && writer.write(0, 1) && writer.write(1, 1) && writer.write(plan.slot, 13)
            && writer.write(plan.handleGeneration, 4)
-           // The flag shortcut denotes update-only. Keep the active spatial cell.
-           && writer.write(1, 1) && writer.write(0, 1)
+           // The flag shortcut denotes update-only. Publish the selected EDZ bubble explicitly;
+           // the active decode context otherwise inherits the global 0xFFFF cell.
+           && writer.write(1, 1) && writer.write(1, 1) && writer.write(1, 1)
+           && writer.write(plan.spatialCell, 8)
            && write_native_update(writer, plan)
            // End entity lane and leave the fixed-control handler empty.
            && writer.write(1, 1) && writer.write(0, 1);
@@ -418,9 +423,10 @@ write_scheduler_signature(bits::Writer& writer,
         || !writer.write(0, 1) || !writer.write(1, 1) || !writer.write(0, 1) || !writer.write(0, 1)
         || !writer.write(0, 1)
         || !writer.write(0, 1)
-        // Inherit the active view's current spatial cell. The explicit 1,0 branch means 0xFFFF
-        // and allocated the object outside the streamed Town cell even at a valid position.
-        || !writer.write(0, 1)
+        // Publish the selected EDZ bubble explicitly. Inheritance currently resolves to the
+        // global 0xFFFF cell, which allocates the object outside the streamed Town bubble.
+        || !writer.write(1, 1) || !writer.write(1, 1)
+        || !writer.write(plan.spatialCell, 8)
         // Kind-0 core: object generation, codec kind, installed RSAT schema, identity flag.
         || !writer.write(plan.objectGeneration, 8) || !writer.write(0, 2)
         || !writer.write(kInstalledTagDiscriminator, 6) || !writer.write(1, 1)
@@ -571,6 +577,7 @@ write_scheduler_signature(bits::Writer& writer,
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;
     output.rsat = state::gameplay::kFirstEntityRsat;
+    output.spatialCell = kFirstEntitySpatialCell;
     output.slot = capture.slot;
     output.handleGeneration = capture.handleGeneration;
     output.objectGeneration = kFirstObjectGeneration;
@@ -620,6 +627,7 @@ write_scheduler_signature(bits::Writer& writer,
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;
     output.rsat = state::gameplay::kFirstEntityRsat;
+    output.spatialCell = kFirstEntitySpatialCell;
     output.slot = capture.slot;
     output.handleGeneration = capture.handleGeneration;
     output.objectGeneration = kFirstObjectGeneration;
@@ -686,6 +694,7 @@ write_scheduler_signature(bits::Writer& writer,
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;
     output.rsat = state::gameplay::kFirstEntityRsat;
+    output.spatialCell = kFirstEntitySpatialCell;
     output.slot = peer.entityCreateSlot;
     output.handleGeneration = peer.entityCreateHandleGeneration;
     output.objectGeneration = kFirstObjectGeneration;
@@ -2010,7 +2019,7 @@ void service(std::uint64_t now) noexcept {
                 report(sent ? core::log::Level::info : core::log::Level::warn,
                        "ev=gameplay stage=entity-update-out result=%s token=0x%016llX "
                        "namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u "
-                       "rsat=0x%08X cell=inherited update_bits=%u",
+                       "rsat=0x%08X cell=%u update_bits=%u",
                        sent ? "sent" : "fail",
                        static_cast<unsigned long long>(entityCreates[index].token),
                        entityCreates[index].namespaceId,
@@ -2020,12 +2029,13 @@ void service(std::uint64_t now) noexcept {
                        static_cast<unsigned>(entityCreates[index].slot),
                        static_cast<unsigned>(entityCreates[index].handleGeneration),
                        entityCreates[index].rsat,
+                       static_cast<unsigned>(entityCreates[index].spatialCell),
                        static_cast<unsigned>(entityCreates[index].updateBits));
             } else {
                 report(sent ? core::log::Level::info : core::log::Level::warn,
                        "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
                        "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u "
-                       "ogen=%u rsat=0x%08X cell=inherited update=none update_bits=0 "
+                       "ogen=%u rsat=0x%08X cell=%u update=none update_bits=0 "
                        "bootstrap=%u",
                        sent ? "sent" : "fail",
                        static_cast<unsigned long long>(entityCreates[index].token),
@@ -2038,6 +2048,7 @@ void service(std::uint64_t now) noexcept {
                        static_cast<unsigned>(entityCreates[index].handleGeneration),
                        static_cast<unsigned>(entityCreates[index].objectGeneration),
                        entityCreates[index].rsat,
+                       static_cast<unsigned>(entityCreates[index].spatialCell),
                        entityCreates[index].bootstrapScheduler ? 1U : 0U);
             }
         }

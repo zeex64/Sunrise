@@ -2139,6 +2139,21 @@ create planner has a new `rsat` gate and cannot start its 500 ms scheduler-settl
 native predicate is ready. A resource miss therefore no longer uses a partially consumed entity
 packet as a preload request.
 
+The preloaded run then passed both remaining transport milestones without zone movement. The
+client accepted the create after exactly 77 bits, occupied slot 13 as entity `0x0010000D`, and
+accepted the separate 130-bit native transform update after exactly 152 top-level bits. The update
+record retained the same handle and exact player-X-plus-three position. No framing or resource
+failure remains between the server's guarded scheduler body and the client's native sobject
+allocation/update path.
+
+Both accepted records still decoded with `cell=0xFFFF`, however. Inheritance is functioning, but
+the active entity-list context itself is the global/default cell; it does not attach a new object
+to the streamed EDZ bubble. The current selected arrival hash `0xB8459D59` resolves from the same
+scenario layout to Town bubble ordinal 51 (map-global index 145). The next bounded build therefore
+uses the codec's explicit-cell branch and writes ordinal 51 on both create and update. This is a
+destination-derived value, not a coordinate-cluster guess. The predicted accepted sizes are 86
+bits for create and 161 bits for update, with both decoded records reporting `cell=0x0033`.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2190,13 +2205,13 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the preloaded two-stage shared-Vandal build once in the initial EDZ zone without moving.
-   Confirm `sobject-rsat-preload result=queued`, then `result=ready`, followed by one 77-bit
-   `entity-create-out`, an `occupied_low` transition containing bit 13, and exactly one
-   `entity-update-out` with `update_bits=130` on the first service tick after occupancy.
-2. Confirm the update-only decoder returns `result=0 count=1`, reports flags `0x0002`, retains the
-   same entity handle, and does not introduce a corrupt-read burst or four-second channel timeout.
-3. Check visually at the measured nearby-player position. If the object renders but has no AI,
+1. Run the explicit-Town-cell build once in the initial EDZ zone without moving. Confirm create
+   and update logs both report `cell=51`.
+2. Confirm the create decoder returns `result=0 count=1` after 86 bits and the update decoder does
+   the same after 161 bits. Both entity records must retain handle `0x0010000D` and report
+   `cell=0x0033`; the update must retain `update_bits=130`.
+3. Check visually three world units along X from the measured player position. If the object
+   renders but has no AI,
    capture or implement the kind-1 squad/member relationship; sobject allocation alone need not
    start behavior.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
