@@ -3,6 +3,7 @@
 #include "../../../core/logging/log.h"
 #include "../../targets/game/assert_handler.h"
 #include "assert_handler_observer.h"
+#include "managed_session_pump_probe.h"
 
 namespace sunrise::client::hooks::assert_handler {
 
@@ -30,6 +31,7 @@ bool install() noexcept {
     AcquireSRWLockExclusive(&g_lock);
     if (g_installed) {
         ReleaseSRWLockExclusive(&g_lock);
+        (void)managed_session_pump_probe::install();
         return true;
     }
     if (!targets::game::assert_handler::is_resolved()) {
@@ -47,11 +49,14 @@ bool install() noexcept {
                      installed ? core::log::Level::info : core::log::Level::warn,
                      installed ? "ev=assert stage=install result=ok"
                                : "ev=assert stage=install result=fail reason=slot");
+    // Diagnostic only: a patch-specific miss must not disable the assert observer itself.
+    (void)managed_session_pump_probe::install();
     return installed;
 }
 
 /** Restores the game's own handler so a later assert cannot call into unmapped code. */
 bool uninstall() noexcept {
+    managed_session_pump_probe::uninstall();
     AcquireSRWLockExclusive(&g_lock);
     if (!g_installed) {
         ReleaseSRWLockExclusive(&g_lock);

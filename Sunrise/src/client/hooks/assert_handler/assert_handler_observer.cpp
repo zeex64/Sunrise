@@ -12,6 +12,7 @@
 #include "../../../core/logging/log.h"
 #include "../../targets/game/assert_handler.h"
 #include "../retail_log/retail_log_enqueue_observer.h"
+#include "managed_session_pump_probe.h"
 
 namespace sunrise::client::hooks::assert_handler {
 namespace {
@@ -28,8 +29,8 @@ constexpr std::uint32_t kRepeatStride = 512;
 constexpr char kUnformattable[] = "<unformattable>";
 /** Watchdog message whose first occurrence receives the lock-free retail progress snapshot. */
 constexpr std::string_view kNetworkHitchPrefix = "hitch detected: mainloop world controller";
-/** One progress line carries two sites, two serials, and the active native-call count. */
-constexpr std::size_t kProgressLineCapacity = 320;
+/** One progress line carries retail and managed-session-pump progress. */
+constexpr std::size_t kProgressLineCapacity = 448;
 
 /**
  * Halt category of the graphics device-loss assert. A removed device never returns, so this one
@@ -104,12 +105,15 @@ void report(int code, const char* text) noexcept {
     core::log::write(core::log::Channel::client, core::log::Level::error, {line.data(), length});
     if (repeats == 1 && std::string_view(text).starts_with(kNetworkHitchPrefix)) {
         const retail_log::ProgressSnapshot progress = retail_log::progress_snapshot();
+        const managed_session_pump_probe::ProgressSnapshot managed =
+            managed_session_pump_probe::progress_snapshot();
         std::array<char, kProgressLineCapacity> progressLine{};
         const int progressWritten = std::snprintf(
             progressLine.data(),
             progressLine.size(),
             "ev=assert stage=network-hitch retail_enter=%d/%llu/+0x%llX/%lu "
-            "retail_return=%d/%llu/+0x%llX/%lu observer=%u native=%u",
+            "retail_return=%d/%llu/+0x%llX/%lu observer=%u native=%u "
+            "managed=%u/%llu/%llu/%lu",
             progress.enteredSite,
             static_cast<unsigned long long>(progress.enteredSerial),
             static_cast<unsigned long long>(progress.enteredCallerRva),
@@ -119,7 +123,11 @@ void report(int code, const char* text) noexcept {
             static_cast<unsigned long long>(progress.returnedCallerRva),
             static_cast<unsigned long>(progress.returnedThread),
             progress.activeObserverCalls,
-            progress.activeNativeCalls);
+            progress.activeNativeCalls,
+            managed.activeCalls,
+            static_cast<unsigned long long>(managed.enteredSerial),
+            static_cast<unsigned long long>(managed.returnedSerial),
+            static_cast<unsigned long>(managed.enteredThread));
         if (progressWritten > 0) {
             const auto progressLength =
                 static_cast<std::size_t>(progressWritten) < progressLine.size()

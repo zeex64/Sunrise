@@ -1144,6 +1144,24 @@ serialization of objects first registered during streaming. `sobject-native` del
 each RSAT only once per process, so remaining in or revisiting an already-seen zone is expected to
 produce no repeated line. Future reports include the decoded package and entry ids directly.
 
+The next safe-build run produced no `entity-create-out`, entity-list, or sobject-create event before
+its freeze, excluding the guarded entity body as the trigger. It instead completed one `PUB448.4`
+transition, immediately started the same region and group session again, force-disconnected the
+still-leaving target, and logged `Cannot create: Managed session with this identifier already
+exists`. The replacement peer join reached `Queuing join-complete` at `t=116024` but never reached
+`sending initial join-complete`. After several application suspend-state changes, the native
+watchdog reported `network_update` continuously stalled from `t=136023` through at least
+`t=159395`. Its progress snapshot had `observer=0 native=0`, so neither retail-log capture nor a
+native function called by that observer held the thread.
+
+Ghidra resolves `network_update` to the job body at `FUN_1416D2320`. Its direct call
+`FUN_14175E520` is the managed-session state pump, and that pump calls `FUN_141792840`, whose retail
+site emitted the duplicate-identifier warning. A diagnostic-only detour now records lock-free
+enter/return serials around `FUN_14175E520`. The first watchdog line reports them as
+`managed=active/entered/returned/thread`: `active=1` with `entered=returned+1` proves the freeze is
+inside this pump, while `active=0` excludes it and directs the next split to another
+`network_update` child.
+
 ## External authored-content research
 
 `D2-Server-Infrastructure.pdf` describes a separate client-side requirement for complete activity
