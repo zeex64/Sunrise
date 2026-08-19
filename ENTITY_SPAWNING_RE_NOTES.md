@@ -2311,6 +2311,22 @@ the exact accepted create profile, identity transform baseline, and observed mas
 record consumes that capture as a combined create/update and marks the staged follow-up complete,
 so root-view registration cannot split the creation from its transform.
 
+That atomic record passed. At `t=68853`, the current Basin token `...0003` decoded namespace 2,
+view 1, slot 0, cell `0x000B`, flags `0x0003` after exactly 216 entity bits. Its update scratch
+contained the intended player-X+3 transform, there was no baseline-injection assertion, and
+occupancy rose to one at `t=68859`. The ten handler calls all returned zero and the later health
+summary reported zero corrupt reads. No `0x815B204B` native registration and no glue-dispatch line
+followed, however. This proves the remaining failure is after record validation/occupancy but
+before kind-0 native construction, not in the current packet grammar, cell, or transform.
+
+The next diagnostic hooks the exact Ghidra chain without changing the record. `FUN_1417085C0` is
+the asynchronous type-2 apply job; it calls `FUN_1416FF790` to re-decode retained creation state,
+validates the entity/cell, and invokes codec virtual `+0xB0`. Kind 0 resolves that call to
+`FUN_1417242F0`, which returns true only after obtaining a native object and dispatching
+`FUN_141704870`. Watched decoded slots now produce bounded `sobject-apply` and `sobject-kind0`
+lines. Their presence and return state separate missing job dispatch, pre-codec validation failure,
+constructor rejection, and final glue binding in one run.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2362,16 +2378,13 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Load EDZ, transition once from Town into Basin, then wait. Require the preload variant to produce
-   130 bits, followed by the 287-bit empty probe's complete ten-call epoch. The atomic create should
-   leave on the next service tick, before its direct transport ACK arrives.
-2. Require the first `entity-create-out` on token `...0003`, namespace 2, view 1, slot 0, region 24,
-   bubble 3, cell 11. Confirm its complete handler epoch, decoded cell `0x000B`, target registration,
-   glue-table `status=bound`, and occupancy.
-3. Require `update=inline update_bits=130 combined=1`, a 216-bit entity-list decode, flags
-   `0x0003`, the intended nearby transform, target native registration, and a bound glue-table
-   postcondition. No separate `entity-update-out` is expected and the two-view create does not
-   retry.
+1. Repeat the Town-to-Basin transition and retain the already-proven 216-bit atomic record on
+   token `...0003`, namespace 2, view 1, slot 0, region 24/bubble 3/cell 11.
+2. Classify the first missing post-decode boundary: no `sobject-apply` means the type-2 job never
+   dispatched; apply without `sobject-kind0` means retained-create decode, entity/cell validation,
+   or codec lookup rejected it; `sobject-kind0 result=0` means the native constructor rejected it.
+3. Require `sobject-kind0 result=1`, target native registration, and
+   `sobject-bind-dispatch status=bound` before treating the remaining failure as rendering.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
    biped's parent, stream-source, and RSAT suffix before changing the payload. Do not guess them.
 5. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
@@ -2409,7 +2422,10 @@ Committed as `12968ec2 test: use proven two-view window for Vandal`.
 
 Current atomic Basin Release candidate SHA-256:
 `cba76fa8b262b02ff4453560ae5f7456ad00715f09db318bbf524f10fd76a9c2`.
-Committed as `test: atomically create current-view Vandal` (this checkpoint).
+Committed as `4a19acb test: atomically create current-view Vandal`.
+
+Current post-decode diagnostic Release candidate SHA-256:
+`b295f21dcaaf17706a05766f75ce477dde50e606b24f3aad4d2e6886fefc40ca`.
 
 After manual deployment, inspect:
 

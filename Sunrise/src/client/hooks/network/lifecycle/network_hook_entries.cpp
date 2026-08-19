@@ -13,6 +13,7 @@
 #include "../membership_update_probe.h"
 #include "../scheduler_handler_probe.h"
 #include "../scheduler_signature_probe.h"
+#include "../sobject_apply_probe.h"
 #include "../sobject_bind_probe.h"
 #include "../sobject_create_probe.h"
 #include "../sobject_native_probe.h"
@@ -66,6 +67,8 @@ namespace {
         activity_mode_probe::type_resolver_entry_point(),
         signon::readiness_entry_point(),
         signon::ready_entry_point(),
+        sobject_apply_probe::apply_entry_point(),
+        sobject_apply_probe::kind0_entry_point(),
     };
 }
 
@@ -120,6 +123,8 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.activityTypeResolver, replacements[33]},
         hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[34]},
         hooking::detour::Spec{resolved.signOnReadinessReady, replacements[35]},
+        hooking::detour::Spec{resolved.sobjectApplyJob, replacements[36]},
+        hooking::detour::Spec{resolved.sobjectKind0Constructor, replacements[37]},
     };
 }
 

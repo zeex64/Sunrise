@@ -53,6 +53,8 @@ enum class HookSlot : std::size_t {
     activityTypeResolver,
     signOnReadinessFailure,
     signOnReadinessReady,
+    sobjectApplyJob,
+    sobjectKind0Constructor,
     count,
 };
 

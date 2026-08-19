@@ -286,20 +286,31 @@ The slot-14 atomic run then completed the current wire milestone:
   profile (`4B205B8101000000AC2200005C000000`), identity baseline, and observed mask metadata
   `0x00004000`. The entity gate opens only if this produces exactly 130 bits. The first Basin create
   then carries that update atomically and suppresses the staged follow-up.
+- The atomic Basin run passed every wire-side requirement. At `t=68853`, token `...0003`,
+  namespace 2, view 1 decoded a 216-bit record as entity `0x00200000`, cell `0x000B`, flags
+  `0x0003`, with the exact player-X+3 transform. Slot 0 became occupied six milliseconds later,
+  there was no missing-update assertion, and the session later reported zero corrupt reads. It
+  still produced no target-RSAT registration and no glue bind. The accepted record therefore did
+  not reach native construction; invisibility in this run is expected and is not yet a render-only
+  failure.
+- Ghidra identifies the next exact boundary as the asynchronous type-2 apply job
+  `FUN_1417085C0`. It re-decodes the retained creation and invokes codec slot `+0xB0`, whose kind-0
+  implementation is `FUN_1417242F0`. The new diagnostic build passively logs both boundaries for
+  decoded experiment slots as `sobject-apply` and `sobject-kind0`; it does not alter the accepted
+  create/update body.
 
 ## Immediate plan
 
-### 1. Test the atomic current-Basin create
+### 1. Trace the post-decode apply boundary
 
-- Load EDZ, transition from Town to Basin once, and wait. First require
-  `variant=spatial-transform-player-x3-preload` with `bits=130`, then the already-proven 287-bit
-  probe and complete ten-call handler trace. The create should leave on the next service tick,
-  before the probe's transport acknowledgement.
-- The next `entity-create-out` must name token `...0003`, namespace 2, view 1, slot 0, region 24,
-  bubble 3, cell 11, `update=inline`, `update_bits=130`, and `combined=1`. Any old token,
-  namespace 1, or cell 145 is a hard regression.
-- Require the create packet's ten-call handler epoch, `entity-record cell=0x000B flags=0x0003`, a
-  target-RSAT registration, `sobject-bind-dispatch status=bound`, and slot-0 occupancy.
+- Repeat the same Town-to-Basin transition once. Preserve the proven `...0003`, namespace-2,
+  view-1, cell-11 atomic record and slot-0 occupancy.
+- If no `sobject-apply` line follows, the type-2 job was never dispatched or was cancelled before
+  its native apply callback. Trace its queue insertion and cancellation next.
+- If `sobject-apply` appears but `sobject-kind0` does not, creation re-decode, entity/cell
+  validation, or codec selection rejected it. If `sobject-kind0 result=0` appears, instrument the
+  constructor's first failing predicate. Only `result=1` plus `sobject-bind-dispatch status=bound`
+  moves the investigation back to rendering.
 
 ### 2. Observe the nearby Vandal
 
@@ -348,7 +359,8 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Two-view tail proof: `83cf6b0c test: isolate two-view scheduler tails`.
 - Previous bounded spawn test: `2abfb562 test: create Vandal in current Basin view`.
 - Pre-ACK Basin test: `12968ec2 test: use proven two-view window for Vandal`.
-- Current atomic Basin test: `test: atomically create current-view Vandal` (this checkpoint).
+- Atomic Basin test: `4a19acb test: atomically create current-view Vandal`.
+- Current post-decode diagnostic: `diagnose: trace replicated object apply` (this checkpoint).
 - The tested path preloads shared Vandal RSAT `0x815B204B`, sends the 86-bit slot-13 staged control,
   then sends the 216-bit slot-14 atomic create/update with map-global cell `0x91` and the exact
   native nearby-player transform. Both allocate; neither is visible.
@@ -367,6 +379,8 @@ Once the director evaluates an encounter and creates native squad/member objects
   `a9afb46a3bd8e273f7346f312c333fcef18d61f2985bec692e157e922db5d3d6`.
 - The current atomic Basin Release candidate has SHA-256
   `cba76fa8b262b02ff4453560ae5f7456ad00715f09db318bbf524f10fd76a9c2`.
+- The current post-decode diagnostic Release candidate has SHA-256
+  `b295f21dcaaf17706a05766f75ce477dde50e606b24f3aad4d2e6886fefc40ca`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

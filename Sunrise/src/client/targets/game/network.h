@@ -56,6 +56,8 @@ struct Targets {
     std::byte* activityModeSelector{};
     std::byte* activityModeSetter{};
     std::byte* activityTypeResolver{};
+    std::byte* sobjectApplyJob{};
+    std::byte* sobjectKind0Constructor{};
     std::byte* contentIdToken{};
 };
 

@@ -53,6 +53,8 @@ enum class Id : std::size_t {
     activityModeSelector,
     activityModeSetter,
     activityTypeResolver,
+    sobjectApplyJob,
+    sobjectKind0Constructor,
     contentIdTokenLoad,
     queuezObjectResolver,
     queuezFamily5Subscribe,

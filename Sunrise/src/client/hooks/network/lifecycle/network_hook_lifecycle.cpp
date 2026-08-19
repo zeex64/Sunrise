@@ -13,6 +13,7 @@
 #include "../runtime.h"
 #include "../scheduler_handler_probe.h"
 #include "../scheduler_signature_probe.h"
+#include "../sobject_apply_probe.h"
 #include "../sobject_bind_probe.h"
 #include "../sobject_create_probe.h"
 #include "../sobject_native_probe.h"
@@ -153,6 +154,7 @@ bool uninstall() noexcept {
         membership_update_probe::reset();
         scheduler_handler_probe::reset();
         scheduler_signature_probe::reset();
+        sobject_apply_probe::reset();
         sobject_bind_probe::reset();
         sobject_create_probe::reset();
         sobject_native_probe::reset();

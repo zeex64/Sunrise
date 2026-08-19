@@ -170,6 +170,10 @@ void watch(std::uint32_t entityId) noexcept {
     }
 }
 
+bool watched(std::uint32_t entityId) noexcept {
+    return find_watch(entityId) != nullptr;
+}
+
 void reset() noexcept {
     for (WatchEntry& entry : g_watches) {
         entry.dispatches.store(0, std::memory_order_relaxed);

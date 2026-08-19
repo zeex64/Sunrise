@@ -126,6 +126,9 @@ bool derive(std::span<const patterns::ImageRange> image,
     resolved.activityModeSetter = matches[index(patterns::game::Id::activityModeSetter)].address;
     resolved.activityTypeResolver =
         matches[index(patterns::game::Id::activityTypeResolver)].address;
+    resolved.sobjectApplyJob = matches[index(patterns::game::Id::sobjectApplyJob)].address;
+    resolved.sobjectKind0Constructor =
+        matches[index(patterns::game::Id::sobjectKind0Constructor)].address;
     std::byte* const contentIdTokenLoad =
         matches[index(patterns::game::Id::contentIdTokenLoad)].address;
     if (!relative::resolve(contentIdTokenLoad,

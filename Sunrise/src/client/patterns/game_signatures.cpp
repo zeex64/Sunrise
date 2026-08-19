@@ -368,6 +368,24 @@ constexpr std::string_view kActivityTypeResolverText =
 constexpr auto kActivityTypeResolver =
     signature<signature_length(kActivityTypeResolverText)>(kActivityTypeResolverText);
 
+// Matches the asynchronous type-2 replicated-object apply job. The RIP-relative security-cookie
+// load is wildcarded; the fixed frame size and saved job pointer make the entry unique.
+constexpr std::string_view kSobjectApplyJobText =
+    "40 53 48 81 EC 50 01 00 00 48 8B 05 ? ? ? ? 48 33 C4 48 89 84 24 40 01 00 00 48 8B D9 "
+    "33 D2 48 8D 4C 24 30 41 B8 10 01 00 00";
+/** Compiled pattern bytes of the sobject apply-job signature above. */
+constexpr auto kSobjectApplyJob =
+    signature<signature_length(kSobjectApplyJobText)>(kSobjectApplyJobText);
+
+// Matches the kind-0 replicated-object constructor reached through the entity codec's +0xB0
+// virtual. Its large fixed frame and saved argument registers form a unique current-image entry.
+constexpr std::string_view kSobjectKind0ConstructorText =
+    "48 89 5C 24 08 48 89 74 24 18 55 57 41 54 41 56 41 57 48 8D AC 24 00 F5 FF FF 48 81 EC "
+    "00 0C 00 00";
+/** Compiled pattern bytes of the kind-0 constructor signature above. */
+constexpr auto kSobjectKind0Constructor =
+    signature<signature_length(kSobjectKind0ConstructorText)>(kSobjectKind0ConstructorText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -452,6 +470,8 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"activity_mode_selector", kActivityModeSelector},
     patterns::Pattern{"activity_mode_setter", kActivityModeSetter},
     patterns::Pattern{"activity_type_resolver", kActivityTypeResolver},
+    patterns::Pattern{"sobject_apply_job", kSobjectApplyJob},
+    patterns::Pattern{"sobject_kind0_constructor", kSobjectKind0Constructor},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},
