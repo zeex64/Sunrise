@@ -147,6 +147,86 @@ struct EntityCreatePlan {
     bool present{};
 };
 
+/** Stable reason the first server-authored create is not ready to leave. */
+enum class EntityCreateGate : std::uint8_t {
+    ready,
+    controlQueue,
+    view,
+    schedulerShape,
+    captureMissing,
+    candidate,
+    baseline,
+    slot,
+    generation,
+    signature,
+    schedulerIdentity,
+    remoteLayout,
+    schedulerEntry,
+    settling,
+    attempted,
+};
+
+/** One transition-only snapshot of the guarded entity-create inputs. */
+struct EntityCreateGateReport {
+    std::uint64_t token{};
+    std::uint64_t readyAge{};
+    std::size_t queueCount{};
+    std::uint32_t occupied{};
+    std::uint32_t available{};
+    std::uint16_t wireBits{};
+    std::uint16_t slot{};
+    std::int32_t namespaceId{-1};
+    EntityCreateGate gate{EntityCreateGate::view};
+    std::uint8_t signatureViews{};
+    std::uint8_t localViews{};
+    std::uint8_t remoteViews{};
+    std::uint8_t handleGeneration{};
+    std::uint8_t reservedGeneration{};
+    std::uint8_t objectGeneration{};
+    std::uint8_t attempts{};
+    bool awaitingAcknowledgement{};
+    bool capturePresent{};
+    bool candidatePresent{};
+    bool localSignatureValid{};
+    bool remoteSignatureValid{};
+};
+
+[[nodiscard]] const char* entity_create_gate_name(EntityCreateGate gate) noexcept {
+    switch (gate) {
+    case EntityCreateGate::ready:
+        return "ready";
+    case EntityCreateGate::controlQueue:
+        return "control-queue";
+    case EntityCreateGate::view:
+        return "view";
+    case EntityCreateGate::schedulerShape:
+        return "scheduler-shape";
+    case EntityCreateGate::captureMissing:
+        return "capture-missing";
+    case EntityCreateGate::candidate:
+        return "candidate";
+    case EntityCreateGate::baseline:
+        return "baseline";
+    case EntityCreateGate::slot:
+        return "slot";
+    case EntityCreateGate::generation:
+        return "generation";
+    case EntityCreateGate::signature:
+        return "signature";
+    case EntityCreateGate::schedulerIdentity:
+        return "scheduler-identity";
+    case EntityCreateGate::remoteLayout:
+        return "remote-layout";
+    case EntityCreateGate::schedulerEntry:
+        return "scheduler-entry";
+    case EntityCreateGate::settling:
+        return "settling";
+    case EntityCreateGate::attempted:
+        return "attempted";
+    }
+    return "unknown";
+}
+
 /**
  * Measures schema 0x80806AEA with the bit count observed around the native encoder call.
  * The schema is variable-length and does not contain the scheduler's logical view list. No live
@@ -313,28 +393,52 @@ write_scheduler_signature(bits::Writer& writer,
 
 /** Builds a create only when the bound token, scheduler entry, and pristine slot all agree. */
 [[nodiscard]] bool prepare_entity_create(const state::gameplay::PeerLink& peer,
-                                         EntityCreatePlan& output) noexcept {
+                                         EntityCreatePlan& output,
+                                         EntityCreateGate& gate) noexcept {
     output = {};
     output.namespaceId = -1;
-    if (!peer.view.bound || peer.view.token == 0 || !peer.schedulerSignature.present
+    if (!peer.view.bound || peer.view.token == 0) {
+        gate = EntityCreateGate::view;
+        return false;
+    }
+    if (!peer.schedulerSignature.present
         || peer.schedulerSignature.viewCount != kProvenSchedulerViewCount
         || peer.schedulerSignature.viewCount > peer.schedulerSignature.views.size()) {
+        gate = EntityCreateGate::schedulerShape;
         return false;
     }
 
     client::hooks::network::entity_slot_probe::ViewCapture capture{};
-    if (!client::hooks::network::entity_slot_probe::find(peer.view.token, capture)
-        || !capture.candidatePresent || capture.namespaceId < 0
-        || capture.occupiedCount < kFirstEntityBaselineOccupied || capture.slot >= 0x2000
-        || capture.availableCount == 0 || capture.handleGeneration != 0
-        || capture.reservedGeneration != 0 || capture.objectGeneration != 0) {
+    if (!client::hooks::network::entity_slot_probe::find(peer.view.token, capture)) {
+        gate = EntityCreateGate::captureMissing;
+        return false;
+    }
+    if (!capture.candidatePresent || capture.namespaceId < 0) {
+        gate = EntityCreateGate::candidate;
+        return false;
+    }
+    if (capture.occupiedCount < kFirstEntityBaselineOccupied) {
+        gate = EntityCreateGate::baseline;
+        return false;
+    }
+    if (capture.slot >= 0x2000 || capture.availableCount == 0) {
+        gate = EntityCreateGate::slot;
+        return false;
+    }
+    if (capture.handleGeneration != 0 || capture.reservedGeneration != 0
+        || capture.objectGeneration != 0) {
+        gate = EntityCreateGate::generation;
         return false;
     }
 
     if (!capture.schedulerSignatureValid
-        || capture.schedulerSignature != peer.schedulerSignature.value
-        || capture.schedulerViewCount != peer.schedulerSignature.viewCount
+        || capture.schedulerSignature != peer.schedulerSignature.value) {
+        gate = EntityCreateGate::signature;
+        return false;
+    }
+    if (capture.schedulerViewCount != peer.schedulerSignature.viewCount
         || capture.schedulerKey != capture.token || peer.schedulerSignature.wireBits == 0) {
+        gate = EntityCreateGate::schedulerIdentity;
         return false;
     }
     // The local list drives outbound ordering, while the remote list is what the client currently
@@ -344,6 +448,7 @@ write_scheduler_signature(bits::Writer& writer,
     const bool schedulerAgrees = scheduler_layouts_agree(capture);
     const bool bootstrapScheduler = !schedulerAgrees && scheduler_remote_is_pristine(capture);
     if (!schedulerAgrees && !bootstrapScheduler) {
+        gate = EntityCreateGate::remoteLayout;
         return false;
     }
     std::size_t match = capture.schedulerViewKeys.size();
@@ -353,11 +458,13 @@ write_scheduler_signature(bits::Writer& writer,
             continue;
         }
         if (match != capture.schedulerViewKeys.size()) {
+            gate = EntityCreateGate::schedulerEntry;
             return false;
         }
         match = index;
     }
     if (match == capture.schedulerViewKeys.size()) {
+        gate = EntityCreateGate::schedulerEntry;
         return false;
     }
     output.token = capture.token;
@@ -371,7 +478,43 @@ write_scheduler_signature(bits::Writer& writer,
     output.namespaceId = capture.namespaceId;
     output.bootstrapScheduler = bootstrapScheduler;
     output.present = true;
+    gate = EntityCreateGate::ready;
     return true;
+}
+
+/** Captures one diagnostic without moving any native or peer state. Callers hold the peer lock. */
+[[nodiscard]] EntityCreateGateReport capture_entity_create_gate(
+    const state::gameplay::PeerLink& peer, EntityCreateGate gate, std::uint64_t now) noexcept {
+    EntityCreateGateReport output{};
+    output.token = peer.view.token;
+    output.gate = gate;
+    output.queueCount = peer.outbound.count;
+    output.awaitingAcknowledgement = peer.outbound.awaitingAcknowledgement;
+    output.signatureViews = peer.schedulerSignature.viewCount;
+    output.wireBits = peer.schedulerSignature.wireBits;
+    output.attempts = peer.entityCreateAttempts;
+    output.readyAge = peer.entityCreateReadySince == 0 ? 0 : now - peer.entityCreateReadySince;
+
+    client::hooks::network::entity_slot_probe::ViewCapture capture{};
+    output.capturePresent =
+        peer.view.token != 0
+        && client::hooks::network::entity_slot_probe::find(peer.view.token, capture);
+    if (!output.capturePresent) {
+        return output;
+    }
+    output.candidatePresent = capture.candidatePresent;
+    output.namespaceId = capture.namespaceId;
+    output.occupied = capture.occupiedCount;
+    output.available = capture.availableCount;
+    output.slot = capture.slot;
+    output.handleGeneration = capture.handleGeneration;
+    output.reservedGeneration = capture.reservedGeneration;
+    output.objectGeneration = capture.objectGeneration;
+    output.localSignatureValid = capture.schedulerSignatureValid;
+    output.remoteSignatureValid = capture.schedulerRemoteSignatureValid;
+    output.localViews = capture.schedulerViewCount;
+    output.remoteViews = capture.schedulerRemoteViewCount;
+    return output;
 }
 
 /** Pairs an exact schema encoding with the current native logical view order. */
@@ -490,13 +633,12 @@ enum class FragmentResult : std::uint8_t { invalid, held, complete };
  * Ghidra `FUN_1416D4B00` proves the six-bit set id, eight-set overlap, 1,238-byte stride, and the
  * count/index pair. The reassembled body includes its original marker and unfragmented selector.
  */
-[[nodiscard]] FragmentResult
-assemble_fragment(const state::gameplay::Endpoint& from,
-                  std::span<const std::byte> payload,
-                  std::uint64_t now,
-                  std::span<std::byte> output,
-                  std::size_t& outputSize,
-                  wire::PacketFragment& decoded) noexcept {
+[[nodiscard]] FragmentResult assemble_fragment(const state::gameplay::Endpoint& from,
+                                               std::span<const std::byte> payload,
+                                               std::uint64_t now,
+                                               std::span<std::byte> output,
+                                               std::size_t& outputSize,
+                                               wire::PacketFragment& decoded) noexcept {
     outputSize = 0;
     if (!wire::decode_packet_fragment(payload, decoded)) {
         return FragmentResult::invalid;
@@ -1287,8 +1429,7 @@ void deliver(const state::gameplay::Endpoint& from,
         wire::PacketFragment fragment{};
         const FragmentResult result =
             assemble_fragment(from, payload, now, assembled, assembledSize, fragment);
-        report(result == FragmentResult::invalid ? core::log::Level::warn
-                                                 : core::log::Level::debug,
+        report(result == FragmentResult::invalid ? core::log::Level::warn : core::log::Level::debug,
                "ev=gameplay stage=fragment result=%s set=%u guard=%u index=%u count=%u "
                "bytes=%zu assembled=%zu",
                result == FragmentResult::complete
@@ -1386,6 +1527,7 @@ void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& si
             peer->entityCreateReadySince = 0;
             peer->entityCreateAttempts = 0;
             peer->lastEntityCreate = 0;
+            peer->entityCreateGate = 0xFF;
         }
         peer->view = signature;
     }
@@ -1418,7 +1560,9 @@ bool link_stage(std::uint64_t sessionId, state::gameplay::PeerStage& stage) noex
 void service(std::uint64_t now) noexcept {
     std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> owed{};
     std::array<EntityCreatePlan, state::gameplay::kAssociationCapacity> entityCreates{};
+    std::array<EntityCreateGateReport, state::gameplay::kAssociationCapacity> gateReports{};
     std::size_t count = 0;
+    std::size_t gateReportCount = 0;
     AcquireSRWLockExclusive(&g_lock);
     for (state::gameplay::PeerLink& peer : g_peers) {
         if (peer.stage == state::gameplay::PeerStage::absent) {
@@ -1429,6 +1573,7 @@ void service(std::uint64_t now) noexcept {
         EntityCreatePlan candidate{};
         const bool firstAttempt = peer.entityCreateAttempts == 0;
         bool prepared = false;
+        EntityCreateGate gate = firstAttempt ? EntityCreateGate::view : EntityCreateGate::attempted;
         if (firstAttempt) {
             (void)synchronise_scheduler_layout(peer);
             // Reliable membership, join, and view records establish the topology the scheduler
@@ -1436,7 +1581,11 @@ void service(std::uint64_t now) noexcept {
             // that control packet is still awaiting acknowledgement.
             const bool controlQueueSettled =
                 peer.outbound.count == 0 && !peer.outbound.awaitingAcknowledgement;
-            prepared = controlQueueSettled && prepare_entity_create(peer, candidate);
+            if (!controlQueueSettled) {
+                gate = EntityCreateGate::controlQueue;
+            } else {
+                prepared = prepare_entity_create(peer, candidate, gate);
+            }
             if (!prepared) {
                 peer.entityCreateReadyToken = 0;
                 peer.entityCreateReadySlot = 0;
@@ -1451,12 +1600,19 @@ void service(std::uint64_t now) noexcept {
                 peer.entityCreateReadyHandleGeneration = candidate.handleGeneration;
                 peer.entityCreateReadyBootstrap = candidate.bootstrapScheduler;
                 peer.entityCreateReadySince = now;
+                gate = EntityCreateGate::settling;
                 prepared = false;
             } else if (now - peer.entityCreateReadySince
                        < (peer.entityCreateReadyBootstrap ? kEntityCreateBootstrapReadyInterval
                                                           : kEntityCreateReadyInterval)) {
+                gate = EntityCreateGate::settling;
                 prepared = false;
             }
+        }
+        const auto gateValue = static_cast<std::uint8_t>(gate);
+        if (peer.entityCreateGate != gateValue && gateReportCount < gateReports.size()) {
+            peer.entityCreateGate = gateValue;
+            gateReports[gateReportCount++] = capture_entity_create_gate(peer, gate, now);
         }
         // An unacknowledged send queue keeps the packet going out until the peer confirms it.
         // Every packet burns one sequence, so the resend is paced.
@@ -1485,7 +1641,8 @@ void service(std::uint64_t now) noexcept {
         peer.lastTick = now;
         if (!firstAttempt) {
             (void)synchronise_scheduler_layout(peer);
-            prepared = prepare_entity_create(peer, candidate);
+            EntityCreateGate retryGate = EntityCreateGate::attempted;
+            prepared = prepare_entity_create(peer, candidate, retryGate);
         }
         const bool sameAttempt = entityRetryDue && prepared
                                  && candidate.token == peer.entityCreateToken
@@ -1508,6 +1665,36 @@ void service(std::uint64_t now) noexcept {
         ++count;
     }
     ReleaseSRWLockExclusive(&g_lock);
+    for (std::size_t index = 0; index < gateReportCount; ++index) {
+        const EntityCreateGateReport& gate = gateReports[index];
+        report(gate.gate == EntityCreateGate::ready ? core::log::Level::info
+                                                    : core::log::Level::debug,
+               "ev=gameplay stage=entity-create-gate result=%s token=0x%016llX "
+               "queue=%zu/%u signature=%u/%u capture=%u candidate=%u namespace=%d "
+               "occupied=%u available=%u slot=%u gen=%u/%u/%u local=%u/%u remote=%u/%u "
+               "ready_ms=%llu attempts=%u",
+               entity_create_gate_name(gate.gate),
+               static_cast<unsigned long long>(gate.token),
+               gate.queueCount,
+               gate.awaitingAcknowledgement ? 1U : 0U,
+               static_cast<unsigned>(gate.signatureViews),
+               static_cast<unsigned>(gate.wireBits),
+               gate.capturePresent ? 1U : 0U,
+               gate.candidatePresent ? 1U : 0U,
+               gate.namespaceId,
+               gate.occupied,
+               gate.available,
+               static_cast<unsigned>(gate.slot),
+               static_cast<unsigned>(gate.handleGeneration),
+               static_cast<unsigned>(gate.reservedGeneration),
+               static_cast<unsigned>(gate.objectGeneration),
+               gate.localSignatureValid ? 1U : 0U,
+               static_cast<unsigned>(gate.localViews),
+               gate.remoteSignatureValid ? 1U : 0U,
+               static_cast<unsigned>(gate.remoteViews),
+               static_cast<unsigned long long>(gate.readyAge),
+               static_cast<unsigned>(gate.attempts));
+    }
     for (std::size_t index = 0; index < count; ++index) {
         const bool sent = send_acknowledgement(owed[index], entityCreates[index]);
         if (entityCreates[index].present) {

@@ -1697,6 +1697,33 @@ connection summary confirmed one local record and 31 empty records. The correcte
 scans shared activity State for the newest region session; the zero route-local value is now only
 the fallback when that scan finds nothing.
 
+The corrected run proves the stationary disconnect fixed. At `t=86867`, typed identity zero paired
+to the live public session SOID `0x9EAA300100200002`. The native producer briefly published `2/1`
+while applying the response, then reached `2/2` with two distinct source entries. The new host
+target first appeared in state 1 with connection record 1 already keyed to the same SOID; by
+`t=87266`, both targets were state 2, both connection records were state 3, and every target and
+global timer was disabled at `0xFFFFFFFFFFFFFFFF`. That state remained unchanged through at least
+`t=262464`, more than 175 seconds after translation and well beyond the former 91-second cleanup.
+There were no peer-subscription failures, prerequisite-22 cleanup, or world disconnect. A later
+retired `GAH1` link raised `_connection_failure_suicide`, but the active gameplay and BAP links kept
+exchanging packets and activity pushes, so that line is not the account failure returning.
+
+With session stability established, the next blocking boundary is again entity initialization.
+The public view remains pending with 13 active native slots while the server's gameplay packets
+carry `entries=0`; a separate empty namespace view reports ready. The account fix removes the time
+limit from this investigation but does not acknowledge or initialize those public native objects.
+
+The same run explains why `entity-create-out` has mostly required zone travel. The public view first
+reached the 13-object baseline at `t=93009`, but the native local scheduler still contained two
+views. It collapsed to the supported single-view layout at `t=93207`, then the next regional group
+queued fresh reliable control records at `t=93407`: only about 200 ms later. The guarded pristine
+bootstrap currently requires one full 250 ms resend interval with both a stable one-view layout and
+a settled control queue, so this safe window closes before the first create can leave. Once the
+control queue settles, the new empty regional view makes the scheduler multi-view, which this host
+intentionally refuses because earlier two-view packets were decoded as corrupt. Transition-only
+`entity-create-gate` diagnostics now record which of these conditions blocks the next run; they do
+not change replication behavior.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only

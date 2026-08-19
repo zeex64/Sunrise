@@ -244,6 +244,8 @@ struct PeerLink {
     std::uint8_t entityCreateAttempts{};
     /** Tick the most recent guarded create attempt left at. */
     std::uint64_t lastEntityCreate{};
+    /** Last bounded entity-create gate diagnostic, 0xFF before the first observation. */
+    std::uint8_t entityCreateGate{0xFF};
     /** True while a received packet still has to be acknowledged. */
     bool acknowledgementOwed{};
     std::uint64_t lastTick{};
