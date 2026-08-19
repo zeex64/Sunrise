@@ -27,8 +27,15 @@ struct Targets {
     std::byte* sobjectCreateEncoder{};
     std::byte* sobjectUpdateEncoder{};
     std::byte* sobjectNativeRegistration{};
+    std::byte* sobjectBinder{};
+    std::byte* sobjectGlueTableBaseSlot{};
+    std::byte* sobjectGlueStrideSlot{};
     std::byte* entityCreateEncoder{};
     std::byte* entitySlotDecoder{};
+    std::byte* schedulerEventDecoder{};
+    std::byte* schedulerMaskDecoder{};
+    std::byte* schedulerEntityPreludeDecoder{};
+    std::byte* schedulerFixedDecoder{};
     std::byte* viewMembershipSync{};
     std::byte* activityMembershipDecoder{};
     std::byte* activityMembershipQueue{};

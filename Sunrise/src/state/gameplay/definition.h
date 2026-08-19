@@ -231,6 +231,21 @@ struct PeerLink {
     std::array<ViewSignature, kSessionsPerLink> views{};
     /** Client scheduler signature. Empty scheduler output is refused until this is present. */
     SchedulerSignature schedulerSignature{};
+    /** Exact two-view scheduler layout used by the single empty-body validation packet. */
+    SchedulerSignature twoViewProbeScheduler{};
+    /** Current bound view that authorized the validation packet. */
+    std::uint64_t twoViewProbeToken{};
+    /** Tick and sequence of that packet, retained until a direct acknowledgement or bound. */
+    std::uint64_t twoViewProbeSentAt{};
+    std::uint16_t twoViewProbePacket{};
+    /** Later outbound packets are bounded below the 128-entry ring's half range. */
+    std::uint8_t twoViewProbePacketsAfter{};
+    /** One validation attempt is permitted for each incarnation of this peer link. */
+    bool twoViewProbeAttempted{};
+    bool twoViewProbeAwaitingAcknowledgement{};
+    bool twoViewProbeAccepted{};
+    /** Suppresses repeat or pre-existing remote-layout mutation diagnostics. */
+    bool twoViewProbeMutationReported{};
     /** Exact one-view scheduler snapshot retained for retries of the selected create. */
     SchedulerSignature entityCreateScheduler{};
     /** Bound view token and pristine slot selected by the first guarded entity-create attempt. */

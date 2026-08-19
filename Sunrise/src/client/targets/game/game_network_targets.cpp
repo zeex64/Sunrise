@@ -20,6 +20,14 @@ Targets g_targets;
 constexpr std::size_t kContentIdTokenDisplacementOffset = 14;
 /** The token load's lea ends after its signed rel32. */
 constexpr std::size_t kContentIdTokenInstructionEndOffset = 18;
+/** The glue dispatcher's imul reads the entry stride through this rel32. */
+constexpr std::size_t kSobjectGlueStrideDisplacementOffset = 0x69;
+/** The glue dispatcher's stride-load instruction ends here. */
+constexpr std::size_t kSobjectGlueStrideInstructionEndOffset = 0x6D;
+/** The glue dispatcher's add reads the table-base pointer through this rel32. */
+constexpr std::size_t kSobjectGlueTableBaseDisplacementOffset = 0x72;
+/** The glue dispatcher's table-base load instruction ends here. */
+constexpr std::size_t kSobjectGlueTableBaseInstructionEndOffset = 0x76;
 
 } // namespace
 
@@ -66,8 +74,27 @@ bool derive(std::span<const patterns::ImageRange> image,
         matches[index(patterns::game::Id::sobjectUpdateEncoder)].address;
     resolved.sobjectNativeRegistration =
         matches[index(patterns::game::Id::sobjectNativeRegistration)].address;
+    resolved.sobjectBinder = matches[index(patterns::game::Id::sobjectBinder)].address;
+    if (!relative::resolve(resolved.sobjectBinder,
+                           kSobjectGlueStrideDisplacementOffset,
+                           kSobjectGlueStrideInstructionEndOffset,
+                           resolved.sobjectGlueStrideSlot)
+        || !relative::resolve(resolved.sobjectBinder,
+                              kSobjectGlueTableBaseDisplacementOffset,
+                              kSobjectGlueTableBaseInstructionEndOffset,
+                              resolved.sobjectGlueTableBaseSlot)) {
+        return false;
+    }
     resolved.entityCreateEncoder = matches[index(patterns::game::Id::entityCreateEncoder)].address;
     resolved.entitySlotDecoder = matches[index(patterns::game::Id::entitySlotDecoder)].address;
+    resolved.schedulerEventDecoder =
+        matches[index(patterns::game::Id::schedulerEventDecoder)].address;
+    resolved.schedulerMaskDecoder =
+        matches[index(patterns::game::Id::schedulerMaskDecoder)].address;
+    resolved.schedulerEntityPreludeDecoder =
+        matches[index(patterns::game::Id::schedulerEntityPreludeDecoder)].address;
+    resolved.schedulerFixedDecoder =
+        matches[index(patterns::game::Id::schedulerFixedDecoder)].address;
     resolved.viewMembershipSync = matches[index(patterns::game::Id::viewMembershipSync)].address;
     resolved.activityMembershipDecoder =
         matches[index(patterns::game::Id::activityMembershipDecoder)].address;

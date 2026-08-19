@@ -12,6 +12,8 @@
 #include "../../../core/logging/log.h"
 #include "coordinator/network_call_coordinator.h"
 #include "platform.h"
+#include "scheduler_handler_probe.h"
+#include "sobject_bind_probe.h"
 #include "sobject_update_probe.h"
 
 namespace sunrise::client::hooks::network::entity_slot_probe {
@@ -151,6 +153,9 @@ void report_decoded_record(const void* recordsAddress, int count) noexcept {
     if (!inspect_decoded_record(recordsAddress, count, snapshot)) {
         return;
     }
+    // Application rewrites the handle generation, but preserves its slot through the later glue
+    // call. Arm that dynamic slot before the staged network job runs.
+    sobject_bind_probe::watch(snapshot.entity);
     std::array<char, kDecodedRecordMaskBytes * 2 + 1> maskHex{};
     std::array<char, kDecodedRecordCreateBytes * 2 + 1> createHex{};
     std::array<char, kDecodedRecordUpdateBytes * 2 + 1> updateHex{};
@@ -426,6 +431,7 @@ __declspec(noinline) int __fastcall decode_list(void* context,
     coordinator::CallLease lease{};
     coordinator::g_callIngress(lease, HookSlot::entitySlotDecoder, coordinator::ConsumerKind::none);
     const auto call = reinterpret_cast<Decoder>(lease.original);
+    scheduler_handler_probe::Call handlerTrace{};
     ReaderSnapshot before{};
     ReaderSnapshot after{};
     std::int32_t namespaceId = -1;
@@ -434,6 +440,8 @@ __declspec(noinline) int __fastcall decode_list(void* context,
     int result = 0;
     __try {
         if (lease.accepting) {
+            handlerTrace =
+                scheduler_handler_probe::begin(scheduler_handler_probe::Lane::entityList, reader);
             manager = manager_from_context(context, namespaceId);
             // FUN_141718510 is the shared direct-entity decoder for every scheduler namespace.
             // The armed server create is already restricted to one stable view, so trace whichever
@@ -444,6 +452,7 @@ __declspec(noinline) int __fastcall decode_list(void* context,
         if (call != nullptr) {
             result = call(context, view, control, reader, capacity, records, count);
         }
+        scheduler_handler_probe::finish(handlerTrace, result);
         if (trace) {
             const bool afterReadable = inspect_reader(reader, after);
             int decodedCount = -1;

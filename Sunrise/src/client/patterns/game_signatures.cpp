@@ -136,6 +136,17 @@ constexpr std::string_view kSobjectNativeRegistrationText =
 constexpr auto kSobjectNativeRegistration =
     signature<signature_length(kSobjectNativeRegistrationText)>(kSobjectNativeRegistrationText);
 
+// Matches simulation_object_glue_set_object_index. The direct-path tail is included because its
+// two rip-relative globals are derived as the glue stride and table-base storage.
+constexpr std::string_view kSobjectBinderText =
+    "48 89 5C 24 08 57 48 83 EC 30 8B FA 8B D9 E8 ? ? ? ? F6 00 07 74 ? "
+    "E8 ? ? ? ? F6 00 02 74 ? E8 ? ? ? ? 48 8D 0D ? ? ? ? 89 5C 24 50 "
+    "48 89 4C 24 20 4C 8D 44 24 50 48 8B C8 89 7C 24 54 41 B9 08 00 00 00 "
+    "48 8D 15 ? ? ? ? E8 ? ? ? ? 48 8B 5C 24 40 48 83 C4 30 5F C3 "
+    "81 E3 FF 1F 00 00 0F AF 1D ? ? ? ? 8B C3 48 03 05 ? ? ? ?";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kSobjectBinder = signature<signature_length(kSobjectBinderText)>(kSobjectBinderText);
+
 // Matches the core replicated-object body encoder. Its complete nonvolatile-save prologue and
 // 0x1A8-byte stack frame are unique in the current image.
 constexpr std::string_view kEntityCreateEncoderText =
@@ -153,6 +164,43 @@ constexpr std::string_view kEntitySlotDecoderText =
 /** Compiled pattern bytes of the entity-list decoder signature above. */
 constexpr auto kEntitySlotDecoder =
     signature<signature_length(kEntitySlotDecoderText)>(kEntitySlotDecoderText);
+
+// Matches the scheduler event-list main decoder. The full nonvolatile-save prologue and first
+// handler loads distinguish it from the other seven-argument scheduler lanes.
+constexpr std::string_view kSchedulerEventDecoderText =
+    "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 54 41 55 41 56 41 57 "
+    "48 83 EC 50 48 8B 41 20 4C 8B E9 48 8D 4C 24 24 49 8B E9";
+/** Compiled pattern bytes of the event-list decoder signature above. */
+constexpr auto kSchedulerEventDecoder =
+    signature<signature_length(kSchedulerEventDecoderText)>(kSchedulerEventDecoderText);
+
+// Matches the scheduler mask-list main decoder. The context offset and complete register setup
+// make this fixed prologue unique in the current image.
+constexpr std::string_view kSchedulerMaskDecoderText =
+    "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 54 41 55 41 56 41 57 "
+    "48 83 EC 20 48 8B 81 30 15 00 00 4C 8B F9 48 8D 4C 24 50 49 8B F1 4D 8B E0";
+/** Compiled pattern bytes of the mask-list decoder signature above. */
+constexpr auto kSchedulerMaskDecoder =
+    signature<signature_length(kSchedulerMaskDecoderText)>(kSchedulerMaskDecoderText);
+
+// Matches the direct-entity predecoder invoked immediately before the entity-list main decoder.
+// Its three-argument setup is fixed and unique in the current image.
+constexpr std::string_view kSchedulerEntityPreludeDecoderText =
+    "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B 41 10 48 8B F2 49 8B F8 "
+    "48 8B 48 08 8B 51 08 48 8D 4C 24 30";
+/** Compiled pattern bytes of the direct-entity predecoder signature above. */
+constexpr auto kSchedulerEntityPreludeDecoder =
+    signature<signature_length(kSchedulerEntityPreludeDecoderText)>(
+        kSchedulerEntityPreludeDecoderText);
+
+// Matches the scheduler fixed-list main decoder. Its short save sequence, stack argument load,
+// and fixed output initialization distinguish it from the other scheduler lanes.
+constexpr std::string_view kSchedulerFixedDecoderText =
+    "48 89 5C 24 10 48 89 74 24 18 41 56 48 83 EC 30 48 8B 5C 24 70 4C 8B F1 "
+    "49 8B C9 49 8B F1 C7 03 00 00 00 00";
+/** Compiled pattern bytes of the fixed-list decoder signature above. */
+constexpr auto kSchedulerFixedDecoder =
+    signature<signature_length(kSchedulerFixedDecoderText)>(kSchedulerFixedDecoderText);
 
 // Matches the membership-to-view synchronization pass. The fixed prologue is unique in the
 // current image and ends before the first position-dependent branch displacement.
@@ -377,8 +425,13 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"sobject_create_encoder", kSobjectCreateEncoder},
     patterns::Pattern{"sobject_update_encoder", kSobjectUpdateEncoder},
     patterns::Pattern{"sobject_native_registration", kSobjectNativeRegistration},
+    patterns::Pattern{"sobject_binder", kSobjectBinder},
     patterns::Pattern{"entity_create_encoder", kEntityCreateEncoder},
     patterns::Pattern{"entity_slot_decoder", kEntitySlotDecoder},
+    patterns::Pattern{"scheduler_event_decoder", kSchedulerEventDecoder},
+    patterns::Pattern{"scheduler_mask_decoder", kSchedulerMaskDecoder},
+    patterns::Pattern{"scheduler_entity_prelude_decoder", kSchedulerEntityPreludeDecoder},
+    patterns::Pattern{"scheduler_fixed_decoder", kSchedulerFixedDecoder},
     patterns::Pattern{"view_membership_sync", kViewMembershipSync},
     patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},

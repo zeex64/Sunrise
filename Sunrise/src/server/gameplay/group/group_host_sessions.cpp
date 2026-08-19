@@ -17,7 +17,7 @@ struct HostSession {
     std::uint64_t groupSessionId{};
     std::uint64_t hostSessionId{};
     std::uint64_t lastUse{};
-    /** Region the advertisement named. The interface reads it; no lookup uses it. */
+    /** Region the advertisement named, used to select the current group and its spatial cell. */
     std::int32_t regionIndex{};
     bool occupied{};
 };
@@ -149,6 +149,25 @@ std::uint64_t holding_group_session(std::uint64_t hostSessionId) noexcept {
     }
     ReleaseSRWLockShared(&g_hostSessionLock);
     return groupSessionId;
+}
+
+/** Resolves the advertised region held by one activity-host session. */
+bool holding_region_index(std::uint64_t hostSessionId, std::int32_t& regionIndex) noexcept {
+    regionIndex = kUnknownRegion;
+    if (hostSessionId == state::activity::kAbsentSessionId) {
+        return false;
+    }
+    bool found = false;
+    AcquireSRWLockShared(&g_hostSessionLock);
+    for (const HostSession& entry : g_hostSessions) {
+        if (entry.occupied && entry.hostSessionId == hostSessionId) {
+            regionIndex = entry.regionIndex;
+            found = true;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_hostSessionLock);
+    return found;
 }
 
 /** Copies every occupied host-session row. */

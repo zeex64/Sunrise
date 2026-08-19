@@ -21,11 +21,16 @@ entity-create lane.
 - Built DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Deployment remains manual; do not copy the DLL into the game directory automatically.
 
-Latest diagnostic DLL at this checkpoint:
+Last committed entity DLL at this checkpoint (`2ce86a3d test atomic Vandal create update`):
 
 ```text
-SHA-256 0a38dbe9827f38700cf19237c9ab8b71ef7376076bce7fc89778a736b4bc9d35
+SHA-256 d946ccd816276734d864f0ded9b6da02350ce444266f7798fe5c55d35335c941
 ```
+
+The uncommitted passive registration/glue-dispatch diagnostic was manually deployed with SHA-256
+`bee5df9bdf30023ba09a2d59b543355233d46984415fddc177d65be94197c67c`. That tested DLL reports
+dispatcher entry but not its table-write postcondition. Current unbuilt working-tree work adds the
+postcondition check; neither candidate is an eventual commit identifier.
 
 ## Confirmed high-level path
 
@@ -2169,9 +2174,96 @@ Creation still raised both native missing-update diagnostics and instantiated th
 injected zero baseline. The transform arrived 66 ms later. The registration's third argument was
 one, but Ghidra shows that value reflects the construction record's absent `+0x30` binding and the
 same value occurs on several normal streamed objects; it is not the replicated slot-binding result.
-The next bounded experiment retains slot 13 as the create-then-update control and uses the captured
-130-bit transform in a combined create/update for pristine slot 14. A successful record should
-consume 216 bits, report flags `0x0003`, occupy slot 14, and avoid both missing-update diagnostics.
+The next bounded experiment retained slot 13 as the create-then-update control and used the captured
+130-bit transform in a combined create/update for pristine slot 14.
+
+### Slot-14 atomic acceptance and the post-decode boundary
+
+The atomic run completed the current wire-format milestone. At `t=66530`, the slot-13 control on
+token `0x9EAA300100200002` decoded one record after 86 bits as entity `0x0010000D`, cell `0x0091`,
+flags `0x0001`; its two missing-update diagnostics were expected. At `t=66597`, slot 14 left with
+`update=inline`, `update_bits=130`, and `combined=1`. The client returned `result=0 count=1` after
+exactly 216 bits and reported entity `0x0010000E`, cell `0x0091`, flags `0x0003`, a transform-dirty
+mask, and the intended player-X-plus-three transform. It added no missing-update diagnostic.
+Namespace 1 advanced to 15 occupied objects (`occupied_low=0x00007FFF`).
+
+This proves resource residency, the explicit map-global cell, atomic create/update framing,
+transform decoding, and replicated-slot allocation. It does not by itself prove that the staged
+record became a renderable native simulation object. Only one `sobject-native` line appeared for
+RSAT `0x815B204B` because that logger deliberately emitted once per RSAT per process. The absence
+of a second line was therefore a logging blind spot, not evidence that slot 14 skipped
+construction. The next passive diagnostic keeps the general one-per-RSAT catalog while reporting
+the first eight target-RSAT registrations with occurrence numbers.
+
+Ghidra places the next boundary after the successful list decode:
+
+```text
+FUN_141718510 / FUN_141718080 decode and stage
+  -> network job type 2
+  -> FUN_1416E6ED0
+  -> FUN_1417085C0 re-decode and validation
+  -> FUN_1416FF790
+  -> kind-0 codec +0xB0, FUN_1417242F0
+  -> FUN_141704870 glue dispatch (direct table write or queued callback)
+```
+
+`FUN_141704870` writes the native object index into the simulation glue table, or queues the
+corresponding glue-set operation. The latest run produced target-RSAT occurrences one and two and
+then called this dispatcher with valid native indices for both experimental slots:
+
+```text
+decoded 0x0010000D -> dispatch 0x7CFBA00D slot 13 native 0x43FC400C
+decoded 0x0010000E -> dispatch 0x2FFBA00E slot 14 native 0x2DFC400D
+```
+
+The generation bits change between staged decode and native application, while the low 13-bit slot
+does not. These events prove both records reached native construction and the kind-0 glue
+dispatcher. The user heard positional Vandal audio immediately beside the player, supporting the
+nearby transform, but saw no model and the object neither reacted nor attacked. Native
+construction, audio, and position therefore work; active-world/render ownership and AI do not.
+The entry-only dispatch still does not prove that its table write completed. The revised probe
+therefore arms the dynamic slot from each successful `entity-record`, preserves repeated dispatcher
+calls, and reports `stage=sobject-bind-dispatch` with the exact glue-table value before and after
+each call. `status=bound` means the post-call value matches the requested native index;
+`status=deferred-or-skipped` means the initial call did not establish that postcondition. A queued
+callback tail-jumps back through the detoured entry and should produce a later bounded occurrence
+with `status=bound` when it applies.
+
+Both experimental records were sent to the older populated token `...0002`. The client had already
+begun the `PUB24.24` transition and routed newer token `...0003`; the newer empty view became
+replication-ready at `t=67198`, bound at `t=67465`, and was the settled current public group by
+`t=72536`. The selector retained `...0002` because it had 15 occupied slots while `...0003` had
+none. This retired-populated versus settled-current split is now a stronger visibility hypothesis
+than another payload change, although it is not yet causal proof because the atomic send occurred
+while the transition was still in flight.
+
+The corrected overlay is visually confirmed and reports physical slice 24, bubble 3. A later
+screenshot shows old region-408 token `...0002` ready and current region-24 token `...0003`
+unjoined after the newer row had left. That screenshot is not injection-time state: during the
+injection, `...0003` joined and bound only after the atomic slot-14 dispatch. This timing supports,
+but does not yet prove, that both native objects were constructed for a view that was retiring.
+
+The newest run later hit one four-second receive timeout at `t=103241` with 84 corrupt reads. The
+process rebuilt the connection and continued afterward. This transport defect remains open, but it
+occurred more than 33 seconds after both native constructions and does not invalidate their decode,
+registration, or dispatch evidence. The accepted 216-bit record should remain unchanged while the
+glue-table postcondition and view ownership are observed.
+
+The current test build resolves the leading ownership mismatch without changing that accepted
+record. `select_replication_view()` now follows the primary-world region to its advertised group
+session and exact bound activity-host view, and fails closed instead of selecting the most-populated
+retiring view. Spatial cell selection is derived from the selected token's held region and the
+destination scenario's `bubbleMapIndices`: EDZ region 24 -> bubble ordinal 3 -> map-global cell 11
+(Basin), while region 408 -> ordinal 51 -> cell 145 (Town). This directly corrects the prior
+`...0002` / cell-145 injection while the client was entering Basin on `...0003`.
+
+Before enabling a create in that current view, the build emits at most one empty two-view validation
+packet per peer-link lifetime. Its body is the exact captured 275-bit signature followed by two
+`00010` handler tails (285 scheduler bits total). It cannot carry an entity. Success requires direct
+coverage of its sent sequence by a later inbound ACK; remote scheduler mutation is logged only as
+`proof=none`. A 3-second or 63-later-packet bound ends the attempt without retry. Four passive
+decoder hooks plus the existing entity-list hook record the per-view event -> mask -> entity-prelude
+-> entity-list -> fixed boundaries under one same-reader/thread epoch.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -2224,30 +2316,30 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the control-plus-combined build once in the initial EDZ zone without moving. Confirm slot 13
-   still accepts its 86-bit create, then a second `entity-create-out` reports slot 14,
-   `update=inline`, `update_bits=130`, and `combined=1`.
-2. Confirm the combined decoder returns `result=0 count=1` after 216 bits and reports entity
-   `0x0010000E`, `cell=0x0091`, flags `0x0003`, and the nearby transform in its update scratch.
-   Both missing-update diagnostics must belong only to slot 13; the slot-14 create must not add one.
-3. Check visually three world units along X from the measured player position. If the combined
-   object renders but has no AI,
-   capture or implement the kind-1 squad/member relationship; sobject allocation alone need not
-   start behavior.
-4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue
-   suppressing scheduler output during two-view transitions, and treat any four-second timeout or
-   new corrupt-read burst as a framing regression.
-5. Trace the activity-host lifecycle after the already-successful EDZ mode selection
+1. Load EDZ, transition once from Town into Basin, then wait. Require
+   `scheduler-two-view-probe result=sent`, ten ordered `scheduler-handler-trace` calls, and finally
+   `result=accepted`. Remote mutation alone is not success.
+2. Confirm the current entity gate resolves the Basin view and reports `region=24 bubble=3 cell=11`.
+   Old token `...0002` or cell 145 while Basin is current is a selector regression.
+3. If the empty two-view packet is directly acknowledged with zero new corrupt reads, enable the
+   unchanged 216-bit atomic Vandal body in the current bound view. Require the decoded cell, target
+   RSAT occurrence, and `sobject-bind-dispatch status=bound` for its dynamic slot.
+4. If a correctly owned and bound object remains audible but invisible, capture a real authored
+   biped's parent, stream-source, and RSAT suffix before changing the payload. Do not guess them.
+5. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
+   binds an already-existing native squad and does not turn a standalone kind-0 sobject into an
+   active encounter enemy.
+6. Trace the activity-host lifecycle after the already-successful EDZ mode selection
    (`definition=0x0109ED6B`, activity type 6) and public remote-session constructor. Identify which
    missing host state or server publication starts director/encounter evaluation. Do not modify the
    correct local-posse versus remote-public route selectors.
-6. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
+7. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
    squad `0x80B2E9A2` only to validate authored relationships. None is interchangeable with the
    runtime sobject RSAT field.
-7. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
+8. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
    exact native body. Its physics host and activity receipts can then become useful downstream,
    after visible entity replication is proven.
-8. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
+9. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
    before activity launch through initial zone load. The existing NetDuma file contains counters,
    not entity packets.
 
@@ -2258,6 +2350,10 @@ cmake --build /tmp/sunrise-entity-probe-release-codex --config Release --paralle
 sha256sum build/x64/Release/steam_api64.dll
 git diff --check
 ```
+
+Current Release test DLL SHA-256:
+`dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`.
+Committed as `test: validate current EDZ replication view` (this checkpoint).
 
 After manual deployment, inspect:
 
@@ -2285,6 +2381,7 @@ sobject-create
 sobject-rsat-preload
 sobject-update
 sobject-native
+sobject-bind-dispatch
 entity-create
 entity-create-out
 entity-slots
@@ -2292,5 +2389,7 @@ entity-view
 scheduler-body
 scheduler-signature
 scheduler-native-signature
+scheduler-two-view-probe
+scheduler-handler-trace
 activity-host-decode
 ```

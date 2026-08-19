@@ -37,6 +37,15 @@ struct HostSessionRow {
  */
 [[nodiscard]] std::uint64_t holding_group_session(std::uint64_t hostSessionId) noexcept;
 
+/**
+ * Resolves the advertised region held by one activity-host session.
+ * @param hostSessionId Activity session published by a gameplay group's host parameter.
+ * @param regionIndex Set to kUnknownRegion first, then receives the stored region on success.
+ * @return True when an occupied row holds the requested activity session.
+ */
+[[nodiscard]] bool holding_region_index(std::uint64_t hostSessionId,
+                                        std::int32_t& regionIndex) noexcept;
+
 /** Copies every occupied host-session row. @param count Receives the copied row count. */
 void snapshot_host_sessions(std::span<HostSessionRow> output, std::size_t& count) noexcept;
 

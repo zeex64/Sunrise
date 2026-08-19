@@ -9,6 +9,7 @@
 #include <cstdio>
 
 #include "../../../core/logging/log.h"
+#include "../../../state/gameplay/definition.h"
 #include "coordinator/network_call_coordinator.h"
 #include "platform.h"
 
@@ -20,8 +21,12 @@ constexpr std::size_t kSeenCapacity = 4096;
 constexpr std::uint32_t kTagBase = 0x80800000;
 constexpr std::uint32_t kTagEntryBits = 13;
 constexpr std::uint32_t kTagEntryMask = (1U << kTagEntryBits) - 1U;
+/** Enough repeated target registrations to cover the control and atomic-create slots. */
+constexpr std::uint32_t kFirstEntityReportLimit = 8;
 
 std::array<std::atomic_uint32_t, kSeenCapacity> g_seen{};
+/** Unlike the general catalog, the entity experiment must retain repeat uses of one RSAT. */
+std::atomic_uint32_t g_firstEntityRegistrations{};
 
 using Registration = void(__fastcall*)(std::uint32_t, std::uint32_t, std::uint8_t);
 
@@ -63,7 +68,16 @@ registration_body(std::uint32_t objectId, std::uint32_t rsat, std::uint8_t unbou
         if (call != nullptr) {
             call(objectId, rsat, unbound);
         }
-        if (lease.accepting && record_once(rsat)) {
+        const bool firstEntity = rsat == state::gameplay::kFirstEntityRsat;
+        std::uint32_t occurrence = 0;
+        bool report = false;
+        if (lease.accepting) {
+            occurrence =
+                firstEntity ? g_firstEntityRegistrations.fetch_add(1, std::memory_order_relaxed) + 1
+                            : 0;
+            report = firstEntity ? occurrence <= kFirstEntityReportLimit : record_once(rsat);
+        }
+        if (report) {
             const std::uint32_t handle = rsat >= kTagBase ? rsat - kTagBase : 0;
             const auto packageId = static_cast<std::uint16_t>(handle >> kTagEntryBits);
             const auto entryIndex = static_cast<std::uint16_t>(handle & kTagEntryMask);
@@ -72,12 +86,14 @@ registration_body(std::uint32_t objectId, std::uint32_t rsat, std::uint8_t unbou
                                               line.size(),
                                               "ev=gameplay stage=sobject-native "
                                               "object=0x%08X rsat=0x%08X package=0x%04X "
-                                              "entry=0x%04X unbound=%u",
+                                              "entry=0x%04X unbound=%u target=%u occurrence=%u",
                                               objectId,
                                               rsat,
                                               static_cast<unsigned>(packageId),
                                               static_cast<unsigned>(entryIndex),
-                                              static_cast<unsigned>(unbound));
+                                              static_cast<unsigned>(unbound),
+                                              firstEntity ? 1U : 0U,
+                                              occurrence);
             if (written > 0) {
                 core::log::write(core::log::Channel::client,
                                  core::log::Level::info,
@@ -99,6 +115,7 @@ void reset() noexcept {
     for (std::atomic_uint32_t& seen : g_seen) {
         seen.store(0, std::memory_order_relaxed);
     }
+    g_firstEntityRegistrations.store(0, std::memory_order_relaxed);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_native_probe

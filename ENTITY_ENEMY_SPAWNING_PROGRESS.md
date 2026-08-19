@@ -17,8 +17,8 @@ squads, and encounters before publishing native objects through the replication 
 | --- | --- |
 | Gameplay session and views | Working and substantially stabilized |
 | Replication scheduler | One-view layout understood; the 203-bit framing correction is validated |
-| Native entity creation | Shared Vandal RSAT `0x815B204B` is proven; explicit native preload now removes the remaining residency race |
-| Entity placement and updates | Cell `0x91`, create, and staged 130-bit transform all decode; combined initial-update test is next |
+| Native entity creation | Shared Vandal RSAT `0x815B204B` is proven on both the staged control and an atomic create/update; slots 13 and 14 allocate |
+| Entity placement and updates | Cell `0x91`, nearby transform, native construction, and positional audio work; render/current-view ownership does not |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
 
 ## Confirmed progress
@@ -191,39 +191,95 @@ The first live nearby-placement run was accepted but remained invisible:
   native readiness predicate on the game networking path, and holds the server create behind a new
   `rsat` gate. Create packets are no longer used as resource-preload probes.
 
+The slot-14 atomic run then completed the current wire milestone:
+
+- The slot-13 control left on token `0x9EAA300100200002` at `t=66530`, decoded one record after
+  86 bits, and produced entity `0x0010000D`, cell `0x0091`, flags `0x0001`. Its two
+  missing-update diagnostics are expected because this control deliberately uses create then
+  update.
+- Once slot 13 occupied, slot 14 left at `t=66597` with `update=inline`, `update_bits=130`, and
+  `combined=1`. The client returned `result=0 count=1` after exactly 216 bits and produced entity
+  `0x0010000E`, cell `0x0091`, flags `0x0003`, a transform-dirty mask, and the intended
+  player-X-plus-three position. Slot 14 added no missing-update diagnostic.
+- Namespace 1 advanced to 15 occupied objects (`occupied_low=0x00007FFF`), making slot 15 the next
+  pristine candidate. This proves atomic create/update framing, resource residency, cell
+  selection, transform decoding, and replicated-slot allocation. It does not by itself prove that
+  the later native simulation-object glue bound the allocation to a renderable runtime object.
+- Only one `sobject-native` line for `0x815B204B` appeared because that diagnostic intentionally
+  recorded each RSAT only once per process. The missing second line is a logging blind spot, not
+  evidence that slot 14 skipped construction. The passive probe now keeps the general one-per-RSAT
+  catalog but records the first eight target-RSAT registrations with `target=1` and an occurrence
+  number.
+- Ghidra places the remaining boundary after the successful list decode. Network job type 2 runs
+  `FUN_1417085C0`, re-decodes the stored creation through `FUN_1416FF790`, validates its entity and
+  cell, then calls codec slot `+0xB0`. Kind 0 resolves to `FUN_1417242F0`; only after it obtains a
+  native object index does it call `FUN_141704870` to associate that index with the replicated
+  entity slot. The latest run produced target-RSAT occurrences one and two, followed by
+  `sobject-bind` dispatches with valid native indices for slots 13 and 14. That proves both records
+  reached native construction and the kind-0 glue dispatcher. The user heard positional Vandal
+  audio immediately beside the player, supporting the nearby transform, but saw no model and the
+  object neither reacted nor attacked. Native/audio/position works; render, active-world ownership,
+  and AI do not.
+- The decoded handles (`0x0010000D` and `0x0010000E`) are not the same full values later passed to
+  the glue dispatcher (`0x7CFBA00D` and `0x2FFBA00E`); only their low 13-bit slots survive that
+  lifecycle boundary. The revised passive probe therefore watches slots armed by successful
+  `entity-record` decodes, not full handles or hard-coded slot numbers.
+- Both experimental records used the older populated token `...0002`. The client had already
+  started the `PUB24.24` transition and routed newer token `...0003`; that newer empty view reached
+  replication-ready at `t=67198`, bound at `t=67465`, and became the settled current public group
+  by `t=72536`. The selector retained `...0002` because it had 15 occupied slots while `...0003`
+  had none. This old-token/current-token split is now a stronger visibility hypothesis than
+  changing the already-accepted payload, but is not yet causal proof because the atomic send
+  occurred while the transition was still in flight.
+- The corrected overlay is visually confirmed and reports the physical EDZ state (slice 24,
+  bubble 3). A later screenshot shows old region-408 token `...0002` ready and current region-24
+  token `...0003` unjoined after that newer row had left. That is a later snapshot, not the
+  injection-time state: during injection, `...0003` joined and bound only after the slot-14 native
+  dispatch. This timing keeps active-world ownership as the leading visibility hypothesis.
+- The newest run later hit one four-second receive timeout at `t=103241` and reported 84 corrupt
+  reads, but the process rebuilt the connection and continued afterward. This transport defect is
+  still real, although it occurred more than 33 seconds after both native constructions and does
+  not invalidate their successful decode/dispatch evidence.
+- The current test build fixes the leading ownership error. Replication-view selection now follows
+  `primary_world.region` to that region's advertised group and exact bound activity-host token; it
+  refuses an older populated view once a current-region group exists. The spatial cell is resolved
+  from the selected token's stored region and destination layout. In EDZ this maps Basin region 24
+  / bubble 3 to map-global cell 11, while Town region 408 / bubble 51 remains cell 145. The audible
+  Vandal was sent to old Town token `...0002`, cell 145, during the move to Basin token `...0003`.
+- A single fail-contained two-view validation now precedes any current-view entity work. It sends
+  the captured 275-bit signature plus two empty five-bit handler tails, never an entity, and accepts
+  success only when a later client packet directly acknowledges that packet sequence. Passive
+  hooks record the exact event, mask, entity-prelude, entity-list, and fixed-lane boundaries for
+  both views. This separates a valid frame from the earlier partial remote mutation and corruption.
+
 ## Immediate plan
 
-### 1. Validate atomic Vandal creation
+### 1. Validate the safe two-view frame
 
-The shared Vandal now accepts both the explicit map-global Town cell and the exact staged transform:
-slot 13 decodes its create after 86 bits, then the same handle decodes the 130-bit native update in
-a 161-bit record at player X+3. Because creation still enters gameworld through its injected zero
-baseline and nothing renders, the current build retains slot 13 as a control, then uses the captured
-transform in a combined create/update on pristine slot 14. Acceptance after 216 bits without either
-missing-update diagnostic will isolate initial-update atomicity from parent, stream, and squad state.
+- Load EDZ, transition from Town to Basin once, and then wait. The build should report
+  `scheduler-two-view-probe result=sent` for the bound Basin token and exactly ten bounded
+  `scheduler-handler-trace` calls when the client enters both views.
+- Treat only `scheduler-two-view-probe result=accepted` as wire success. `remote-mutated` explicitly
+  carries `proof=none`; `unacknowledged`, new corrupt reads, or a channel timeout means the entity
+  path must stay disabled.
+- Confirm the entity gate reports `region=24 bubble=3 cell=11` in Basin. Old token `...0002` or
+  cell 145 while Basin is current is a regression.
 
-### 2. Publish one bounded position
+### 2. Send the unchanged atomic body to the current view
 
-After validating the shared Vandal profile, recover:
+- Only after direct probe acknowledgement, enable a separately bounded create for the current
+  bound token using Basin cell 11 and the already-accepted 216-bit Vandal body.
+- Require `entity-record`, target-RSAT registration, and `sobject-bind-dispatch status=bound` for
+  the dynamically allocated slot. Do not alter the RSAT, transform, parent, or stream source during
+  this ownership test.
 
-- world transform and position;
-- parent relationship;
-- stream-source relationship;
-- RSAT-specific component data;
-- the initial native update and dirty-component masks;
-- whether a kind-1 squad relationship is additionally required.
+### 3. Resolve rendering, then AI
 
-Publish the exact shared-Vandal transform as a separate update-only record after the create's slot
-occupancy is observed. If allocation and transform succeed but nothing renders, investigate
-lifecycle and stream registration. If it renders without behavior, the next boundary is the
-squad/member relation.
-
-### 3. Complete safe scheduler support
-
-- Retain the proven one-view path while entity/update decoding continues.
-- Reverse the remaining per-view handlers and final boundary for two-view scheduler packets.
-- Enable multi-view output only after packets are accepted without partial mutation, corrupt reads,
-  or four-second channel timeouts.
+- If the current-token/cell object is audible and still invisible despite a completed glue-table
+  bind, passively capture a real authored biped's parent, stream-source, and RSAT-specific suffix.
+- Treat nonreactive AI as a separate authored-content problem. A standalone kind-0 sobject is not
+  an encounter actor; EDZ aggression comes from spawn rules, squads, triggers, engagement sensors,
+  and director state. Kind-1 replication binds an existing native squad and cannot create one.
 
 ### 4. Start the authored enemy pipeline
 
@@ -251,12 +307,21 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Branch: `feat_entity_spawning`
 - Scheduler framing base: `01bbf118 fix: restore nested scheduler update framing`
 - Stationary-create base: `b46dabce fix: retain entity settle age across control records`
-- Current working code sends shared Vandal sobject RSAT `0x815B204B` create-only, inherits the
-  active view's spatial cell, confirms the exact occupied slot, and then sends one native-encoded
-  nearby-player update-only record on the first accepted service tick while the one-view layout is
-  still exact on both scheduler sides.
+- Previous atomic-create build: `2ce86a3d test atomic Vandal create update`.
+- Current test build: `test: validate current EDZ replication view` (this checkpoint).
+- The tested path preloads shared Vandal RSAT `0x815B204B`, sends the 86-bit slot-13 staged control,
+  then sends the 216-bit slot-14 atomic create/update with map-global cell `0x91` and the exact
+  native nearby-player transform. Both allocate; neither is visible.
+- The manually deployed diagnostic DLL, SHA-256
+  `bee5df9bdf30023ba09a2d59b543355233d46984415fddc177d65be94197c67c`, proved two target-RSAT
+  registrations and valid glue-dispatch arguments for slots 13 and 14. Its old logger observed
+  dispatcher entry only.
+- The current Release test DLL adds watched-slot glue-table postconditions, current-region view
+  selection, dynamic EDZ cell resolution, and the one-shot two-view ACK/handler probe. SHA-256:
+  `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
-- DLL SHA-256: `041a515670327a4d9bbf15ac721bfb36b829d69fc54e150ff0c457419e8a88ac`
+- Current committed entity DLL SHA-256:
+  `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - Deployment remains manual.
