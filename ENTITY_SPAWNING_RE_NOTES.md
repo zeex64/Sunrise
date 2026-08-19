@@ -2160,6 +2160,19 @@ map-global index 145 (`0x91`), not scenario-local ordinal 51. The corrected buil
 create and update. The predicted accepted sizes remain 86 and 161 bits, with both records reporting
 `cell=0x0091`.
 
+The corrected run matched all four predictions. Create decoded after 86 bits as entity
+`0x0010000D`, slot 13 became occupied, and the staged transform decoded after 161 bits on the same
+entity. Both records reported `cell=0x0091`, and the update scratch retained the exact nearby
+position. The native runtime constructed shared-Vandal RSAT `0x815B204B`; nothing rendered.
+
+Creation still raised both native missing-update diagnostics and instantiated the object from an
+injected zero baseline. The transform arrived 66 ms later. The registration's third argument was
+one, but Ghidra shows that value reflects the construction record's absent `+0x30` binding and the
+same value occurs on several normal streamed objects; it is not the replicated slot-binding result.
+The next bounded experiment retains slot 13 as the create-then-update control and uses the captured
+130-bit transform in a combined create/update for pristine slot 14. A successful record should
+consume 216 bits, report flags `0x0003`, occupy slot 14, and avoid both missing-update diagnostics.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2211,13 +2224,14 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the corrected explicit-Town-cell build once in the initial EDZ zone without moving. Confirm
-   create and update logs both report `cell=145`.
-2. Confirm the create decoder returns `result=0 count=1` after 86 bits and the update decoder does
-   the same after 161 bits. Both entity records must retain handle `0x0010000D` and report
-   `cell=0x0091`; the update must retain `update_bits=130`.
-3. Check visually three world units along X from the measured player position. If the object
-   renders but has no AI,
+1. Run the control-plus-combined build once in the initial EDZ zone without moving. Confirm slot 13
+   still accepts its 86-bit create, then a second `entity-create-out` reports slot 14,
+   `update=inline`, `update_bits=130`, and `combined=1`.
+2. Confirm the combined decoder returns `result=0 count=1` after 216 bits and reports entity
+   `0x0010000E`, `cell=0x0091`, flags `0x0003`, and the nearby transform in its update scratch.
+   Both missing-update diagnostics must belong only to slot 13; the slot-14 create must not add one.
+3. Check visually three world units along X from the measured player position. If the combined
+   object renders but has no AI,
    capture or implement the kind-1 squad/member relationship; sobject allocation alone need not
    start behavior.
 4. Keep the one-view 203-bit scheduler restriction while these payload experiments run. Continue

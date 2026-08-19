@@ -18,7 +18,7 @@ squads, and encounters before publishing native objects through the replication 
 | Gameplay session and views | Working and substantially stabilized |
 | Replication scheduler | One-view layout understood; the 203-bit framing correction is validated |
 | Native entity creation | Shared Vandal RSAT `0x815B204B` is proven; explicit native preload now removes the remaining residency race |
-| Entity placement and updates | Exact shared-Vandal 130-bit nearby transform is captured; staged update awaits validation |
+| Entity placement and updates | Cell `0x91`, create, and staged 130-bit transform all decode; combined initial-update test is next |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
 
 ## Confirmed progress
@@ -193,16 +193,14 @@ The first live nearby-placement run was accepted but remained invisible:
 
 ## Immediate plan
 
-### 1. Validate the staged shared Vandal update
+### 1. Validate atomic Vandal creation
 
-The current build first queues shared Vandal RSAT `0x815B204B` through the game's own loader and
-waits for the exact predicate used by the inbound create codec. It then sends create-only, observes
-the exact low occupied word, and stops retries as soon as its selected slot is allocated. It
-retains the native X+3 wire generated from that accepted baseline, verifies both scheduler layouts
-still match the cached one-view signature on the first accepted service tick, and sends exactly one
-130-bit update-only shortcut for the same handle. The expected sequence is
-`sobject-rsat-preload queued`, `sobject-rsat-preload ready`, `entity-create-out`, slot 13 occupied,
-then `entity-update-out update_bits=130` followed by a decoded update record.
+The shared Vandal now accepts both the explicit map-global Town cell and the exact staged transform:
+slot 13 decodes its create after 86 bits, then the same handle decodes the 130-bit native update in
+a 161-bit record at player X+3. Because creation still enters gameworld through its injected zero
+baseline and nothing renders, the current build retains slot 13 as a control, then uses the captured
+transform in a combined create/update on pristine slot 14. Acceptance after 216 bits without either
+missing-update diagnostic will isolate initial-update atomicity from parent, stream, and squad state.
 
 ### 2. Publish one bounded position
 
