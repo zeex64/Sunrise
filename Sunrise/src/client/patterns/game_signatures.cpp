@@ -205,6 +205,14 @@ constexpr std::string_view kAccountSoidSourceText =
 constexpr auto kAccountSoidSource =
     signature<signature_length(kAccountSoidSourceText)>(kAccountSoidSourceText);
 
+// Matches the connection-manager singleton accessor used by the account-SOID reconciler. The
+// adjacent indexed-dispatch prefix keeps the two-instruction tail-call wrapper unique.
+constexpr std::string_view kAccountConnectionSourceText =
+    "48 8D 0D ? ? ? ? E9 ? ? ? ? CC ? ? ? 33 D2 83 F9 07 77 56 48 63 C1 4C 8D 05";
+/** Compiled pattern bytes of the account connection-manager accessor signature above. */
+constexpr auto kAccountConnectionSource =
+    signature<signature_length(kAccountConnectionSourceText)>(kAccountConnectionSourceText);
+
 // Matches the view creator driven by session-membership synchronization. It is the only path that
 // allocates and binds a per-peer native view before message 40 can find it.
 constexpr std::string_view kViewCreatorText =
@@ -368,6 +376,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"membership_update_encoder", kMembershipUpdateEncoder},
     patterns::Pattern{"account_soid_validator", kAccountSoidValidator},
     patterns::Pattern{"account_soid_source", kAccountSoidSource},
+    patterns::Pattern{"account_connection_source", kAccountConnectionSource},
     patterns::Pattern{"view_creator", kViewCreator},
     patterns::Pattern{"view_address_resolver", kViewAddressResolver},
     patterns::Pattern{"view_channel_validator", kViewChannelValidator},

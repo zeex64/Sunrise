@@ -1554,20 +1554,33 @@ native resource/codec associated with slot 0.
 ### Account-SOID prerequisite table
 
 Ghidra now identifies the exact data consumed by the 91-second disconnect predicate. The validator
-`FUN_140BE2070` scans 32 records beginning at its manager `+0x210`, with a `0x20` stride. A record is
-a valid account SOID only when its qword at `+0x00` is nonzero and the low state byte at `+0x08`
-equals 3. This is the actual final test behind prerequisite `ENUM(22)`.
+`FUN_140BE2070` scans 32 records beginning at its manager `+0x210`, with a `0x20` stride. A nonzero
+SOID whose low state byte at `+0x08` equals 3 is an individually expired/invalid record, not a valid
+one: finding one immediately blocks the prerequisite. A separate timer at manager `+0x610` blocks
+the prerequisite when the game concludes that no peer has a valid account SOID.
 
 An upstream reconciler obtains a desired-SOID singleton from `FUN_140FCC6E0`. Its 32 desired IDs
-begin at singleton `+0x10` with a `0x10` stride. The reconciler creates target records in state 1,
-uses the connection manager to advance them, and eventually produces state 3. A new passive
+begin at singleton `+0x10` with a `0x10` stride. The reconciler creates target records in state 1.
+A matching class-0 connection record in native state 3 advances the account record to state 2 and
+clears its per-record timer. Losing that connection starts the per-record grace timer; expiration
+then advances the account record to invalid state 3. A new passive
 `stage=account-soids` probe hooks only the final validator and compares both tables without changing
 them. It reports target/source nonzero counts plus the first four records, their state, and timer
-fields. This distinguishes an absent desired identity from a present identity stuck in state 1/2.
+fields.
 
-The readiness probe now also resolves the first active slot through the native descriptor table and
-logs its type key, mapped type, kind bytes, namespace mask, and flags. Both new signatures resolve
-uniquely in the pinned Ghidra image.
+The first instrumented run showed the desired source and reconciled target both contain exactly
+`0x9EAA300100100100`. The target is continuously in state 2 with its per-record timer cleared, so
+message-30 profile omission did not prevent the native account identity from being published or
+matched. The unresolved failure is the separate manager `+0x610` no-valid-peer timer. The
+reconciler clears that timer when the desired table changes or when its two copied header qwords
+compare equal; otherwise it starts and advances the timer. The expanded probe now captures those
+manager/source header qwords, the global timer, and the complete matching `0x58` connection record.
+
+The same run resolved active slot 0 to type key 0, mapped type 0, kind 2, namespace mask 1. Its
+namespace flags moved from `0xC1` to `0xC3`, but the readiness method continued returning pending.
+The probe now additionally resolves the kind-2 codec, vtable, and virtual method at vtable `+0x28`,
+including its main-image RVA for direct Ghidra analysis. All added signatures resolve uniquely in
+the pinned Ghidra image.
 
 ### External NetDuma connection-table capture
 
@@ -1609,12 +1622,11 @@ The current checkpoint includes work in:
 
 Immediate stationary EDZ run:
 
-- Confirm `account_soid_validator` attaches and capture `stage=account-soids`. If
-  `source_nonzero=0`, trace the local account identity publisher feeding the desired singleton. If
-  the source is populated but `target_nonzero=0`, trace the reconciler invocation. If the target is
-  present in state 1/2, trace the connection-record state checked by `FUN_140E06000`.
-- Capture the expanded `view-readiness` line for token `...002`. Its `type_key`, `mapped_type`, and
-  kind/flag fields identify slot 0's exact codec family for the next readiness call-site trace.
+- Capture several expanded `stage=account-soids` samples. Compare `mh0/mh1` with `sh0/sh1`, follow
+  the `timer` pair, and retain `conn_state/conn_bytes`. This will identify why the global no-valid
+  timer remains armed despite a live state-2 account record.
+- Capture the expanded `view-readiness` line for token `...002`. Use `readiness_rva` to decompile
+  slot 0's exact kind-2 virtual and trace the condition that keeps it pending.
 - `membership-native-profile` is not expected in a solo run. Retain the hook for a future real
   multi-peer capture; do not wait on it now.
 - The run may stop after several `account-soids` samples and one expanded pending readiness line.

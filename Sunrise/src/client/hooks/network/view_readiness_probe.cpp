@@ -29,6 +29,11 @@ using Scan = std::uint64_t(__fastcall*)(void*, std::uintptr_t, std::uintptr_t, s
 
 struct HandlerSnapshot {
     const void* manager{};
+    const void* registry{};
+    const void* codec{};
+    const void* codecVtable{};
+    const void* readinessMethod{};
+    std::uintptr_t readinessRva{};
     std::int32_t entityNamespace{-1};
     std::int32_t firstActive{-1};
     std::int32_t typeKey{-1};
@@ -98,6 +103,24 @@ void inspect_active_metadata(HandlerSnapshot& output) noexcept {
                     mappedNamespaceMap + 0x50
                         + static_cast<std::size_t>(output.entityNamespace) * 0x40,
                     sizeof output.namespaceFlags);
+    }
+    std::memcpy(&output.registry, manager + 0x10, sizeof output.registry);
+    if (output.registry != nullptr && output.mappedKind >= 0 && output.mappedKind < 64) {
+        const auto* const registry = static_cast<const std::byte*>(output.registry);
+        std::memcpy(&output.codec,
+                    registry + 8 + static_cast<std::size_t>(output.mappedKind) * 8,
+                    sizeof output.codec);
+    }
+    if (output.codec != nullptr) {
+        std::memcpy(&output.codecVtable, output.codec, sizeof output.codecVtable);
+    }
+    if (output.codecVtable != nullptr) {
+        const auto* const vtable = static_cast<const std::byte*>(output.codecVtable);
+        std::memcpy(&output.readinessMethod, vtable + 0x28, sizeof output.readinessMethod);
+    }
+    if (output.readinessMethod != nullptr) {
+        output.readinessRva = reinterpret_cast<std::uintptr_t>(output.readinessMethod)
+                              - reinterpret_cast<std::uintptr_t>(image);
     }
     output.metadataReadable = true;
 }
@@ -202,14 +225,15 @@ __declspec(noinline) std::uint64_t __fastcall scan_body(void* handler,
             if (record(handler, pending, GetTickCount64(), calls)) {
                 std::uint64_t token = 0;
                 (void)view_message_probe::token_for_entity_handler(handler, token);
-                std::array<char, 512> line{};
+                std::array<char, 768> line{};
                 const int written = std::snprintf(
                     line.data(),
                     line.size(),
                     "ev=gameplay stage=view-readiness token=0x%llX result=%s handler=%p "
                     "manager=%p namespace=%d enabled=%u first_active=%d type_key=%d "
                     "mapped_type=%d active_kind=%d mapped_kind=%d active_ns=0x%08X "
-                    "type_flags=0x%02X ns_flags=0x%02X meta=%u readable=%u calls=%llu",
+                    "type_flags=0x%02X ns_flags=0x%02X registry=%p codec=%p vtable=%p "
+                    "readiness=%p readiness_rva=0x%llX meta=%u readable=%u calls=%llu",
                     static_cast<unsigned long long>(token),
                     pending ? "pending" : "ready",
                     handler,
@@ -224,6 +248,11 @@ __declspec(noinline) std::uint64_t __fastcall scan_body(void* handler,
                     snapshot.activeNamespaces,
                     static_cast<unsigned>(snapshot.mappedFlags),
                     static_cast<unsigned>(snapshot.namespaceFlags),
+                    snapshot.registry,
+                    snapshot.codec,
+                    snapshot.codecVtable,
+                    snapshot.readinessMethod,
+                    static_cast<unsigned long long>(snapshot.readinessRva),
                     snapshot.metadataReadable ? 1U : 0U,
                     snapshot.readable ? 1U : 0U,
                     static_cast<unsigned long long>(calls));
