@@ -76,8 +76,8 @@ constexpr std::size_t kExternalProbeByteCapacity = 256;
 constexpr std::uint64_t kResendInterval = 250;
 /** The first EDZ entity view owns thirteen native objects before a server-authored slot is safe. */
 constexpr std::uint32_t kFirstEntityBaselineOccupied = 13;
-/** Bubble ordinal for the selected EDZ Town arrival (name hash 0xB8459D59). */
-constexpr std::uint8_t kFirstEntitySpatialCell = 51;
+/** Map-global spatial cell for the selected EDZ Town arrival (name hash 0xB8459D59). */
+constexpr std::uint8_t kFirstEntitySpatialCell = 145;
 /** A pristine slot's first native allocation advances object generation zero to two. */
 constexpr std::uint8_t kFirstObjectGeneration = 2;
 /** Package-backed tag discriminator used by schema 0x80800014. */

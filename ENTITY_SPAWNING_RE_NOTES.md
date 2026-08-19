@@ -2149,10 +2149,16 @@ allocation/update path.
 Both accepted records still decoded with `cell=0xFFFF`, however. Inheritance is functioning, but
 the active entity-list context itself is the global/default cell; it does not attach a new object
 to the streamed EDZ bubble. The current selected arrival hash `0xB8459D59` resolves from the same
-scenario layout to Town bubble ordinal 51 (map-global index 145). The next bounded build therefore
-uses the codec's explicit-cell branch and writes ordinal 51 on both create and update. This is a
-destination-derived value, not a coordinate-cluster guess. The predicted accepted sizes are 86
-bits for create and 161 bits for update, with both decoded records reporting `cell=0x0033`.
+scenario layout to Town bubble ordinal 51 and map-global index 145.
+
+The first explicit-cell build incorrectly wrote the local ordinal 51. Both sends rolled back after
+19 visible bits with result 2, produced no record, and their rejected retransmissions accumulated
+78 corrupt reads before a four-second receive timeout. Ghidra resolves the index domain: the cell
+initializer uses the decoded byte to index a 256-entry spatial table and the same 256-bit component
+masks that authored containers key by map-global bubble index. The wire cell is therefore Town's
+map-global index 145 (`0x91`), not scenario-local ordinal 51. The corrected build writes 145 on both
+create and update. The predicted accepted sizes remain 86 and 161 bits, with both records reporting
+`cell=0x0091`.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -2205,11 +2211,11 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Run the explicit-Town-cell build once in the initial EDZ zone without moving. Confirm create
-   and update logs both report `cell=51`.
+1. Run the corrected explicit-Town-cell build once in the initial EDZ zone without moving. Confirm
+   create and update logs both report `cell=145`.
 2. Confirm the create decoder returns `result=0 count=1` after 86 bits and the update decoder does
    the same after 161 bits. Both entity records must retain handle `0x0010000D` and report
-   `cell=0x0033`; the update must retain `update_bits=130`.
+   `cell=0x0091`; the update must retain `update_bits=130`.
 3. Check visually three world units along X from the measured player position. If the object
    renders but has no AI,
    capture or implement the kind-1 squad/member relationship; sobject allocation alone need not
