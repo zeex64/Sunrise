@@ -68,6 +68,8 @@ constexpr std::uint32_t kFirstAddSequence = 0;
 constexpr std::uint8_t kInitialViewStage = 1;
 /** Only stage two carries the runtime compatibility signature. */
 constexpr std::uint8_t kSignatureViewStage = 2;
+/** Stage four owns the native readiness scan and may already consume replication. */
+constexpr std::uint8_t kReplicationViewStage = 4;
 /** Both sides reaching stage five opens the simulation gatekeeper. */
 constexpr std::uint8_t kFinalViewStage = 5;
 /** Storage for the embedded host's bounded native peer-session-id. */
@@ -83,6 +85,7 @@ struct ViewHandshake {
     std::uint8_t remoteStage{};
     bool started{};
     bool signatureReady{};
+    bool replicationPublished{};
     bool bound{};
 };
 
@@ -466,6 +469,31 @@ void fill_activity_host(wire::ActivityHostParameter& body, std::uint64_t groupSe
     return true;
 }
 
+/** Publishes the stage-four view to replication without reporting the session fully bound. */
+void publish_replication_view(Admitted& record) noexcept {
+    if (record.view.replicationPublished || !record.view.signatureReady
+        || record.view.localStage < kReplicationViewStage
+        || record.view.remoteStage < kReplicationViewStage) {
+        return;
+    }
+    state::gameplay::ViewSignature signature{};
+    signature.token = record.view.token;
+    signature.kind = kReplicationViewStage;
+    signature.listCount = record.view.signature.count;
+    signature.hasList = true;
+    signature.list = record.view.signature.bytes;
+    signature.bound = false;
+    peer::bind_view(record.sessionId, signature);
+    record.view.replicationPublished = true;
+    report(core::log::Level::info,
+           "ev=gameplay stage=view result=replication-ready local=%u remote=%u index=%d "
+           "token=0x%llX",
+           static_cast<unsigned>(record.view.localStage),
+           static_cast<unsigned>(record.view.remoteStage),
+           record.view.index,
+           static_cast<unsigned long long>(record.view.token));
+}
+
 /** Marks the peer bound only after both sides complete native stage five. */
 void complete_view(Admitted& record) noexcept {
     if (record.view.bound) {
@@ -479,6 +507,7 @@ void complete_view(Admitted& record) noexcept {
     signature.list = record.view.signature.bytes;
     signature.bound = true;
     peer::bind_view(record.sessionId, signature);
+    record.view.replicationPublished = true;
     record.view.bound = true;
     report(core::log::Level::info,
            "ev=gameplay stage=view result=bound local=%u remote=%u index=%d token=0x%llX",
@@ -518,9 +547,12 @@ void progress_view(Admitted& record) noexcept {
         return;
     }
     if (record.view.remoteStage > record.view.localStage) {
-        (void)send_view_stage(record, record.view.remoteStage);
+        if (send_view_stage(record, record.view.remoteStage)) {
+            publish_replication_view(record);
+        }
         return;
     }
+    publish_replication_view(record);
     // Before stage two, the native view lookup may not exist yet and deliberately drops message 40.
     // Once the initiator has answered, the reliable channel and its advancing stage prove receipt.
     // Repeating stage 2, 3, or 4 is not harmless: in particular, a second remote stage 4 makes the
@@ -553,6 +585,8 @@ void accept_view(const state::gameplay::Endpoint& from,
             record->view.localStage = 0;
             record->view.remoteStage = 0;
             record->view.signatureReady = false;
+            record->view.replicationPublished = false;
+            peer::clear_view(record->sessionId);
             restarted = true;
         }
         result = "invalid-stage";

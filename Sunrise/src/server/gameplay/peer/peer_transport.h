@@ -89,11 +89,15 @@ template <typename Body>
 }
 
 /**
- * Binds one peer's view signature.
+ * Publishes one session's view signature to the replication link.
+ * A stage-four signature has `bound=false`; stage five updates the same slot to `bound=true`.
  * @param sessionId Group session the link carries.
  * @param signature Signature taken from the peer's own view message.
  */
 void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& signature) noexcept;
+
+/** Clears one session's provisional or bound replication view. */
+void clear_view(std::uint64_t sessionId) noexcept;
 
 /** @return True once a view signature is bound for that session's link. */
 [[nodiscard]] bool view_bound(std::uint64_t sessionId) noexcept;

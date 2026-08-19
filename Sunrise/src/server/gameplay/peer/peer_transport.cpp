@@ -84,8 +84,8 @@ constexpr std::uint8_t kInstalledTagDiscriminator = 0x16;
 constexpr std::uint64_t kEntityCreateRetryInterval = 2000;
 /** Reject a scheduler layout that only agrees for one transition sample. */
 constexpr std::uint64_t kEntityCreateReadyInterval = 500;
-/** One resend interval lets a pristine client apply its first exact one-view scheduler echo. */
-constexpr std::uint64_t kEntityCreateBootstrapReadyInterval = kResendInterval;
+/** A pristine one-view layout is stable for only ~134 ms before the next regional control burst. */
+constexpr std::uint64_t kEntityCreateBootstrapReadyInterval = 100;
 /** Keeps resource-readiness retries bounded even when the selected RSAT cannot load. */
 constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
 /** Runtime currently proves complete inbound acceptance only for one registered scheduler view. */
@@ -190,6 +190,42 @@ struct EntityCreateGateReport {
     bool localSignatureValid{};
     bool remoteSignatureValid{};
 };
+
+/** Best per-session view for replication on one multiplexed gameplay link. */
+struct SelectedReplicationView {
+    state::gameplay::ViewSignature signature{};
+    client::hooks::network::entity_slot_probe::ViewCapture capture{};
+    bool capturePresent{};
+    bool present{};
+};
+
+/**
+ * Chooses the populated public view over empty overlap/transition views.
+ * A stage-four view is eligible because native reaches stage five only after readiness clears.
+ */
+[[nodiscard]] SelectedReplicationView
+select_replication_view(const state::gameplay::PeerLink& peer) noexcept {
+    SelectedReplicationView output{};
+    for (const state::gameplay::ViewSignature& view : peer.views) {
+        if (view.token == 0) {
+            continue;
+        }
+        client::hooks::network::entity_slot_probe::ViewCapture capture{};
+        const bool captured = client::hooks::network::entity_slot_probe::find(view.token, capture);
+        const bool better = !output.present
+                            || (captured
+                                && (!output.capturePresent
+                                    || capture.occupiedCount > output.capture.occupiedCount));
+        if (!better) {
+            continue;
+        }
+        output.signature = view;
+        output.capture = capture;
+        output.capturePresent = captured;
+        output.present = true;
+    }
+    return output;
+}
 
 [[nodiscard]] const char* entity_create_gate_name(EntityCreateGate gate) noexcept {
     switch (gate) {
@@ -393,11 +429,12 @@ write_scheduler_signature(bits::Writer& writer,
 
 /** Builds a create only when the bound token, scheduler entry, and pristine slot all agree. */
 [[nodiscard]] bool prepare_entity_create(const state::gameplay::PeerLink& peer,
+                                         const SelectedReplicationView& selected,
                                          EntityCreatePlan& output,
                                          EntityCreateGate& gate) noexcept {
     output = {};
     output.namespaceId = -1;
-    if (!peer.view.bound || peer.view.token == 0) {
+    if (!selected.present || selected.signature.token == 0) {
         gate = EntityCreateGate::view;
         return false;
     }
@@ -408,11 +445,11 @@ write_scheduler_signature(bits::Writer& writer,
         return false;
     }
 
-    client::hooks::network::entity_slot_probe::ViewCapture capture{};
-    if (!client::hooks::network::entity_slot_probe::find(peer.view.token, capture)) {
+    if (!selected.capturePresent) {
         gate = EntityCreateGate::captureMissing;
         return false;
     }
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
     if (!capture.candidatePresent || capture.namespaceId < 0) {
         gate = EntityCreateGate::candidate;
         return false;
@@ -483,10 +520,13 @@ write_scheduler_signature(bits::Writer& writer,
 }
 
 /** Captures one diagnostic without moving any native or peer state. Callers hold the peer lock. */
-[[nodiscard]] EntityCreateGateReport capture_entity_create_gate(
-    const state::gameplay::PeerLink& peer, EntityCreateGate gate, std::uint64_t now) noexcept {
+[[nodiscard]] EntityCreateGateReport
+capture_entity_create_gate(const state::gameplay::PeerLink& peer,
+                           const SelectedReplicationView& selected,
+                           EntityCreateGate gate,
+                           std::uint64_t now) noexcept {
     EntityCreateGateReport output{};
-    output.token = peer.view.token;
+    output.token = selected.present ? selected.signature.token : 0;
     output.gate = gate;
     output.queueCount = peer.outbound.count;
     output.awaitingAcknowledgement = peer.outbound.awaitingAcknowledgement;
@@ -495,13 +535,11 @@ write_scheduler_signature(bits::Writer& writer,
     output.attempts = peer.entityCreateAttempts;
     output.readyAge = peer.entityCreateReadySince == 0 ? 0 : now - peer.entityCreateReadySince;
 
-    client::hooks::network::entity_slot_probe::ViewCapture capture{};
-    output.capturePresent =
-        peer.view.token != 0
-        && client::hooks::network::entity_slot_probe::find(peer.view.token, capture);
+    output.capturePresent = selected.capturePresent;
     if (!output.capturePresent) {
         return output;
     }
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
     output.candidatePresent = capture.candidatePresent;
     output.namespaceId = capture.namespaceId;
     output.occupied = capture.occupiedCount;
@@ -518,16 +556,19 @@ write_scheduler_signature(bits::Writer& writer,
 }
 
 /** Pairs an exact schema encoding with the current native logical view order. */
-[[nodiscard]] bool synchronise_scheduler_layout(state::gameplay::PeerLink& peer) noexcept {
+[[nodiscard]] bool synchronise_scheduler_layout(state::gameplay::PeerLink& peer,
+                                                const SelectedReplicationView& selected) noexcept {
     peer.schedulerSignature.viewCount = 0;
     peer.schedulerSignature.views = {};
-    if (!peer.view.bound || peer.view.token == 0 || !peer.schedulerSignature.present) {
+    if (!selected.present || selected.signature.token == 0 || !peer.schedulerSignature.present) {
         return false;
     }
 
-    client::hooks::network::entity_slot_probe::ViewCapture capture{};
-    if (!client::hooks::network::entity_slot_probe::find(peer.view.token, capture)
-        || !capture.schedulerSignatureValid || capture.schedulerViewCount == 0
+    if (!selected.capturePresent) {
+        return false;
+    }
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
+    if (!capture.schedulerSignatureValid || capture.schedulerViewCount == 0
         || capture.schedulerViewCount > peer.schedulerSignature.views.size()
         || capture.schedulerSignature != peer.schedulerSignature.value) {
         return false;
@@ -876,8 +917,13 @@ void answer_connect(const state::gameplay::Endpoint& from,
             peer->stage == state::gameplay::PeerStage::absent
                 ? std::array<std::uint64_t, state::gameplay::kSessionsPerLink>{}
                 : peer->sessions;
+        const std::array<state::gameplay::ViewSignature, state::gameplay::kSessionsPerLink> views =
+            peer->stage == state::gameplay::PeerStage::absent
+                ? std::array<state::gameplay::ViewSignature, state::gameplay::kSessionsPerLink>{}
+                : peer->views;
         *peer = {};
         peer->sessions = held;
+        peer->views = views;
         peer->endpoint = from;
         // The channel id is an incarnation counter: the peer refuses one that does not
         // increase, and reads all ones as unset.
@@ -956,14 +1002,15 @@ void answer_connect(const state::gameplay::Endpoint& from,
     if (peer != nullptr) {
         channel = peer->localConnectionSequence;
         result = "full";
-        for (std::uint64_t& slot : peer->sessions) {
-            if (slot == sessionId) {
+        for (std::size_t index = 0; index < peer->sessions.size(); ++index) {
+            if (peer->sessions[index] == sessionId) {
                 result = "held";
                 bound = true;
                 break;
             }
-            if (slot == 0) {
-                slot = sessionId;
+            if (peer->sessions[index] == 0) {
+                peer->sessions[index] = sessionId;
+                peer->views[index] = {};
                 result = "bound";
                 bound = true;
                 break;
@@ -1394,13 +1441,15 @@ void consume_established(const state::gameplay::Endpoint& from,
     // In both captured two-view transitions the client applied the remote signature, then marked
     // that packet and every repeated scheduler packet corrupt until its four-second timeout. Keep
     // ordinary transport acknowledgements healthy while the multi-view handler tail is unmapped.
-    const bool schedulerPresent = peer.view.bound && peer.schedulerSignature.present
+    const SelectedReplicationView selected = select_replication_view(peer);
+    const bool viewPresent = selected.present && selected.signature.token != 0;
+    const bool schedulerPresent = viewPresent && peer.schedulerSignature.present
                                   && peer.schedulerSignature.viewCount == kProvenSchedulerViewCount;
     std::size_t size = 0;
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)
         || !wire::write_empty_queue(writer)
-        || !wire::write_external_status(writer, peer.view.bound, schedulerPresent)
+        || !wire::write_external_status(writer, viewPresent, schedulerPresent)
         || (schedulerPresent && !write_scheduler(writer, peer.schedulerSignature, entityCreate))
         || !writer.finish(size)) {
         return false;
@@ -1511,25 +1560,63 @@ bool remote_address(std::uint64_t sessionId,
     return present;
 }
 
-/** Binds one peer's view signature. */
+/** Clears the retry state when the selected per-session replication view changes. */
+static void reset_entity_create(state::gameplay::PeerLink& peer) noexcept {
+    peer.entityCreateToken = 0;
+    peer.entityCreateSlot = 0;
+    peer.entityCreateHandleGeneration = 0;
+    peer.entityCreateReadyToken = 0;
+    peer.entityCreateReadySlot = 0;
+    peer.entityCreateReadyHandleGeneration = 0;
+    peer.entityCreateReadyBootstrap = false;
+    peer.entityCreateReadySince = 0;
+    peer.entityCreateAttempts = 0;
+    peer.lastEntityCreate = 0;
+    peer.entityCreateGate = 0xFF;
+}
+
+/** Publishes one session's provisional or bound view signature. */
 void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& signature) noexcept {
     AcquireSRWLockExclusive(&g_lock);
     state::gameplay::PeerLink* peer = find_session_locked(sessionId);
     if (peer != nullptr) {
-        if (peer->view.token != signature.token) {
-            peer->entityCreateToken = 0;
-            peer->entityCreateSlot = 0;
-            peer->entityCreateHandleGeneration = 0;
-            peer->entityCreateReadyToken = 0;
-            peer->entityCreateReadySlot = 0;
-            peer->entityCreateReadyHandleGeneration = 0;
-            peer->entityCreateReadyBootstrap = false;
-            peer->entityCreateReadySince = 0;
-            peer->entityCreateAttempts = 0;
-            peer->lastEntityCreate = 0;
+        const std::uint64_t before = select_replication_view(*peer).signature.token;
+        for (std::size_t index = 0; index < peer->sessions.size(); ++index) {
+            if (peer->sessions[index] == sessionId) {
+                peer->views[index] = signature;
+                break;
+            }
+        }
+        const std::uint64_t after = select_replication_view(*peer).signature.token;
+        if (before != after) {
+            reset_entity_create(*peer);
+        } else {
             peer->entityCreateGate = 0xFF;
         }
-        peer->view = signature;
+    }
+    ReleaseSRWLockExclusive(&g_lock);
+}
+
+/** Clears one session's provisional or bound replication view. */
+void clear_view(std::uint64_t sessionId) noexcept {
+    AcquireSRWLockExclusive(&g_lock);
+    state::gameplay::PeerLink* peer = find_session_locked(sessionId);
+    if (peer != nullptr) {
+        const std::uint64_t before = select_replication_view(*peer).signature.token;
+        std::uint64_t removed = 0;
+        for (std::size_t index = 0; index < peer->sessions.size(); ++index) {
+            if (peer->sessions[index] == sessionId) {
+                removed = peer->views[index].token;
+                peer->views[index] = {};
+                break;
+            }
+        }
+        const std::uint64_t after = select_replication_view(*peer).signature.token;
+        if (before != after || (removed != 0 && peer->entityCreateToken == removed)) {
+            reset_entity_create(*peer);
+        } else {
+            peer->entityCreateGate = 0xFF;
+        }
     }
     ReleaseSRWLockExclusive(&g_lock);
 }
@@ -1538,7 +1625,15 @@ void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& si
 bool view_bound(std::uint64_t sessionId) noexcept {
     AcquireSRWLockShared(&g_lock);
     const state::gameplay::PeerLink* peer = find_session_locked(sessionId);
-    const bool bound = peer != nullptr && peer->view.bound;
+    bool bound = false;
+    if (peer != nullptr) {
+        for (std::size_t index = 0; index < peer->sessions.size(); ++index) {
+            if (peer->sessions[index] == sessionId) {
+                bound = peer->views[index].bound;
+                break;
+            }
+        }
+    }
     ReleaseSRWLockShared(&g_lock);
     return bound;
 }
@@ -1571,11 +1666,12 @@ void service(std::uint64_t now) noexcept {
         // A settled native slot may become ready after the last packet was acknowledged. Poll the
         // first guarded create directly so an idle zone does not need movement traffic to wake it.
         EntityCreatePlan candidate{};
+        const SelectedReplicationView selected = select_replication_view(peer);
         const bool firstAttempt = peer.entityCreateAttempts == 0;
         bool prepared = false;
         EntityCreateGate gate = firstAttempt ? EntityCreateGate::view : EntityCreateGate::attempted;
         if (firstAttempt) {
-            (void)synchronise_scheduler_layout(peer);
+            (void)synchronise_scheduler_layout(peer, selected);
             // Reliable membership, join, and view records establish the topology the scheduler
             // describes. Never let an entity body overtake one or start its settle timer while
             // that control packet is still awaiting acknowledgement.
@@ -1584,7 +1680,7 @@ void service(std::uint64_t now) noexcept {
             if (!controlQueueSettled) {
                 gate = EntityCreateGate::controlQueue;
             } else {
-                prepared = prepare_entity_create(peer, candidate, gate);
+                prepared = prepare_entity_create(peer, selected, candidate, gate);
             }
             if (!prepared) {
                 peer.entityCreateReadyToken = 0;
@@ -1612,7 +1708,7 @@ void service(std::uint64_t now) noexcept {
         const auto gateValue = static_cast<std::uint8_t>(gate);
         if (peer.entityCreateGate != gateValue && gateReportCount < gateReports.size()) {
             peer.entityCreateGate = gateValue;
-            gateReports[gateReportCount++] = capture_entity_create_gate(peer, gate, now);
+            gateReports[gateReportCount++] = capture_entity_create_gate(peer, selected, gate, now);
         }
         // An unacknowledged send queue keeps the packet going out until the peer confirms it.
         // Every packet burns one sequence, so the resend is paced.
@@ -1640,9 +1736,9 @@ void service(std::uint64_t now) noexcept {
         peer.outboundHeadPresent = true;
         peer.lastTick = now;
         if (!firstAttempt) {
-            (void)synchronise_scheduler_layout(peer);
+            (void)synchronise_scheduler_layout(peer, selected);
             EntityCreateGate retryGate = EntityCreateGate::attempted;
-            prepared = prepare_entity_create(peer, candidate, retryGate);
+            prepared = prepare_entity_create(peer, selected, candidate, retryGate);
         }
         const bool sameAttempt = entityRetryDue && prepared
                                  && candidate.token == peer.entityCreateToken
@@ -1728,9 +1824,18 @@ void drop(std::uint64_t sessionId) noexcept {
     if (peer != nullptr) {
         // The channel outlives the session. A leave names one region, and the client keeps playing
         // the other over the same channel.
-        for (std::uint64_t& slot : peer->sessions) {
-            if (slot == sessionId) {
-                slot = 0;
+        const std::uint64_t selected = select_replication_view(*peer).signature.token;
+        for (std::size_t index = 0; index < peer->sessions.size(); ++index) {
+            if (peer->sessions[index] == sessionId) {
+                const std::uint64_t removed = peer->views[index].token;
+                peer->sessions[index] = 0;
+                peer->views[index] = {};
+                if (removed == selected || removed == peer->entityCreateToken) {
+                    reset_entity_create(*peer);
+                } else {
+                    peer->entityCreateGate = 0xFF;
+                }
+                break;
             }
         }
     }

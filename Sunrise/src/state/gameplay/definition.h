@@ -225,8 +225,8 @@ struct PeerLink {
     ReliableQueue small{};
     /** Fragments this host owes the peer on the 32-byte queue. */
     OutboundQueue outbound{};
-    /** View signature bound for this peer. Replication is refused until it is bound. */
-    ViewSignature view{};
+    /** Per-session view signatures. Stage four may replicate before stage five marks one bound. */
+    std::array<ViewSignature, kSessionsPerLink> views{};
     /** Client scheduler signature. Empty scheduler output is refused until this is present. */
     SchedulerSignature schedulerSignature{};
     /** Bound view token and pristine slot selected by the first guarded entity-create attempt. */

@@ -1724,6 +1724,20 @@ intentionally refuses because earlier two-view packets were decoded as corrupt. 
 `entity-create-gate` diagnostics now record which of these conditions blocks the next run; they do
 not change replication behavior.
 
+The following stationary run made the protocol cycle explicit. The populated public token
+`0x9EAA300100200002` remained at message-40 stage four, while the empty transition token
+`0x9EAA300100200003` alone reached stage five and became the peer transport's selected view. Ghidra
+`FUN_1416F6810` confirms that stage four calls `FUN_141713980`, returns without advancing while any
+entity handler reports pending, and only then moves the native view to stage five. Waiting for stage
+five before publishing replication therefore waits on the readiness that replication must clear.
+The transport now retains one view signature per carried group session, publishes a provisional
+replication view once both message-40 sides reach stage four, keeps `view_accepted` false until the
+same session reaches stage five, and selects the captured view with the highest native occupancy so
+an empty overlap view cannot displace the 13-object public view. In this run the exact one-view
+signature became valid at `t=67691`, but the next region queued control records at `t=67825`, leaving
+only about 134 ms. The pristine-only settle interval is therefore 100 ms; every identity, baseline,
+slot, generation, signature, scheduler-layout, and settled-control guard remains unchanged.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
