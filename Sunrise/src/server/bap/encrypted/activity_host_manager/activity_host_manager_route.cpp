@@ -64,14 +64,21 @@ void report_selection(const request_selection::ActivityManagerSelection& source)
         std::snprintf(line.data(),
                       line.size(),
                       "ev=bap svc=6 stage=selection result=ok name=%.*s activity=%d "
-                      "from_activity=%d reason=%d bubble=0x%X spawn=0x%X",
+                      "from_activity=%d reason=%d kind=%d element=%d skulls=%u "
+                      "bubble=0x%X spawn=0x%X descriptor_bits=%zu name_bit=%zu trailing=%u",
                       static_cast<int>(source.packageNameLength),
                       reinterpret_cast<const char*>(source.packageName.data()),
                       static_cast<int>(source.activityIndex),
                       static_cast<int>(source.sourceActivityIndex),
                       static_cast<int>(source.reason),
+                      static_cast<int>(source.requestKind),
+                      source.hasElementIndex ? static_cast<int>(source.elementIndex) : -1,
+                      static_cast<unsigned>(source.skullCount),
                       source.hasArrivalBubbleHash ? source.arrivalBubbleHash : 0U,
-                      source.hasSpawnSetHash ? source.spawnSetHash : 0U);
+                      source.hasSpawnSetHash ? source.spawnSetHash : 0U,
+                      source.descriptorBitLength,
+                      source.packageNameBitOffset,
+                      source.trailingFlag ? 1U : 0U);
     if (written > 0) {
         core::log::write(core::log::Channel::server,
                          core::log::Level::info,
@@ -88,12 +95,13 @@ void report_forced(const state::activity::destination::DestinationSelection& for
     const int written = std::snprintf(line.data(),
                                       line.size(),
                                       "ev=bap svc=6 stage=selection result=forced name=%.*s "
-                                      "bubble=%u slice_set=%u spawn=0x%X",
+                                      "bubble=%u slice_set=%u spawn=0x%X descriptor_bits=%u",
                                       static_cast<int>(forced.packageNameLength),
                                       reinterpret_cast<const char*>(forced.packageName.data()),
                                       static_cast<unsigned>(forced.arrivalBubbleOverride),
                                       static_cast<unsigned>(forced.sliceSetOverride),
-                                      forced.spawnSetOverride);
+                                      forced.spawnSetOverride,
+                                      static_cast<unsigned>(forced.descriptorBitLength));
     if (written > 0) {
         core::log::write(core::log::Channel::server,
                          core::log::Level::info,

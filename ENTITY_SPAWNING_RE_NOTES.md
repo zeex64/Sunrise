@@ -1218,6 +1218,20 @@ therefore reconstruction of the identity-1 authored-mode descriptor/director sta
 capturing the native sobject sequence it produces. A hand-built minimal create remains useful as a
 wire probe, but it is not an encounter substitute.
 
+Service-6 selection diagnostics now report the client-authored request kind, activity and element
+indices, skull count, descriptor width, package-name bit offset, and trailing flag. The next native
+EDZ launch can therefore establish whether Sunrise captured and replayed a wide authored descriptor
+or fell back to its 372-bit minimal form. This is evidence collection only: the archive does not
+define the unknown mode field, and no field is forced until an EDZ exemplar identifies it.
+
+Ghidra provides another guard against treating “mode 1” as a literal wire bit. The retail string
+`Failed to set activity mode.` is referenced by `FUN_140BEA6D0`. Its caller `FUN_140BEA850` selects
+a 32-bit mode definition from an activity record (an indexed 0x38-byte entry with a `+0xDC`
+fallback) and passes that definition to the setter. This proves at least one engine-level activity
+mode is content-defined. It does not yet prove that this function is the same identity-1 mode named
+by the external paper, so its definition lookup must be traced to the service-6/global-state input
+before changing the wire format.
+
 ### Same-region citizen-advertisement replay fix
 
 The no-entity freeze run isolated a separate control-plane bug. After the first `PUB448.4` join had
