@@ -27,12 +27,23 @@ struct DefinitionObservation {
     bool occupied{};
 };
 
+struct TypeObservation {
+    std::int16_t activity{};
+    std::int32_t type{};
+    bool occupied{};
+};
+
+constexpr std::size_t kTypeObservationCapacity = 8;
+
 SRWLOCK g_observationLock{SRWLOCK_INIT};
 Observation g_observation{};
 DefinitionObservation g_definitionObservation{};
+std::array<TypeObservation, kTypeObservationCapacity> g_typeObservations{};
+std::size_t g_typeObservationCursor{};
 
 using Selector = void(__fastcall*)(std::uint16_t, std::int32_t, std::uint16_t);
 using Setter = bool(__fastcall*)(const std::int32_t*);
+using TypeResolver = std::int32_t(__fastcall*)(std::int16_t);
 
 /** Records the first selector tuple and every later change without flooding the client log. */
 [[nodiscard]] bool observe(const Observation& value) noexcept {
@@ -43,6 +54,34 @@ using Setter = bool(__fastcall*)(const std::int32_t*);
         || g_observation.fallbackActivity != value.fallbackActivity) {
         g_observation = value;
         g_observation.occupied = true;
+        report = true;
+    }
+    ReleaseSRWLockExclusive(&g_observationLock);
+    return report;
+}
+
+/** Records each activity/type pair once, including a zero result that disables the type gate. */
+[[nodiscard]] bool observe_type(const TypeObservation& value) noexcept {
+    bool report = false;
+    AcquireSRWLockExclusive(&g_observationLock);
+    TypeObservation* destination = nullptr;
+    for (TypeObservation& entry : g_typeObservations) {
+        if (entry.occupied && entry.activity == value.activity && entry.type == value.type) {
+            destination = &entry;
+            break;
+        }
+        if (destination == nullptr && !entry.occupied) {
+            destination = &entry;
+        }
+    }
+    if (destination == nullptr) {
+        destination = &g_typeObservations[g_typeObservationCursor % g_typeObservations.size()];
+        ++g_typeObservationCursor;
+    }
+    if (!destination->occupied || destination->activity != value.activity
+        || destination->type != value.type) {
+        *destination = value;
+        destination->occupied = true;
         report = true;
     }
     ReleaseSRWLockExclusive(&g_observationLock);
@@ -139,6 +178,39 @@ __declspec(noinline) bool __fastcall setter_body(const std::int32_t* definition)
     return selected;
 }
 
+/** Preserves the activity-definition type lookup and reports its downstream initialization gate. */
+__declspec(noinline) std::int32_t __fastcall type_resolver_body(std::int16_t activity) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(
+        lease, HookSlot::activityTypeResolver, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<TypeResolver>(lease.original);
+    std::int32_t type = 0;
+    __try {
+        if (call != nullptr) {
+            type = call(activity);
+        }
+        const TypeObservation observation{activity, type, true};
+        if (lease.accepting && observe_type(observation)) {
+            std::array<char, 160> line{};
+            const int written =
+                std::snprintf(line.data(),
+                              line.size(),
+                              "ev=gameplay stage=activity-type result=%s activity=%d type=%d",
+                              type == 0 ? "disabled" : "enabled",
+                              static_cast<int>(activity),
+                              type);
+            if (written > 0) {
+                core::log::write(core::log::Channel::client,
+                                 type == 0 ? core::log::Level::warn : core::log::Level::info,
+                                 {line.data(), static_cast<std::size_t>(written)});
+            }
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+    return type;
+}
+
 } // namespace
 
 void* selector_entry_point() noexcept {
@@ -149,10 +221,16 @@ void* setter_entry_point() noexcept {
     return reinterpret_cast<void*>(&setter_body);
 }
 
+void* type_resolver_entry_point() noexcept {
+    return reinterpret_cast<void*>(&type_resolver_body);
+}
+
 void reset() noexcept {
     AcquireSRWLockExclusive(&g_observationLock);
     g_observation = {};
     g_definitionObservation = {};
+    g_typeObservations = {};
+    g_typeObservationCursor = 0;
     ReleaseSRWLockExclusive(&g_observationLock);
 }
 

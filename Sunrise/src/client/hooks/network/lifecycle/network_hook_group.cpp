@@ -45,6 +45,7 @@ constexpr std::array<const char*, kHandleCount> kSlotNames{
     "activity_host_connection_state",
     "activity_mode_selector",
     "activity_mode_setter",
+    "activity_type_resolver",
     "signon_readiness_failure",
     "signon_readiness_ready",
 };

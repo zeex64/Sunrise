@@ -45,6 +45,7 @@ namespace {
         activity_host_probe::connection_state_entry_point(),
         activity_mode_probe::selector_entry_point(),
         activity_mode_probe::setter_entry_point(),
+        activity_mode_probe::type_resolver_entry_point(),
         signon::readiness_entry_point(),
         signon::ready_entry_point(),
     };
@@ -86,8 +87,9 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.activityHostConnectionState, replacements[18]},
         hooking::detour::Spec{resolved.activityModeSelector, replacements[19]},
         hooking::detour::Spec{resolved.activityModeSetter, replacements[20]},
-        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[21]},
-        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[22]},
+        hooking::detour::Spec{resolved.activityTypeResolver, replacements[21]},
+        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[22]},
+        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[23]},
     };
 }
 

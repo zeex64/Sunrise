@@ -234,6 +234,14 @@ constexpr std::string_view kActivityModeSetterText = "40 53 57 48 83 EC 28 48 8B
 constexpr auto kActivityModeSetter =
     signature<signature_length(kActivityModeSetterText)>(kActivityModeSetterText);
 
+// Matches the activity-definition type resolver. The tail following its first wildcarded call is
+// unique and covers the disabled sentinel checks plus the activity-definition lookup argument.
+constexpr std::string_view kActivityTypeResolverText =
+    "40 53 48 83 EC 30 0F B7 D9 E8 ? ? ? ? 84 C0 74 41 66 83 FB FF 74 3B 0F B7 D3 48 8D 4C 24 48";
+/** Compiled pattern bytes of the activity-type resolver signature above. */
+constexpr auto kActivityTypeResolver =
+    signature<signature_length(kActivityTypeResolverText)>(kActivityTypeResolverText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -303,6 +311,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"activity_host_connection_state", kActivityHostConnectionState},
     patterns::Pattern{"activity_mode_selector", kActivityModeSelector},
     patterns::Pattern{"activity_mode_setter", kActivityModeSetter},
+    patterns::Pattern{"activity_type_resolver", kActivityTypeResolver},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},

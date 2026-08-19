@@ -39,6 +39,7 @@ struct Targets {
     std::byte* activityHostConnectionState{};
     std::byte* activityModeSelector{};
     std::byte* activityModeSetter{};
+    std::byte* activityTypeResolver{};
     std::byte* contentIdToken{};
 };
 

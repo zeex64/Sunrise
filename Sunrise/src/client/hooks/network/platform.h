@@ -38,6 +38,7 @@ enum class HookSlot : std::size_t {
     activityHostConnectionState,
     activityModeSelector,
     activityModeSetter,
+    activityTypeResolver,
     signOnReadinessFailure,
     signOnReadinessReady,
     count,

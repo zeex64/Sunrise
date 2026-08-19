@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 86237857afb6a544b086258b6841ecd6b01f9d13e3b6c4e38e9c6b0052407172
+SHA-256 401df54087d5edaaa058b62b21698dc235ea10e059dbd27f0066124883a82e0a
 ```
 
 ## Confirmed high-level path
@@ -1255,6 +1255,15 @@ unique 27-byte prefix at `FUN_140BEA850`; the setter signature is the unique 15-
 element index, but only the runtime probe can show whether native `modeIndex` is also absent/default
 or was populated independently later.
 
+The same initialization paths call `FUN_140DDD2A0` with one or both activity IDs. That resolver
+maps an activity index through the installed activity definition and returns its signed-byte type at
+record offset `+0x78`. Callers use zero to disable a large initialized subsystem; values 1 through 6
+select one of six downstream configuration definitions. A third passive hook logs each distinct
+pair as `stage=activity-type result=enabled|disabled activity=... type=...`. Its wildcarded entry
+signature and fixed sentinel-check tail uniquely match `FUN_140DDD2A0`. This separates a missing
+activity definition/type gate from a missing mode definition and from failures later in encounter
+startup.
+
 ### Same-region citizen-advertisement replay fix
 
 The no-entity freeze run isolated a separate control-plane bug. After the first `PUB448.4` join had
@@ -1387,11 +1396,12 @@ The current checkpoint includes work in:
    successfully created enemy.
 13. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
    sobject is accepted; do not assume the squad codec can create the underlying native squad.
-14. On the next EDZ load, capture one `stage=activity-mode` and its following
-   `stage=activity-mode-definition`. Compare `primary`, `fallback`, and `index` with service 6's
-   `activity=8`, `from_activity=8`, and absent `element=-1`. A failed definition or implausible
-   index is the first direct evidence of an incomplete global-state descriptor; a successful
-   definition means the missing director startup is downstream.
+14. On the next EDZ load, capture one `stage=activity-mode`, its following
+   `stage=activity-mode-definition`, and the distinct `stage=activity-type` pairs. Compare
+   `primary`, `fallback`, and `index` with service 6's `activity=8`, `from_activity=8`, and absent
+   `element=-1`. A failed definition, implausible index, or disabled type is the first direct
+   evidence of an incomplete global-state descriptor; a successful definition plus enabled type
+   means the missing director startup is downstream.
 15. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
    or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
    and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
