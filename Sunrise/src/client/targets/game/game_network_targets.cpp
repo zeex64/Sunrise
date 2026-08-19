@@ -80,6 +80,9 @@ bool derive(std::span<const patterns::ImageRange> image,
     resolved.activityHostDecoder = matches[index(patterns::game::Id::activityHostDecoder)].address;
     resolved.activityHostConnectionState =
         matches[index(patterns::game::Id::activityHostConnectionState)].address;
+    resolved.activityRouteLocal = matches[index(patterns::game::Id::activityRouteLocal)].address;
+    resolved.activityRouteAuthored =
+        matches[index(patterns::game::Id::activityRouteAuthored)].address;
     resolved.activityModeSelector =
         matches[index(patterns::game::Id::activityModeSelector)].address;
     resolved.activityModeSetter = matches[index(patterns::game::Id::activityModeSetter)].address;

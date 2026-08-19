@@ -219,6 +219,24 @@ constexpr std::string_view kActivityHostConnectionStateText =
 constexpr auto kActivityHostConnectionState =
     signature<signature_length(kActivityHostConnectionStateText)>(kActivityHostConnectionStateText);
 
+// Matches the native local activity-manager initializer. The complete nonvolatile-register save
+// and 0x460-byte frame are unique in the pinned image and end before position-dependent data.
+constexpr std::string_view kActivityRouteLocalText =
+    "48 89 5C 24 10 4C 89 4C 24 20 55 56 57 41 54 41 55 41 56 41 57 "
+    "48 8D AC 24 A0 FC FF FF 48 81 EC 60 04 00 00";
+/** Compiled pattern bytes of the local activity-route initializer signature above. */
+constexpr auto kActivityRouteLocal =
+    signature<signature_length(kActivityRouteLocalText)>(kActivityRouteLocalText);
+
+// Matches the native authored activity-manager initializer. The distinct 0x3c0-byte frame and
+// complete save sequence make the position-independent prefix unique in the pinned image.
+constexpr std::string_view kActivityRouteAuthoredText =
+    "48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57 "
+    "48 8D AC 24 40 FD FF FF 48 81 EC C0 03 00 00";
+/** Compiled pattern bytes of the authored activity-route initializer signature above. */
+constexpr auto kActivityRouteAuthored =
+    signature<signature_length(kActivityRouteAuthoredText)>(kActivityRouteAuthoredText);
+
 // Matches the activity-mode definition selector. The fixed prefix preserves all three selector
 // inputs before the first position-dependent call and is unique in the current runtime image.
 constexpr std::string_view kActivityModeSelectorText =
@@ -309,6 +327,8 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"view_channel_accessor", kViewChannelAccessor},
     patterns::Pattern{"activity_host_decoder", kActivityHostDecoder},
     patterns::Pattern{"activity_host_connection_state", kActivityHostConnectionState},
+    patterns::Pattern{"activity_route_local", kActivityRouteLocal},
+    patterns::Pattern{"activity_route_authored", kActivityRouteAuthored},
     patterns::Pattern{"activity_mode_selector", kActivityModeSelector},
     patterns::Pattern{"activity_mode_setter", kActivityModeSetter},
     patterns::Pattern{"activity_type_resolver", kActivityTypeResolver},

@@ -271,6 +271,7 @@
     <ClCompile Include="src\client\hooks\network\view_creation_probe.cpp" />
     <ClCompile Include="src\client\hooks\network\activity_host_probe.cpp" />
     <ClCompile Include="src\client\hooks\network\activity_mode_probe.cpp" />
+    <ClCompile Include="src\client\hooks\network\activity_route_probe.cpp" />
     <ClCompile Include="src\client\hooks\network\bubble_authority\scope\bubble_authority_scope.cpp" />
     <ClCompile Include="src\client\hooks\network\http\http_descriptor_route.cpp" />
     <ClCompile Include="src\client\hooks\network\http\http_executor_replacement.cpp" />
@@ -849,6 +850,7 @@
     <ClInclude Include="src\client\hooks\network\view_creation_probe.h" />
     <ClInclude Include="src\client\hooks\network\activity_host_probe.h" />
     <ClInclude Include="src\client\hooks\network\activity_mode_probe.h" />
+    <ClInclude Include="src\client\hooks\network\activity_route_probe.h" />
     <ClInclude Include="src\client\hooks\network\bubble_authority\scope\bubble_authority_scope.h" />
     <ClInclude Include="src\client\hooks\network\coordinator\network_call_coordinator.h" />
     <ClInclude Include="src\client\hooks\network\content_config\coordinator\content_config_call_coordinator.h" />

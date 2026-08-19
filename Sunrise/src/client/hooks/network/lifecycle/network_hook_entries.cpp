@@ -4,6 +4,7 @@
 #include "../../../targets/steam_targets.h"
 #include "../activity_host_probe.h"
 #include "../activity_mode_probe.h"
+#include "../activity_route_probe.h"
 #include "../bubble_authority/bubble_authority_replacements.h"
 #include "../coordinator/network_call_coordinator.h"
 #include "../entity_create_probe.h"
@@ -43,6 +44,8 @@ namespace {
         view_creation_probe::creator_entry_point(),
         activity_host_probe::decoder_entry_point(),
         activity_host_probe::connection_state_entry_point(),
+        activity_route_probe::local_entry_point(),
+        activity_route_probe::authored_entry_point(),
         activity_mode_probe::selector_entry_point(),
         activity_mode_probe::setter_entry_point(),
         activity_mode_probe::type_resolver_entry_point(),
@@ -85,11 +88,13 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.viewCreator, replacements[16]},
         hooking::detour::Spec{resolved.activityHostDecoder, replacements[17]},
         hooking::detour::Spec{resolved.activityHostConnectionState, replacements[18]},
-        hooking::detour::Spec{resolved.activityModeSelector, replacements[19]},
-        hooking::detour::Spec{resolved.activityModeSetter, replacements[20]},
-        hooking::detour::Spec{resolved.activityTypeResolver, replacements[21]},
-        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[22]},
-        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[23]},
+        hooking::detour::Spec{resolved.activityRouteLocal, replacements[19]},
+        hooking::detour::Spec{resolved.activityRouteAuthored, replacements[20]},
+        hooking::detour::Spec{resolved.activityModeSelector, replacements[21]},
+        hooking::detour::Spec{resolved.activityModeSetter, replacements[22]},
+        hooking::detour::Spec{resolved.activityTypeResolver, replacements[23]},
+        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[24]},
+        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[25]},
     };
 }
 

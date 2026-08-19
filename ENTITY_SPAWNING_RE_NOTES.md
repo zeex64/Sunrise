@@ -24,7 +24,7 @@ entity-create lane.
 Latest diagnostic DLL at this checkpoint:
 
 ```text
-SHA-256 8bcb9f74cc14490a65f3737a4d91df84dcbb75645999eba6c44b8611edebcec0
+SHA-256 5f3b1ee77922f5cb021f8d6de520234afc303f5fd0bba1196a9aff5f87f94703
 ```
 
 ## Confirmed high-level path
@@ -1179,6 +1179,18 @@ full roughly 620-bit authored descriptor, while this branch only renames a captu
 clears the bits when no compatible capture exists. Treat that builder as external/unpublished work,
 not as code already available here.
 
+The paper's manager split is independently valid in this image. Its local initializer RVA
+`0x1772440` is `FUN_141772440`, and its authored initializer RVA `0x1773200` is
+`FUN_141773200`. Both receive the manager as their first argument; the local initializer directly
+reads the identity index at `manager+0x854`, while the authored initializer uses the same manager
+layout throughout its setup. Each entry has a unique position-independent prologue in the pinned
+image. A passive pair of detours now reports
+`stage=activity-route result=called|ok|fail route=local|authored identity=...` once per distinct
+boundary. The call is logged before native initialization and completion after it returns, so an
+authored constructor that hangs is distinguishable from one that never runs. This is the direct
+runtime test for the paper's identity-1 claim; the separate `activity-mode` probe remains a
+content-definition selector and must not be confused with this manager route.
+
 ### Complete activity-logic archive
 
 The separate `destiny2-complete-activity-logic-archive` adds strong static package evidence, but it
@@ -1403,13 +1415,17 @@ The current checkpoint includes work in:
    successfully created enemy.
 13. Determine whether the enemy additionally needs a kind-1 squad relationship after the minimal
    sobject is accepted; do not assume the squad codec can create the underlying native squad.
-14. On the next EDZ load, capture one `stage=activity-mode`, its following
+14. On the next EDZ load, capture all `stage=activity-route` lines. Identity 1 taking only
+   `route=local` confirms the authored director pipeline never starts; `route=authored called`
+   without `ok` localizes a stall inside its native initializer; `route=authored result=ok` moves
+   the next boundary to receiver/component construction.
+15. Capture one `stage=activity-mode`, its following
    `stage=activity-mode-definition`, and the distinct `stage=activity-type` pairs. Compare
    `source`, `destination`, and `element` with service 6's `from_activity=8`, `activity=8`, and absent
    `element=-1`. A failed definition, implausible index, or disabled type is the first direct
    evidence of an incomplete global-state descriptor; a successful definition plus enabled type
    means the missing director startup is downstream.
-15. Validate the authored-content paper's identity-1 mode switch in Ghidra and runtime, then locate
+16. Validate the authored-content paper's identity-1 mode switch at runtime, then locate
    or reconstruct the missing authored descriptor builder. Use the archive's `80B2F00A` scenario
    and `80B2F02A` simple encounter as validation targets, not as runtime RSAT substitutions.
 
