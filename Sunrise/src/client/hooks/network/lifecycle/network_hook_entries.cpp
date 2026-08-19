@@ -9,6 +9,7 @@
 #include "../coordinator/network_call_coordinator.h"
 #include "../entity_create_probe.h"
 #include "../entity_slot_probe.h"
+#include "../membership_update_probe.h"
 #include "../scheduler_signature_probe.h"
 #include "../sobject_create_probe.h"
 #include "../sobject_native_probe.h"
@@ -16,6 +17,7 @@
 #include "../view_creation_probe.h"
 #include "../view_membership_probe.h"
 #include "../view_message_probe.h"
+#include "../view_readiness_probe.h"
 #include "../view_signature_capture.h"
 #include "../view_slot_probe.h"
 
@@ -31,6 +33,7 @@ namespace {
         bubble_authority::content_untracked_entry_point(),
         view_signature::refresh_entry_point(),
         view_message_probe::lookup_entry_point(),
+        view_readiness_probe::scan_entry_point(),
         view_slot_probe::pump_entry_point(),
         scheduler_signature_probe::encoder_entry_point(),
         sobject_create_probe::encoder_entry_point(),
@@ -41,6 +44,7 @@ namespace {
         view_membership_probe::sync_entry_point(),
         view_membership_probe::wire_entry_point(),
         view_membership_probe::decoded_entry_point(),
+        membership_update_probe::encoder_entry_point(),
         view_creation_probe::creator_entry_point(),
         activity_host_probe::decoder_entry_point(),
         activity_host_probe::connection_state_entry_point(),
@@ -76,27 +80,29 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.contentUntrackedGetter, replacements[3]},
         hooking::detour::Spec{resolved.viewSignatureRefresh, replacements[4]},
         hooking::detour::Spec{resolved.viewMessageLookup, replacements[5]},
-        hooking::detour::Spec{resolved.viewSlotPump, replacements[6]},
-        hooking::detour::Spec{resolved.schedulerSignatureEncoder, replacements[7]},
-        hooking::detour::Spec{resolved.sobjectCreateEncoder, replacements[8]},
-        hooking::detour::Spec{resolved.sobjectUpdateEncoder, replacements[9]},
-        hooking::detour::Spec{resolved.sobjectNativeRegistration, replacements[10]},
-        hooking::detour::Spec{resolved.entityCreateEncoder, replacements[11]},
-        hooking::detour::Spec{resolved.entitySlotDecoder, replacements[12]},
-        hooking::detour::Spec{resolved.viewMembershipSync, replacements[13]},
-        hooking::detour::Spec{resolved.activityMembershipDecoder, replacements[14]},
-        hooking::detour::Spec{resolved.activityMembershipQueue, replacements[15]},
-        hooking::detour::Spec{resolved.viewCreator, replacements[16]},
-        hooking::detour::Spec{resolved.activityHostDecoder, replacements[17]},
-        hooking::detour::Spec{resolved.activityHostConnectionState, replacements[18]},
-        hooking::detour::Spec{resolved.activityRouteRecord, replacements[19]},
-        hooking::detour::Spec{resolved.activityRouteLocal, replacements[20]},
-        hooking::detour::Spec{resolved.activityRouteAuthored, replacements[21]},
-        hooking::detour::Spec{resolved.activityModeSelector, replacements[22]},
-        hooking::detour::Spec{resolved.activityModeSetter, replacements[23]},
-        hooking::detour::Spec{resolved.activityTypeResolver, replacements[24]},
-        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[25]},
-        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[26]},
+        hooking::detour::Spec{resolved.viewReadinessScan, replacements[6]},
+        hooking::detour::Spec{resolved.viewSlotPump, replacements[7]},
+        hooking::detour::Spec{resolved.schedulerSignatureEncoder, replacements[8]},
+        hooking::detour::Spec{resolved.sobjectCreateEncoder, replacements[9]},
+        hooking::detour::Spec{resolved.sobjectUpdateEncoder, replacements[10]},
+        hooking::detour::Spec{resolved.sobjectNativeRegistration, replacements[11]},
+        hooking::detour::Spec{resolved.entityCreateEncoder, replacements[12]},
+        hooking::detour::Spec{resolved.entitySlotDecoder, replacements[13]},
+        hooking::detour::Spec{resolved.viewMembershipSync, replacements[14]},
+        hooking::detour::Spec{resolved.activityMembershipDecoder, replacements[15]},
+        hooking::detour::Spec{resolved.activityMembershipQueue, replacements[16]},
+        hooking::detour::Spec{resolved.membershipUpdateEncoder, replacements[17]},
+        hooking::detour::Spec{resolved.viewCreator, replacements[18]},
+        hooking::detour::Spec{resolved.activityHostDecoder, replacements[19]},
+        hooking::detour::Spec{resolved.activityHostConnectionState, replacements[20]},
+        hooking::detour::Spec{resolved.activityRouteRecord, replacements[21]},
+        hooking::detour::Spec{resolved.activityRouteLocal, replacements[22]},
+        hooking::detour::Spec{resolved.activityRouteAuthored, replacements[23]},
+        hooking::detour::Spec{resolved.activityModeSelector, replacements[24]},
+        hooking::detour::Spec{resolved.activityModeSetter, replacements[25]},
+        hooking::detour::Spec{resolved.activityTypeResolver, replacements[26]},
+        hooking::detour::Spec{resolved.signOnReadinessFailure, replacements[27]},
+        hooking::detour::Spec{resolved.signOnReadinessReady, replacements[28]},
     };
 }
 

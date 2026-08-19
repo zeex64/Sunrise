@@ -21,6 +21,7 @@ struct Targets {
     std::byte* contentUntrackedGetter{};
     std::byte* viewSignatureRefresh{};
     std::byte* viewMessageLookup{};
+    std::byte* viewReadinessScan{};
     std::byte* viewSlotPump{};
     std::byte* schedulerSignatureEncoder{};
     std::byte* sobjectCreateEncoder{};
@@ -31,6 +32,7 @@ struct Targets {
     std::byte* viewMembershipSync{};
     std::byte* activityMembershipDecoder{};
     std::byte* activityMembershipQueue{};
+    std::byte* membershipUpdateEncoder{};
     std::byte* viewCreator{};
     std::byte* viewAddressResolver{};
     std::byte* viewChannelValidator{};

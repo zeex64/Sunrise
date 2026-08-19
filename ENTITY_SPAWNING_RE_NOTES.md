@@ -1494,6 +1494,53 @@ attaching the create. A nonempty, partial, or stale remote scheduler still requi
 and remote list agreement plus the original 500 ms interval. `stage=entity-create-out` reports
 `bootstrap=1` when this narrow path is used.
 
+### Stationary disconnect is missing account SOID, not entity traffic
+
+The stationary EDZ run after the bootstrap change never emitted `entity-create-out`, so no
+experimental create packet caused the disconnect. Gameplay transport remained healthy, with no
+corrupt or lost reliable frames. The initial namespace-1 manager populated 13 native objects and
+reached the exact one-view scheduler signature, but its channel view stopped at local stage 4,
+remote stage 3, `compatible=1`, `open=0`. Because the view was not bound, the create planner
+correctly declined to send.
+
+Ghidra identifies stage 4 as a real resource-readiness boundary. `FUN_1416F6810` calls
+`FUN_141713980(view + 0xA8)`, which scans the entity manager's active RSAT/object rows and invokes
+the registered kind's readiness virtual. A pending row calls `FUN_141710880` and returns true; only
+after this scan clears and the owning manager state at `+0x2C` equals 4 may the native initiator
+advance to stage 5. Forcing a bind or synthesizing stage 5 would therefore bypass game-owned
+resource initialization and is not safe.
+
+The actual disconnect occurred at `t=150134`, when retail networking reported that all peers still
+lacked valid account SOIDs after the 91,000 ms grace period. One millisecond later world
+prerequisite `ENUM(22)` failed as unavailable in context `ENUM(67)`, and the normal cleanup path
+returned the client to orbit. Ghidra maps prerequisite 22 through `FUN_140D3EB60` to
+`FUN_140E1A8B0`/`FUN_140BE2070`, the same account-SOID grace-period check. The later BAP
+`_connection_failure_suicide` lines are consequences of cleanup, not its cause.
+
+Sunrise's message-30 membership writer currently emits the full player identity arm but explicitly
+writes the player-profile arm as absent. That is the first concrete server-side mismatch capable
+of explaining why the gameplay peer never acquires an account SOID.
+
+### Native message-30 profile and view-readiness capture
+
+The native message-30 encoder is `FUN_14173E050`. Its player deltas begin at update-image offset
+`0x4250`, use a `0x1B8` stride, and store the player count at `0x174A`. A full delta has an identity
+presence byte at delta `+0x08` and a profile presence byte at delta `+0x21`. The profile payload
+continues through three native helper codecs, so guessing a partial wire body is riskier than
+capturing a game-authored local-session exemplar.
+
+Two passive probes now preserve the original native calls and record the missing evidence:
+
+- `stage=membership-native-profile` logs the first encoder call and the first complete `0x1B8`
+  profile-bearing player delta as uppercase hex.
+- `stage=view-readiness` logs the stage-4 helper's pending/ready transitions and samples a
+  persistent pending result every five seconds, including token, namespace, manager, first active
+  slot, and call count.
+- `stage=view-slots` now includes the owning manager's `gate` field at `+0x2C`.
+
+Both new signatures were checked against the pinned Ghidra image and each resolves uniquely at its
+expected function entry. These probes do not mutate membership, entity state, or view stages.
+
 ### External NetDuma connection-table capture
 
 The shared `destiny 2.pcapng` is not a packet capture from the Destiny host's gameplay interface.
@@ -1531,6 +1578,16 @@ The current checkpoint includes work in:
 - `Sunrise/src/state/activity/membership/`
 
 ## Next investigation
+
+Immediate stationary EDZ run:
+
+- Confirm both new hooks attach as `view_readiness_scan` and `membership_update_encoder`.
+- Capture `membership-native-profile result=capture`; this is the byte-exact exemplar needed to
+  implement the server's profile arm and remove the 91-second account-SOID failure.
+- Capture `view-readiness` from the initial token. If it remains pending, use `first_active` and the
+  native type table to identify the resource virtual that blocks stage 5. If it reports ready while
+  the view remains at stage 4, the remaining blocker is the `view-slots gate`, which must equal 4.
+- The run may stop once those lines appear; waiting for another forced disconnect adds no evidence.
 
 1. Load EDZ and confirm revision 2 still consumes 30,992 bits while the `PUB80.80` citizen join is
    pending, but descriptor-bearing keepalives do not repeat every pump. The first delivered body
@@ -1617,6 +1674,8 @@ view-slots
 view-lookup
 view-state
 view-codecs
+view-readiness
+membership-native-profile
 sobject-create
 sobject-update
 sobject-native

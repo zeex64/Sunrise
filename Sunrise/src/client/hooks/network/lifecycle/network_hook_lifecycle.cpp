@@ -7,6 +7,7 @@
 #include "../entity_create_probe.h"
 #include "../entity_slot_probe.h"
 #include "../investment/investment_derived_rebuild.h"
+#include "../membership_update_probe.h"
 #include "../platform.h"
 #include "../runtime.h"
 #include "../scheduler_signature_probe.h"
@@ -16,6 +17,7 @@
 #include "../view_creation_probe.h"
 #include "../view_membership_probe.h"
 #include "../view_message_probe.h"
+#include "../view_readiness_probe.h"
 #include "../view_signature_capture.h"
 #include "../view_slot_probe.h"
 #include "network_hook_entries.h"
@@ -143,6 +145,7 @@ bool uninstall() noexcept {
     if (removed) {
         entity_create_probe::reset();
         entity_slot_probe::reset();
+        membership_update_probe::reset();
         scheduler_signature_probe::reset();
         sobject_create_probe::reset();
         sobject_native_probe::reset();
@@ -153,6 +156,7 @@ bool uninstall() noexcept {
         activity_route_probe::reset();
         view_membership_probe::reset();
         view_message_probe::reset();
+        view_readiness_probe::reset();
         view_signature::reset();
         view_slot_probe::reset();
     }

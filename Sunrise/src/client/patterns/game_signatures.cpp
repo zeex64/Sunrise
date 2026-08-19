@@ -85,6 +85,14 @@ constexpr std::string_view kViewMessageLookupText =
 constexpr auto kViewMessageLookup =
     signature<signature_length(kViewMessageLookupText)>(kViewMessageLookupText);
 
+// Matches the entity-handler readiness scan used by message 40 while a compatible view waits at
+// stage four. The enabled-byte test and manager load distinguish it from adjacent view helpers.
+constexpr std::string_view kViewReadinessScanText =
+    "41 57 48 83 EC 60 80 79 09 00 4C 8B F9 0F 84 ? ? ? ? 48 8B 51 10";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kViewReadinessScan =
+    signature<signature_length(kViewReadinessScanText)>(kViewReadinessScanText);
+
 // Matches the manager pump that walks all three fixed replication slots. The fixed prologue
 // includes its leading REX prefix so the detour begins at the function entry, not byte +1.
 constexpr std::string_view kViewSlotPumpText = "40 55 56 48 83 EC 38 83 79 08 01 48 8B E9";
@@ -170,6 +178,15 @@ constexpr std::string_view kActivityMembershipQueueText =
 /** Compiled pattern bytes of the signature text above. */
 constexpr auto kActivityMembershipQueue =
     signature<signature_length(kActivityMembershipQueueText)>(kActivityMembershipQueueText);
+
+// Matches message 30's native encoder. Local host sessions provide the byte-exact player-profile
+// exemplar that the embedded gameplay host needs to publish a valid account SOID.
+constexpr std::string_view kMembershipUpdateEncoderText =
+    "48 8B C4 53 48 81 EC 80 00 00 00 48 89 68 08 45 33 C9 48 89 70 10 49 8B E8 "
+    "4C 89 70 F0 BE 40 00 00 00";
+/** Compiled pattern bytes of the signature text above. */
+constexpr auto kMembershipUpdateEncoder =
+    signature<signature_length(kMembershipUpdateEncoderText)>(kMembershipUpdateEncoderText);
 
 // Matches the view creator driven by session-membership synchronization. It is the only path that
 // allocates and binds a per-peer native view before message 40 can find it.
@@ -320,6 +337,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"content_untracked_getter", kContentUntrackedGetter},
     patterns::Pattern{"view_signature_refresh", kViewSignatureRefresh},
     patterns::Pattern{"view_message_lookup", kViewMessageLookup},
+    patterns::Pattern{"view_readiness_scan", kViewReadinessScan},
     patterns::Pattern{"view_slot_pump", kViewSlotPump},
     patterns::Pattern{"scheduler_signature_encoder", kSchedulerSignatureEncoder},
     patterns::Pattern{"sobject_create_encoder", kSobjectCreateEncoder},
@@ -330,6 +348,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"view_membership_sync", kViewMembershipSync},
     patterns::Pattern{"activity_membership_decoder", kActivityMembershipDecoder},
     patterns::Pattern{"activity_membership_queue", kActivityMembershipQueue},
+    patterns::Pattern{"membership_update_encoder", kMembershipUpdateEncoder},
     patterns::Pattern{"view_creator", kViewCreator},
     patterns::Pattern{"view_address_resolver", kViewAddressResolver},
     patterns::Pattern{"view_channel_validator", kViewChannelValidator},

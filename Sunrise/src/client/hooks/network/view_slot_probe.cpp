@@ -67,6 +67,7 @@ struct SignatureViewSnapshot {
 struct Snapshot {
     const void* manager{};
     std::int32_t state{-1};
+    std::int32_t readinessGate{-1};
     std::int32_t schedulerRegisteredViewCount{-1};
     std::array<std::uint32_t, 4> schedulerLocalSignature{};
     std::int32_t schedulerLocalSignatureViewCount{-1};
@@ -90,6 +91,7 @@ struct Snapshot {
         const auto* const manager = static_cast<const std::byte*>(managerAddress);
         output.manager = managerAddress;
         output.state = *reinterpret_cast<const std::int32_t*>(manager + 8);
+        output.readinessGate = *reinterpret_cast<const std::int32_t*>(manager + 0x2C);
         for (std::size_t index = 0; index < output.slots.size(); ++index) {
             const auto* const slot = manager + kFirstSlotOffset + index * kSlotStride;
             SlotSnapshot& snapshot = output.slots[index];
@@ -182,6 +184,7 @@ void mix(std::uint64_t& hash, std::uint64_t value) noexcept {
     std::uint64_t hash = 1469598103934665603ULL;
     mix(hash, reinterpret_cast<std::uintptr_t>(snapshot.manager));
     mix(hash, static_cast<std::uint32_t>(snapshot.state));
+    mix(hash, static_cast<std::uint32_t>(snapshot.readinessGate));
     mix(hash, static_cast<std::uint32_t>(snapshot.schedulerRegisteredViewCount));
     for (const std::uint32_t word : snapshot.schedulerLocalSignature) {
         mix(hash, word);
@@ -258,7 +261,7 @@ __declspec(noinline) void __fastcall pump_body(void* manager) noexcept {
             const int written = std::snprintf(
                 line.data(),
                 line.size(),
-                "ev=gameplay stage=view-slots manager=%p state=%d "
+                "ev=gameplay stage=view-slots manager=%p state=%d gate=%d "
                 "s0[family=%d id10=0x%llX id18=0x%llX token=0x%llX sync=%p "
                 "views=%u first=%p key=0x%llX] "
                 "s1[family=%d id10=0x%llX id18=0x%llX token=0x%llX sync=%p "
@@ -271,6 +274,7 @@ __declspec(noinline) void __fastcall pump_body(void* manager) noexcept {
                 "r0=0x%llX/%u r1=0x%llX/%u r2=0x%llX/%u flags=0x%04X]",
                 snapshot.manager,
                 snapshot.state,
+                snapshot.readinessGate,
                 slot0.family,
                 static_cast<unsigned long long>(slot0.id10),
                 static_cast<unsigned long long>(slot0.id18),

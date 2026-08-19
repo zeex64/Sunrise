@@ -55,6 +55,7 @@ struct ViewState {
 
 struct Observation {
     std::uint64_t token{};
+    const void* view{};
     ViewState state{};
     CodecState codecs{};
     bool found{};
@@ -184,6 +185,7 @@ void observe(std::uint64_t token, void* view) noexcept {
         destination->found = found;
         destination->occupied = true;
     }
+    destination->view = view;
     if (stateValid && (!destination->stateValid || !(destination->state == state))) {
         reportState = true;
         destination->state = state;
@@ -307,6 +309,28 @@ __declspec(noinline) void* __fastcall lookup_body(void* owner, std::uint64_t tok
 
 void* lookup_entry_point() noexcept {
     return reinterpret_cast<void*>(&lookup_body);
+}
+
+bool token_for_entity_handler(const void* handler, std::uint64_t& token) noexcept {
+    token = 0;
+    if (handler == nullptr) {
+        return false;
+    }
+    bool found = false;
+    AcquireSRWLockShared(&g_observationLock);
+    for (const Observation& entry : g_observations) {
+        if (!entry.occupied || entry.view == nullptr) {
+            continue;
+        }
+        const auto* const view = static_cast<const std::byte*>(entry.view);
+        if (view + 0xA8 == handler) {
+            token = entry.token;
+            found = true;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_observationLock);
+    return found;
 }
 
 void reset() noexcept {
