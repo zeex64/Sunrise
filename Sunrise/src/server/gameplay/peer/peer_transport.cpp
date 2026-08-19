@@ -90,8 +90,8 @@ constexpr std::uint64_t kEntityCreateBootstrapReadyInterval = 100;
 constexpr std::uint8_t kEntityCreateAttemptLimit = 4;
 /** Runtime currently proves complete inbound acceptance only for one registered scheduler view. */
 constexpr std::uint8_t kProvenSchedulerViewCount = 1;
-/** Schema 0x80806AEA is 128 header bits, a 2-bit count, and one 72-bit view entry. */
-constexpr std::uint16_t kProvenSchedulerSchemaBits = 202;
+/** One-view scheduler wire is its update bit plus schema 0x80806AEA's 202-bit body. */
+constexpr std::uint16_t kProvenSchedulerWireBits = 203;
 
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
@@ -272,14 +272,21 @@ select_replication_view(const state::gameplay::PeerLink& peer) noexcept {
  */
 void probe_scheduler_signature(bits::Reader reader, ExternalProbe& output) noexcept {
     const std::size_t before = reader.remaining_bits();
-    // read_external_status already consumed the scheduler's update bit. When that bit is set,
-    // the schema begins immediately; there is no second nested presence bit here. Treating the
-    // first schema bit as another update flag captured one handler bit past the schema boundary.
-    output.schedulerSignatureUpdate = true;
+    std::uint64_t update = 0;
+    if (!reader.read(1, update)) {
+        return;
+    }
+    output.schedulerSignatureUpdate = update != 0;
+    if (!output.schedulerSignatureUpdate) {
+        output.schedulerSignatureBits = before - reader.remaining_bits();
+        output.schedulerSignatureValid = true;
+        return;
+    }
+
     client::hooks::network::scheduler_signature_probe::Capture native{};
     if (!client::hooks::network::scheduler_signature_probe::latest(native) || native.bitCount == 0
         || native.bitCount > reader.remaining_bits()
-        || native.bitCount > output.schedulerSignature.wire.size() * kByteBits
+        || native.bitCount + 1 > output.schedulerSignature.wire.size() * kByteBits
         || !reader.skip(native.bitCount)) {
         return;
     }
@@ -313,7 +320,7 @@ capture_scheduler_signature_wire(bits::Reader reader,
     return true;
 }
 
-/** Replays the exact schema-encoded client scheduler signature body. */
+/** Replays the exact schema-encoded client scheduler signature update. */
 [[nodiscard]] bool
 write_scheduler_signature(bits::Writer& writer,
                           const state::gameplay::SchedulerSignature& signature) noexcept {
@@ -377,7 +384,7 @@ write_scheduler_signature(bits::Writer& writer,
                                    const state::gameplay::SchedulerSignature& signature,
                                    const EntityCreatePlan& plan) noexcept {
     if (signature.viewCount != kProvenSchedulerViewCount
-        || signature.wireBits != kProvenSchedulerSchemaBits
+        || signature.wireBits != kProvenSchedulerWireBits
         || !write_scheduler_signature(writer, signature)) {
         return false;
     }
@@ -437,7 +444,7 @@ write_scheduler_signature(bits::Writer& writer,
     if (!peer.schedulerSignature.present
         || peer.schedulerSignature.viewCount != kProvenSchedulerViewCount
         || peer.schedulerSignature.viewCount > peer.schedulerSignature.views.size()
-        || peer.schedulerSignature.wireBits != kProvenSchedulerSchemaBits) {
+        || peer.schedulerSignature.wireBits != kProvenSchedulerWireBits) {
         gate = EntityCreateGate::schedulerShape;
         return false;
     }
@@ -530,7 +537,7 @@ write_scheduler_signature(bits::Writer& writer,
     if (peer.entityCreateAttempts == 0 || peer.entityCreateToken == 0 || !selected.present
         || selected.signature.token != peer.entityCreateToken || !selected.capturePresent
         || !scheduler.present || scheduler.viewCount != kProvenSchedulerViewCount
-        || scheduler.wireBits != kProvenSchedulerSchemaBits) {
+        || scheduler.wireBits != kProvenSchedulerWireBits) {
         return false;
     }
 
@@ -644,8 +651,7 @@ void scheduler_hex(std::span<const std::byte> input, std::span<char> output) noe
 /**
  * Reads the external trailer without accepting or mutating any replication state.
  * The first bit is c_network_channel_simulation_gatekeeper. The second is the
- * replication-scheduler update bit; its schema begins immediately afterward. Words after those
- * bits remain MSB-first.
+ * replication-scheduler body-presence bit. Words after those bits remain MSB-first.
  */
 [[nodiscard]] bool probe_external(std::span<const std::byte> payload,
                                   std::size_t bitOffset,
@@ -1497,7 +1503,7 @@ void consume_established(const state::gameplay::Endpoint& from,
     const bool schedulerWanted = entityCreate.present || peer.entityCreateAttempts == 0;
     const bool schedulerPresent = schedulerWanted && viewPresent && peer.schedulerSignature.present
                                   && peer.schedulerSignature.viewCount == kProvenSchedulerViewCount
-                                  && peer.schedulerSignature.wireBits == kProvenSchedulerSchemaBits;
+                                  && peer.schedulerSignature.wireBits == kProvenSchedulerWireBits;
     std::size_t size = 0;
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)

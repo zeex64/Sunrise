@@ -543,7 +543,7 @@ bool enqueue_message(state::gameplay::OutboundQueue& queue,
     return true;
 }
 
-/** Reads the simulation-gatekeeper state and replication-scheduler update bit. */
+/** Reads the simulation-gatekeeper and replication-scheduler presence bits. */
 bool read_external_status(bits::Reader& reader, ExternalStatus& output) noexcept {
     std::uint64_t gatekeeper = 0;
     std::uint64_t scheduler = 0;
@@ -555,7 +555,7 @@ bool read_external_status(bits::Reader& reader, ExternalStatus& output) noexcept
     return true;
 }
 
-/** Writes the simulation-gatekeeper state and replication-scheduler update bit. */
+/** Writes the simulation-gatekeeper and replication-scheduler presence bits. */
 bool write_external_status(bits::Writer& writer,
                            bool gatekeeperEnabled,
                            bool schedulerPresent) noexcept {

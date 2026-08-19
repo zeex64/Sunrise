@@ -96,7 +96,7 @@ struct ViewSignature {
 
 /** A scheduler signature contains at most three registered native views. */
 inline constexpr std::size_t kSchedulerSignatureViewCapacity = 3;
-/** Bounded encoded scheduler-signature schema body; the update gate is external. */
+/** Bounded encoded scheduler-signature value plus its one-bit update gate. */
 inline constexpr std::size_t kSchedulerSignatureWireCapacity = 64;
 
 /** One native logical scheduler lane paired with the encoded signature value. */
@@ -109,7 +109,7 @@ struct SchedulerSignatureView {
 struct SchedulerSignature {
     std::array<std::byte, 16> value{};
     std::array<SchedulerSignatureView, kSchedulerSignatureViewCapacity> views{};
-    /** Exact MSB-first schema body captured after the update bit, with a low-aligned tail byte. */
+    /** Exact MSB-first update prefix captured from the client, with a low-aligned tail byte. */
     std::array<std::byte, kSchedulerSignatureWireCapacity> wire{};
     std::uint16_t wireBits{};
     std::uint8_t viewCount{};
