@@ -425,6 +425,15 @@ constexpr std::string_view kSobjectType2JobText = "48 89 5C 24 20 57 B8 50 40 00
 constexpr auto kSobjectType2Job =
     signature<signature_length(kSobjectType2JobText)>(kSobjectType2JobText);
 
+// Matches the public-session refresh that selects which of the three simulation managers is
+// serviced. The complete nonvolatile save set and fixed 0x38-byte frame are unique before the
+// first position-dependent call.
+constexpr std::string_view kActiveManagerRefreshText =
+    "48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 38 4C 8B F1";
+/** Compiled pattern bytes of the active simulation-manager refresh signature above. */
+constexpr auto kActiveManagerRefresh =
+    signature<signature_length(kActiveManagerRefreshText)>(kActiveManagerRefreshText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -516,6 +525,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"sobject_backend_busy", kSobjectBackendBusy},
     patterns::Pattern{"sobject_dirty_row", kSobjectDirtyRow},
     patterns::Pattern{"sobject_type2_job", kSobjectType2Job},
+    patterns::Pattern{"active_manager_refresh", kActiveManagerRefresh},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},

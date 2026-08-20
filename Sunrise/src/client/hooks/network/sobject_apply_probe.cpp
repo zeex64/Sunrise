@@ -10,8 +10,13 @@
 #include <cstring>
 
 #include "../../../core/logging/log.h"
+#include "../../../server/gameplay/group/group_host_sessions.h"
+#include "../../../server/gameplay/peer/peer_transport.h"
+#include "../../../state/activity/membership/activity_membership_query.h"
 #include "../../targets/game.h"
+#include "../bootflow/bootflow_hook_lifecycle.h"
 #include "coordinator/network_call_coordinator.h"
+#include "entity_slot_probe.h"
 #include "platform.h"
 #include "sobject_bind_probe.h"
 
@@ -25,12 +30,26 @@ constexpr std::uint32_t kPromotionReportLimit = 16;
 constexpr std::uint32_t kDirtyServiceReportLimit = 8;
 constexpr std::uint32_t kDirtyRowReportLimit = 8;
 constexpr std::uint32_t kType2JobReportLimit = 16;
+constexpr std::uint32_t kActiveManagerPromotionReportLimit = 8;
 constexpr std::size_t kManagerSlotMapOffset = 0x114;
 constexpr std::size_t kManagerSlotMapStride = 6;
 constexpr std::size_t kManagerOccupiedBitsetOffset = 0xC520;
 constexpr std::size_t kManagerDirtyBitsetOffset = 0xCA20;
 constexpr std::int16_t kInternalObjectCapacity = 0x400;
 constexpr std::size_t kInternalObjectStride = 0x70;
+/** Runtime storage holding the selected simulation-manager identity. */
+constexpr std::size_t kRuntimeActiveManagerOffset = 0x560E0;
+/** First of the runtime's three fixed-stride simulation-manager containers. */
+constexpr std::size_t kRuntimeManagerContainerOffset = 0x206C8;
+/** Distance between adjacent simulation-manager containers. */
+constexpr std::size_t kRuntimeManagerStride = 0x11E08;
+/** Replicated-object manager embedded in each simulation-manager container. */
+constexpr std::size_t kContainerObjectManagerOffset = 0x270;
+/** Native transition marker set by FUN_1417030F0 before the active identity changes. */
+constexpr std::size_t kContainerActivationFlagOffset = 0x15C;
+/** Active-manager observations expire before they may authorize an entity send. */
+constexpr std::uint64_t kActiveManagerFreshMilliseconds = 500;
+constexpr std::int32_t kSimulationManagerCount = 3;
 
 using ApplyJob = void(__fastcall*)(std::byte*);
 using Kind0Constructor = bool(__fastcall*)(void*, const std::uint32_t*, std::uint32_t, int);
@@ -48,6 +67,7 @@ using DirtyRow = std::uint8_t(__fastcall*)(std::byte*,
                                            std::uint8_t,
                                            std::uint8_t);
 using Type2Job = int(__fastcall*)(std::byte*, const void*, void**);
+using ActiveManagerRefresh = void(__fastcall*)(std::byte*);
 
 std::atomic_uint32_t g_applyReports{};
 std::atomic_uint32_t g_kind0Reports{};
@@ -55,6 +75,11 @@ std::atomic_uint32_t g_promotionReports{};
 std::atomic_uint32_t g_dirtyServiceReports{};
 std::atomic_uint32_t g_dirtyRowReports{};
 std::atomic_uint32_t g_type2JobReports{};
+std::atomic_uint32_t g_activeManagerPromotionReports{};
+std::atomic_uint64_t g_lastActiveManagerPromotion{};
+std::atomic_uintptr_t g_runtime{};
+SRWLOCK g_activeManagerLock{SRWLOCK_INIT};
+ActiveManagerDebugSnapshot g_activeManagerDebug{};
 
 struct JobSnapshot {
     std::uint8_t type{};
@@ -542,6 +567,156 @@ void report_type2_job(const char* phase,
     }
 }
 
+/** Publishes one coherent current-region manager observation for the overlay and send gate. */
+void publish_active_manager(const ActiveManagerDebugSnapshot& snapshot) noexcept {
+    AcquireSRWLockExclusive(&g_activeManagerLock);
+    g_activeManagerDebug = snapshot;
+    ReleaseSRWLockExclusive(&g_activeManagerLock);
+}
+
+/** @return A stable report key for one region/token/namespace promotion. */
+[[nodiscard]] std::uint64_t
+active_manager_report_key(const ActiveManagerDebugSnapshot& snapshot) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&hash](std::uint64_t value) noexcept {
+        for (std::size_t index = 0; index < sizeof value; ++index) {
+            hash ^= static_cast<std::uint8_t>(value >> (index * 8U));
+            hash *= 1099511628211ULL;
+        }
+    };
+    mix(snapshot.token);
+    mix(static_cast<std::uint32_t>(snapshot.region));
+    mix(static_cast<std::uint32_t>(snapshot.requestedNamespace));
+    return hash == 0 ? 1 : hash;
+}
+
+/** Reports a successful bounded manager promotion once per exact current-world owner. */
+void report_active_manager_promotion(const ActiveManagerDebugSnapshot& snapshot) noexcept {
+    const std::uint64_t key = active_manager_report_key(snapshot);
+    if (g_lastActiveManagerPromotion.exchange(key, std::memory_order_relaxed) == key) {
+        return;
+    }
+    const std::uint32_t occurrence =
+        g_activeManagerPromotionReports.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (occurrence > kActiveManagerPromotionReportLimit) {
+        return;
+    }
+    std::array<char, 384> line{};
+    const int written = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=gameplay stage=active-region-manager result=promoted occurrence=%u "
+        "region=%d slice=%d token=0x%016llX namespace=%d active=%d->%d manager_match=%u",
+        occurrence,
+        snapshot.region,
+        snapshot.nativeSlice,
+        static_cast<unsigned long long>(snapshot.token),
+        snapshot.requestedNamespace,
+        snapshot.activeBefore,
+        snapshot.activeAfter,
+        snapshot.managerMatched ? 1U : 0U);
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
+/**
+ * Selects the simulation manager owned by the player's coherent current region.
+ *
+ * The native PUBLIC role can remain on the outgoing region after membership, rendering, and the
+ * slice manager have already moved. We reproduce only the two manager-local writes made by
+ * FUN_1416EC250/FUN_1417030F0, and only after every independent owner signal agrees.
+ */
+void promote_current_region_manager(std::byte* runtime) noexcept {
+    ActiveManagerDebugSnapshot snapshot{};
+    snapshot.observedAt = GetTickCount64();
+    if (runtime == nullptr || !bootflow::in_world()
+        || !bootflow::current_slice_set(snapshot.nativeSlice)) {
+        publish_active_manager(snapshot);
+        return;
+    }
+
+    state::activity::membership::WorldSnapshot world{};
+    if (!state::activity::membership::primary_world(world)
+        || world.region == state::activity::membership::kAbsentRegionIndex
+        || world.region != snapshot.nativeSlice) {
+        snapshot.region = world.region;
+        publish_active_manager(snapshot);
+        return;
+    }
+    snapshot.region = world.region;
+
+    const std::uint64_t groupSession =
+        server::gameplay::group::advertised_group_session(world.region);
+    if (groupSession == 0 || !server::gameplay::peer::view_bound(groupSession)) {
+        publish_active_manager(snapshot);
+        return;
+    }
+    snapshot.token = server::gameplay::group::held_host_session(groupSession);
+    if (snapshot.token == 0
+        || server::gameplay::group::holding_group_session(snapshot.token) != groupSession) {
+        publish_active_manager(snapshot);
+        return;
+    }
+
+    entity_slot_probe::ViewCapture capture{};
+    if (!entity_slot_probe::find(snapshot.token, capture) || capture.token != snapshot.token
+        || capture.manager == nullptr || capture.namespaceId < 0
+        || capture.namespaceId >= kSimulationManagerCount) {
+        publish_active_manager(snapshot);
+        return;
+    }
+    snapshot.requestedNamespace = capture.namespaceId;
+
+    std::byte* const container =
+        runtime + kRuntimeManagerContainerOffset
+        + static_cast<std::size_t>(capture.namespaceId) * kRuntimeManagerStride;
+    const std::byte* const expectedManager = container + kContainerObjectManagerOffset;
+    std::int32_t managerIdentity = -1;
+    __try {
+        std::memcpy(&managerIdentity, container + 8, sizeof managerIdentity);
+        std::memcpy(&snapshot.activeBefore,
+                    runtime + kRuntimeActiveManagerOffset,
+                    sizeof snapshot.activeBefore);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        publish_active_manager(snapshot);
+        return;
+    }
+    snapshot.managerMatched =
+        capture.manager == expectedManager && managerIdentity == capture.namespaceId
+        && snapshot.activeBefore >= 0 && snapshot.activeBefore < kSimulationManagerCount;
+    if (!snapshot.managerMatched) {
+        publish_active_manager(snapshot);
+        return;
+    }
+
+    snapshot.activeAfter = snapshot.activeBefore;
+    if (snapshot.activeBefore != capture.namespaceId) {
+        __try {
+            // FUN_1417030F0(container+0x30) sets exactly container+0x15C before the id store.
+            const std::uint8_t activate = 1;
+            std::memcpy(container + kContainerActivationFlagOffset, &activate, sizeof activate);
+            InterlockedExchange(
+                reinterpret_cast<volatile LONG*>(runtime + kRuntimeActiveManagerOffset),
+                static_cast<LONG>(capture.namespaceId));
+            std::memcpy(&snapshot.activeAfter,
+                        runtime + kRuntimeActiveManagerOffset,
+                        sizeof snapshot.activeAfter);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            publish_active_manager(snapshot);
+            return;
+        }
+        snapshot.promoted = snapshot.activeAfter == capture.namespaceId;
+    }
+    snapshot.ready = snapshot.activeAfter == capture.namespaceId;
+    publish_active_manager(snapshot);
+    if (snapshot.promoted) {
+        report_active_manager_promotion(snapshot);
+    }
+}
+
 /** Preserves the async apply job and exposes whether a watched record reaches it. */
 __declspec(noinline) void __fastcall apply_body(std::byte* job) noexcept {
     coordinator::CallLease lease{};
@@ -851,6 +1026,25 @@ type2_job_body(std::byte* object, const void* masks, void** jobOut) noexcept {
     return result;
 }
 
+/** Preserves native public-session discovery, then aligns service with the loaded player region. */
+__declspec(noinline) void __fastcall active_manager_refresh_body(std::byte* runtime) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(
+        lease, HookSlot::activeManagerRefresh, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<ActiveManagerRefresh>(lease.original);
+    __try {
+        if (call != nullptr) {
+            call(runtime);
+        }
+        if (lease.accepting && runtime != nullptr) {
+            g_runtime.store(reinterpret_cast<std::uintptr_t>(runtime), std::memory_order_release);
+            promote_current_region_manager(runtime);
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+}
+
 } // namespace
 
 void* apply_entry_point() noexcept {
@@ -881,6 +1075,39 @@ void* type2_job_entry_point() noexcept {
     return reinterpret_cast<void*>(&type2_job_body);
 }
 
+void* active_manager_refresh_entry_point() noexcept {
+    return reinterpret_cast<void*>(&active_manager_refresh_body);
+}
+
+void service_current_region_manager() noexcept {
+    auto* const runtime = reinterpret_cast<std::byte*>(g_runtime.load(std::memory_order_acquire));
+    promote_current_region_manager(runtime);
+}
+
+bool current_region_manager_active(std::uint64_t token, std::int32_t namespaceId) noexcept {
+    ActiveManagerDebugSnapshot snapshot{};
+    if (!active_manager_debug_snapshot(snapshot)) {
+        return false;
+    }
+    return snapshot.ready && snapshot.managerMatched && snapshot.token == token
+           && snapshot.requestedNamespace == namespaceId && snapshot.region >= 0
+           && snapshot.nativeSlice == snapshot.region && snapshot.observedAt != 0
+           && GetTickCount64() - snapshot.observedAt < kActiveManagerFreshMilliseconds;
+}
+
+bool active_manager_debug_snapshot(ActiveManagerDebugSnapshot& output) noexcept {
+    output = {};
+    output.region = -1;
+    output.nativeSlice = -1;
+    output.requestedNamespace = -1;
+    output.activeBefore = -1;
+    output.activeAfter = -1;
+    AcquireSRWLockShared(&g_activeManagerLock);
+    output = g_activeManagerDebug;
+    ReleaseSRWLockShared(&g_activeManagerLock);
+    return output.observedAt != 0;
+}
+
 void reset() noexcept {
     g_applyReports.store(0, std::memory_order_relaxed);
     g_kind0Reports.store(0, std::memory_order_relaxed);
@@ -888,6 +1115,12 @@ void reset() noexcept {
     g_dirtyServiceReports.store(0, std::memory_order_relaxed);
     g_dirtyRowReports.store(0, std::memory_order_relaxed);
     g_type2JobReports.store(0, std::memory_order_relaxed);
+    g_activeManagerPromotionReports.store(0, std::memory_order_relaxed);
+    g_lastActiveManagerPromotion.store(0, std::memory_order_relaxed);
+    g_runtime.store(0, std::memory_order_release);
+    AcquireSRWLockExclusive(&g_activeManagerLock);
+    g_activeManagerDebug = {};
+    ReleaseSRWLockExclusive(&g_activeManagerLock);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_apply_probe

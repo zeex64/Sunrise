@@ -17,6 +17,15 @@ Town replication namespace 1 at region 408 / bubble 51 / cell 145, while the pla
 are currently in Basin at region 24 / bubble 3. This is an explicit owner mismatch, not a failed
 RSAT load, type-2 job, kind-0 construction, or native glue bind.
 
+The next test removes that mismatch by promoting the simulation manager belonging to the player's
+coherent current region. Ghidra shows that `FUN_1416EC250` is the sole non-initialization writer of
+the active manager identity at runtime `+0x560E0`; it first marks the chosen manager container at
+`+0x15C`. Sunrise now mirrors only those two manager-local writes. The override is fail-closed
+until the client is in-world, the native slice equals the membership region, the region's group
+view is bound, and the captured manager pointer exactly matches that namespace's fixed runtime
+slot. The atomic two-view create then targets that same current host token, namespace, region,
+bubble, and map-global cell instead of the outgoing Town view.
+
 ## Progress by layer
 
 | Layer | Progress |
@@ -31,7 +40,8 @@ RSAT load, type-2 job, kind-0 construction, or native glue bind.
 
 - `Entity Debug` is enabled by default and keeps the synthetic entity's server plan and observed
   client lifecycle in one snapshot. It shows identity/RSAT, namespace/view/token, region/bubble/
-  cell, wire decode, promotion/type-2/apply state, and native construction/binding.
+  cell, wire decode, promotion/type-2/apply state, native construction/binding, and the active
+  simulation manager versus the current region's requested namespace.
 - The latest screenshot shows `State bound`, RSAT `0x815B204B`, namespace 1/view 0, spatial owner
   408/51/145, and `Current world region 24 OWNER MISMATCH`. That is the present visual blocker.
 - The player status overlay now separates the client-reported Region from Slice set. Bubble is
@@ -44,6 +54,8 @@ RSAT load, type-2 job, kind-0 construction, or native glue bind.
   408 is therefore an outgoing overlap, not merely a stale UI row.
 - Current overlay/debug Release SHA-256:
   `5ac62efcbd6f0db1c880a32d6783355a17ac62fa478544b822b2d3115d0bf670`.
+- Current-region manager promotion Release SHA-256:
+  `8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`.
 
 ## Confirmed progress
 
@@ -449,22 +461,22 @@ The slot-14 atomic run then completed the current wire milestone:
   settings pair that spawn set with Town bubble 51 so the player, the active namespace, and the
   synthetic Vandal should all share the same owner and cell.
 - The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
-  remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
-  when that view leaves. This control runs only while Basin 24/3/11 is current, but deliberately
-  writes the outgoing Town cell 145 into the entity record.
+  remove it yet. The new control resolves the player's current region on every run and writes the
+  entity into that same current view/cell only after its simulation manager is active.
 
 ## Immediate plan
 
-### 1. Validate coherent Town ownership
+### 1. Validate current-region manager promotion
 
-- Start a fresh EDZ session with Town bubble 51 and spawn set `0xCB8903DF`. Require roster/slice 408,
-  a normal 13-object public baseline, and no immediate Town-to-Basin z-leg.
-- Require the ordinary one-view path to emit `entity-create-out region=408 bubble=51 cell=145` in
-  namespace 1, followed by type-2 result 0, kind-0 success, target native registration, and a
-  completed bind.
-- If that object is audible and visible, the former failure was the mismatched arrival/spawn pair.
-  If it is still audio-only while the player and object genuinely share Town view/cell ownership,
-  capture the authored parent/stream-source fields next.
+- Start a fresh EDZ session and let the normal broad-spawn route finish. Do not force an arrival
+  region. Require `active-region-manager result=promoted` when the overlay reports a newer current
+  region than the outgoing PUBLIC CURRENT manager.
+- The Entity Debug Manager row must show the current region/slice and active namespace agreeing.
+  Then require `entity-create-out` to use the same token/namespace and the overlay's exact
+  region/bubble/cell, with no `OWNER MISMATCH`.
+- Require type-2 result 0, kind-0 success, target native registration, and a completed bind. If the
+  object is still audio-only with those ownership fields aligned, capture authored
+  parent/stream-source state next.
 - A type-2 job result of 4 means serialization failed; 1, 2, or 3 is an allocator/queue refusal;
   result 0 with a non-null job means dispatch should reach `sobject-apply`.
 - Only after `sobject-apply`, `sobject-kind0 result=1`, target native registration, and
@@ -565,6 +577,11 @@ Once the director evaluates an encounter and creates native squad/member objects
   `f6aeb6968e0251e32a66acb0eb250ed083016a82d4862e118667ea5a344a012e`.
 - The Town bubble 51 plus Town-only spawn-set `0xCB8903DF` Release candidate has SHA-256
   `f70cd002c75cf9e42d2345340f17d564b66b77ad51f6d00e241cafca3b68aa7f`.
+- The current-region manager promotion candidate has SHA-256
+  `8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`. It dynamically resolves
+  the player's current group host/captured namespace, requires the native slice to match that
+  region, promotes only the matching fixed-stride manager, and sends the Vandal into that same
+  view and spatial cell.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

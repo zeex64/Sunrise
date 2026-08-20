@@ -12,6 +12,7 @@
 #include "../../../client/hooks/network/entity_slot_probe.h"
 #include "../../../client/hooks/network/scheduler_handler_probe.h"
 #include "../../../client/hooks/network/scheduler_signature_probe.h"
+#include "../../../client/hooks/network/sobject_apply_probe.h"
 #include "../../../client/hooks/network/sobject_bind_probe.h"
 #include "../../../client/hooks/network/sobject_rsat_probe.h"
 #include "../../../client/hooks/network/sobject_update_probe.h"
@@ -108,22 +109,12 @@ constexpr std::uint16_t kProvenSchedulerWireBits = 203;
 constexpr std::uint8_t kTwoViewProbeViewCount = 2;
 /** Captured two-view signature, including its one-bit update gate. */
 constexpr std::uint16_t kTwoViewProbeWireBits = 275;
-/** The transition capture orders the outgoing EDZ view before the current Basin authority view. */
-constexpr std::uint8_t kTwoViewProbeEntityView = 0;
+/** The transition capture orders the outgoing EDZ view before the player's current region view. */
+constexpr std::uint8_t kTwoViewProbeEntityView = 1;
 constexpr std::uint8_t kTwoViewProbeAuthorityView = 1;
-/** Namespace owned by the live outgoing EDZ view in the captured transition. */
-constexpr std::int32_t kTwoViewProbeEntityNamespace = 1;
-/** Current Basin authority required before the bounded outgoing-view control may run. */
-constexpr std::int32_t kTwoViewProbeAuthorityRegion = 24;
-constexpr std::uint8_t kTwoViewProbeAuthorityBubble = 3;
-constexpr std::uint8_t kTwoViewProbeAuthorityCell = 11;
-/** Outgoing namespace 1's active Town cell, used only to confirm native construction. */
-constexpr std::int32_t kTwoViewProbeRegion = 408;
-constexpr std::uint8_t kTwoViewProbeBubble = 51;
-constexpr std::uint8_t kTwoViewProbeCell = 145;
 /**
- * Stored 275-bit signature, target view's 220-bit body, and current view's six-bit empty tail.
- * The native schema consumes 274 signature bits; stored bit 274 supplies view 0's event lane.
+ * Stored 275-bit signature, old view's five-bit empty remainder, the current view's explicit
+ * event bit, and its 220-bit entity body. The stored final signature bit supplies view 0's event.
  */
 constexpr std::uint16_t kTwoViewProbeBodyBits = 501;
 /** Fail before the native four-second corrupt-packet timeout can close the channel. */
@@ -195,14 +186,14 @@ struct EntityCreatePlan {
     bool present{};
 };
 
-/** One fail-contained scheduler validation carrying an atomic create in a distinct live view. */
+/** One fail-contained scheduler validation carrying an atomic create in the current live view. */
 struct TwoViewProbePlan {
     state::gameplay::SchedulerSignature scheduler{};
-    /** Current Basin authority token retained for topology and acknowledgement proof. */
+    /** Current-region authority token retained for topology and acknowledgement proof. */
     std::uint64_t token{};
-    /** Live scheduler-view token whose entity manager receives the bounded record. */
+    /** Current scheduler-view token whose entity manager receives the bounded record. */
     std::uint64_t entityToken{};
-    /** Current Basin authority view; this remains the globally selected spatial context. */
+    /** Current-region authority view and entity owner. */
     std::uint8_t selectedView{};
     std::uint8_t entityView{};
     std::uint8_t remoteViews{};
@@ -241,6 +232,7 @@ enum class EntityCreateGate : std::uint8_t {
     generation,
     rsat,
     spatialCell,
+    activeManager,
     signature,
     schedulerIdentity,
     remoteLayout,
@@ -372,6 +364,8 @@ select_replication_view(const state::gameplay::PeerLink& peer) noexcept {
         return "rsat";
     case EntityCreateGate::spatialCell:
         return "spatial-cell";
+    case EntityCreateGate::activeManager:
+        return "active-manager";
     case EntityCreateGate::signature:
         return "signature";
     case EntityCreateGate::schedulerIdentity:
@@ -641,7 +635,7 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
-/** Writes the exact two-view signature, one old-view create, and an empty current-view tail. */
+/** Writes the exact two-view signature and one atomic create in the current-region view. */
 [[nodiscard]] bool write_two_view_probe(bits::Writer& writer,
                                         const TwoViewProbePlan& plan,
                                         const EntityCreatePlan& entityCreate) noexcept {
@@ -650,22 +644,29 @@ write_scheduler_signature(bits::Writer& writer,
         || plan.scheduler.wireBits != kTwoViewProbeWireBits
         || plan.selectedView != kTwoViewProbeAuthorityView
         || plan.entityView != kTwoViewProbeEntityView || plan.entityToken == 0
-        || plan.entityToken == plan.token || !entityCreate.present || !entityCreate.combinedCreate
+        || plan.entityToken != plan.token || !entityCreate.present || !entityCreate.combinedCreate
         || entityCreate.updateOnly || entityCreate.updateBits != kFirstEntityUpdateBits
         || entityCreate.token != plan.entityToken || entityCreate.viewIndex != plan.entityView
-        || entityCreate.namespaceId != kTwoViewProbeEntityNamespace
+        || entityCreate.namespaceId < 0
         || entityCreate.schedulerKey != plan.scheduler.views[plan.entityView].key
         || entityCreate.schedulerTag != plan.scheduler.views[plan.entityView].tag
         || entityCreate.rsat != state::gameplay::kFirstEntityRsat
-        || !entityCreate.spatialCellPresent || entityCreate.spatialRegion != kTwoViewProbeRegion
-        || entityCreate.spatialBubble != kTwoViewProbeBubble
-        || entityCreate.spatialCell != kTwoViewProbeCell
-        || !write_scheduler_signature(writer, plan.scheduler)) {
+        || !entityCreate.spatialCellPresent || !write_scheduler_signature(writer, plan.scheduler)) {
         return false;
     }
     for (std::size_t index = 0; index < kTwoViewProbeViewCount; ++index) {
-        if (index == plan.entityView ? !write_entity_create_view(writer, entityCreate)
-                                     : !write_complete_empty_scheduler_view(writer)) {
+        if (index == plan.entityView) {
+            // Only view zero inherits an event bit from the captured signature. The current view
+            // is entry one in this transition and therefore publishes its own event absence.
+            if ((index != 0 && !writer.write(0, 1))
+                || !write_entity_create_view(writer, entityCreate)) {
+                return false;
+            }
+            continue;
+        }
+        const bool written = index == 0 ? write_empty_scheduler_view(writer)
+                                        : write_complete_empty_scheduler_view(writer);
+        if (!written) {
             return false;
         }
     }
@@ -771,9 +772,11 @@ write_scheduler_signature(bits::Writer& writer,
         }
         selectedIndex = index;
     }
-    const std::uint64_t entityToken = scheduler.views[kTwoViewProbeEntityView].key;
-    if (selectedIndex == scheduler.views.size() || selectedIndex != kTwoViewProbeAuthorityView
-        || entityToken == 0 || entityToken == capture.schedulerKey
+    if (selectedIndex == scheduler.views.size() || selectedIndex != kTwoViewProbeAuthorityView) {
+        return false;
+    }
+    const std::uint64_t entityToken = scheduler.views[selectedIndex].key;
+    if (entityToken == 0 || entityToken != capture.schedulerKey
         || !unique_view_token(peer, entityToken)) {
         return false;
     }
@@ -782,7 +785,7 @@ write_scheduler_signature(bits::Writer& writer,
     output.token = selected.signature.token;
     output.entityToken = entityToken;
     output.selectedView = static_cast<std::uint8_t>(selectedIndex);
-    output.entityView = kTwoViewProbeEntityView;
+    output.entityView = static_cast<std::uint8_t>(selectedIndex);
     output.remoteViews = capture.schedulerRemoteViewCount;
     output.remoteAlreadyMatches = scheduler_matches_remote_capture(scheduler, capture);
     output.present = true;
@@ -807,7 +810,7 @@ write_scheduler_signature(bits::Writer& writer,
 }
 
 /**
- * Builds an outgoing-view atomic create under the current Basin authority/spatial context.
+ * Builds an atomic create in the player region's own view, manager, and spatial cell.
  * A retained plan supplies only the already-consumed native update during send revalidation;
  * every topology, slot, resource, and cell field is rebuilt from current live state.
  */
@@ -825,14 +828,14 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         || probe.scheduler.wireBits != kTwoViewProbeWireBits
         || probe.selectedView != kTwoViewProbeAuthorityView
         || probe.entityView != kTwoViewProbeEntityView || probe.entityToken == 0
-        || probe.entityToken == probe.token
+        || probe.entityToken != probe.token
         || probe.scheduler.views[probe.entityView].key != probe.entityToken) {
         gate = EntityCreateGate::schedulerShape;
         return false;
     }
     if (!selected.present || !selected.signature.bound || selected.signature.token == 0
         || selected.signature.token != probe.token || !selected.worldPresent
-        || selected.world.region != kTwoViewProbeAuthorityRegion) {
+        || selected.world.region == state::activity::membership::kAbsentRegionIndex) {
         gate = EntityCreateGate::view;
         return false;
     }
@@ -847,23 +850,18 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         return false;
     }
 
-    client::hooks::network::entity_slot_probe::ViewCapture capture{};
-    if (!client::hooks::network::entity_slot_probe::find(probe.entityToken, capture)) {
+    if (!selected.capturePresent) {
         gate = EntityCreateGate::captureMissing;
         return false;
     }
+    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
     if (capture.token != probe.entityToken || capture.schedulerKey != capture.token
-        || capture.namespaceId != kTwoViewProbeEntityNamespace || capture.manager == nullptr) {
+        || capture.namespaceId < 0 || capture.manager == nullptr) {
         gate = EntityCreateGate::schedulerIdentity;
         return false;
     }
     if (!capture.candidatePresent) {
         gate = EntityCreateGate::candidate;
-        return false;
-    }
-    if (capture.occupiedCount != kFirstEntityBaselineOccupied
-        || capture.slot != kFirstEntityBaselineOccupied) {
-        gate = EntityCreateGate::baseline;
         return false;
     }
     if (capture.slot >= 0x2000 || capture.availableCount == 0) {
@@ -879,19 +877,15 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         gate = EntityCreateGate::rsat;
         return false;
     }
-    if (!resolve_entity_spatial_cell(selected, output)
-        || output.spatialRegion != kTwoViewProbeAuthorityRegion
-        || output.spatialBubble != kTwoViewProbeAuthorityBubble
-        || output.spatialCell != kTwoViewProbeAuthorityCell) {
+    if (!resolve_entity_spatial_cell(selected, output)) {
         gate = EntityCreateGate::spatialCell;
         return false;
     }
-    // Namespace 1 does not own Basin cell 11: its native dirty-row processor rejects that cell
-    // before type-2 construction. Keep current Basin authority as the hard gate, but address the
-    // outgoing view's proven active Town cell as a bounded end-to-end construction control.
-    output.spatialRegion = kTwoViewProbeRegion;
-    output.spatialBubble = kTwoViewProbeBubble;
-    output.spatialCell = kTwoViewProbeCell;
+    if (!client::hooks::network::sobject_apply_probe::current_region_manager_active(
+            capture.token, capture.namespaceId)) {
+        gate = EntityCreateGate::activeManager;
+        return false;
+    }
     if (!scheduler_matches_local_capture(probe.scheduler, capture)) {
         gate = EntityCreateGate::schedulerIdentity;
         return false;
@@ -1054,6 +1048,11 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         gate = EntityCreateGate::spatialCell;
         return false;
     }
+    if (!client::hooks::network::sobject_apply_probe::current_region_manager_active(
+            capture.token, capture.namespaceId)) {
+        gate = EntityCreateGate::activeManager;
+        return false;
+    }
 
     if (!capture.schedulerSignatureValid
         || capture.schedulerSignature != peer.schedulerSignature.value) {
@@ -1155,6 +1154,11 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         gate = EntityCreateGate::spatialCell;
         return false;
     }
+    if (!client::hooks::network::sobject_apply_probe::current_region_manager_active(
+            capture.token, capture.namespaceId)) {
+        gate = EntityCreateGate::activeManager;
+        return false;
+    }
     std::size_t match = scheduler.views.size();
     for (std::size_t index = 0; index < scheduler.viewCount; ++index) {
         if (scheduler.views[index].key != capture.schedulerKey
@@ -1233,7 +1237,9 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         }
         match = index;
     }
-    if (match == scheduler.views.size() || !resolve_entity_spatial_cell(selected, output)) {
+    if (match == scheduler.views.size() || !resolve_entity_spatial_cell(selected, output)
+        || !client::hooks::network::sobject_apply_probe::current_region_manager_active(
+            capture.token, capture.namespaceId)) {
         return false;
     }
 
@@ -1293,7 +1299,9 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         || scheduler.views[0].tag != capture.schedulerTag) {
         return false;
     }
-    if (!resolve_entity_spatial_cell(selected, output)) {
+    if (!resolve_entity_spatial_cell(selected, output)
+        || !client::hooks::network::sobject_apply_probe::current_region_manager_active(
+            capture.token, capture.namespaceId)) {
         return false;
     }
 
@@ -1371,7 +1379,9 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
     if (match == scheduler.views.size()) {
         return false;
     }
-    if (!resolve_entity_spatial_cell(selected, output)) {
+    if (!resolve_entity_spatial_cell(selected, output)
+        || !client::hooks::network::sobject_apply_probe::current_region_manager_active(
+            capture.token, capture.namespaceId)) {
         return false;
     }
 
@@ -2700,6 +2710,9 @@ bool link_stage(std::uint64_t sessionId, state::gameplay::PeerStage& stage) noex
 
 /** Sends any owed acknowledgement. */
 void service(std::uint64_t now) noexcept {
+    // Native PUBLIC CURRENT can lag behind the membership/slice transition. Reconcile the
+    // simulation manager before taking the peer lock so current-view creates are serviceable.
+    client::hooks::network::sobject_apply_probe::service_current_region_manager();
     std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> owed{};
     std::array<EntityCreatePlan, state::gameplay::kAssociationCapacity> entityCreates{};
     std::array<TwoViewProbePlan, state::gameplay::kAssociationCapacity> twoViewProbes{};

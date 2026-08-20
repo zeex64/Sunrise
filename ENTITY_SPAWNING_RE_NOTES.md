@@ -36,6 +36,41 @@ The location overlay was audited at the same checkpoint:
 Overlay/debug Release SHA-256:
 `5ac62efcbd6f0db1c880a32d6783355a17ac62fa478544b822b2d3115d0bf670`.
 
+## Current-region simulation-manager promotion
+
+The owner mismatch is upstream of the dirty service. The runtime contains three manager
+containers at `runtime + 0x206C8 + namespace * 0x11E08`; each replicated-object manager is at
+container `+0x270`. `FUN_1416CCA40` services only the container whose identity is stored at runtime
+`+0x560E0`. That is why a current-view namespace-2 record could decode, promote, and occupy slot 0
+without ever reaching `FUN_141717790`, while an outgoing namespace-1/Town record reached type-2,
+kind-0, native registration, binding, and positional audio.
+
+Ghidra confirms `FUN_1416EC250(runtime)` is the sole non-constructor writer of `+0x560E0`. Before
+changing the identity it calls `FUN_1417030F0(container+0x30)`; that helper only writes byte 1 at
+container `+0x15C`. The new `active_manager_refresh` hook preserves the original call and then
+reconciles these same two manager-local fields with the player's coherent current region. The
+gameplay service reapplies the same guarded choice because native PUBLIC CURRENT may continue to
+prefer the outgoing region.
+
+Promotion requires all of the following, otherwise it performs no write:
+
+- bootflow is freshly `in_world`;
+- the native world-manager slice set equals `primary_world().region`;
+- that region resolves to an advertised group with a bound view and held host token;
+- the host token has a live entity-manager capture with namespace 0..2;
+- the captured manager pointer equals `runtime + 0x20938 + namespace * 0x11E08`;
+- the manager container's own identity equals the captured namespace and the old active identity
+  is in range.
+
+The two-view experiment now places the create in the selected current view (normally entry 1),
+not the outgoing view. Its proven 501-bit body is unchanged in width: the carried signature bit
+supplies view-0 event, view 0 writes the five-bit empty remainder, view 1 writes one event-absence
+bit plus the 220-bit atomic entity body. The entity region/bubble/cell come from the same current
+view. Every create/retry/follow-up path also requires a fresh matching active-manager observation.
+
+Release SHA-256:
+`8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`.
+
 ## Environment
 
 - Repository: `/home/zeex64/Documents/Sunrise`
@@ -2618,34 +2653,35 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Start a fresh EDZ session with Town bubble 51 and Town-only spawn set `0xCB8903DF`. Require the
-   initial roster/slice to remain 408, the normal 13-object public baseline, and no immediate
-   Town-to-Basin normal z-leg.
-2. Require the ordinary one-view create to target active namespace 1 with
-   `region=408 bubble=51 cell=145`, then confirm type-2 result 0, native registration, kind-0
-   success, and a completed bind. This is the first test where player, simulation owner, and
-   renderer cell should all agree without skipping the authored initial baseline.
-3. If this makes the Vandal visible, retain coherent arrival/spawn pairing and generalize entity
+1. Start a fresh EDZ session through the normal broad-spawn route. Require membership Region and
+   the native Slice set to agree before any promotion or entity send.
+2. If the current region owns a different namespace than native PUBLIC CURRENT, require
+   `active-region-manager result=promoted`, followed by an Entity Debug Manager row whose active
+   namespace matches the current token's namespace.
+3. Require the atomic create to use that same current host token, namespace, region, bubble, and
+   cell, then confirm type-2 result 0, native registration, kind-0 success, and a completed bind.
+   The overlay must say `owner matches` rather than `OWNER MISMATCH`.
+4. If this makes the Vandal visible, retain coherent arrival/spawn pairing and generalize entity
    residency per bubble. If it remains audio-only, capture parent/stream-source state from a real
    authored biped before changing the payload.
-4. Require `sobject-kind0 result=1`, target native registration, and
+5. Require `sobject-kind0 result=1`, target native registration, and
    `sobject-bind-dispatch status=bound` before treating the remaining failure as rendering.
-5. If a correctly owned and bound object remains audible but invisible, capture a real authored
+6. If a correctly owned and bound object remains audible but invisible, capture a real authored
    biped's parent, stream-source, and RSAT suffix before changing the payload. Do not guess them.
-6. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
+7. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
    binds an already-existing native squad and does not turn a standalone kind-0 sobject into an
    active encounter enemy.
-7. Trace the activity-host lifecycle after the already-successful EDZ mode selection
+8. Trace the activity-host lifecycle after the already-successful EDZ mode selection
    (`definition=0x0109ED6B`, activity type 6) and public remote-session constructor. Identify which
    missing host state or server publication starts director/encounter evaluation. Do not modify the
    correct local-posse versus remote-public route selectors.
-8. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
+9. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
    squad `0x80B2E9A2` only to validate authored relationships. None is interchangeable with the
    runtime sobject RSAT field.
-9. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
+10. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
    exact native body. Its physics host and activity receipts can then become useful downstream,
    after visible entity replication is proven.
-10. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
+11. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
    before activity launch through initial zone load. The existing NetDuma file contains counters,
    not entity packets.
 
@@ -2705,6 +2741,9 @@ Rejected direct-Basin-arrival SHA-256 (black screen; missing normal baseline):
 
 Town bubble 51 plus Town-only spawn-set `0xCB8903DF` Release candidate SHA-256:
 `f70cd002c75cf9e42d2345340f17d564b66b77ad51f6d00e241cafca3b68aa7f`.
+
+Current-region simulation-manager promotion Release candidate SHA-256:
+`8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`.
 
 After manual deployment, inspect:
 

@@ -145,6 +145,8 @@ bool derive(std::span<const patterns::ImageRange> image,
         return false;
     }
     resolved.sobjectType2Job = matches[index(patterns::game::Id::sobjectType2Job)].address;
+    resolved.activeManagerRefresh =
+        matches[index(patterns::game::Id::activeManagerRefresh)].address;
     std::byte* const contentIdTokenLoad =
         matches[index(patterns::game::Id::contentIdTokenLoad)].address;
     if (!relative::resolve(contentIdTokenLoad,

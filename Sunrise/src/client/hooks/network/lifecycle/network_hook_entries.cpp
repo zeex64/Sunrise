@@ -74,6 +74,7 @@ namespace {
         sobject_apply_probe::backend_busy_entry_point(),
         sobject_apply_probe::dirty_row_entry_point(),
         sobject_apply_probe::type2_job_entry_point(),
+        sobject_apply_probe::active_manager_refresh_entry_point(),
     };
 }
 
@@ -135,6 +136,7 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.sobjectBackendBusy, replacements[40]},
         hooking::detour::Spec{resolved.sobjectDirtyRow, replacements[41]},
         hooking::detour::Spec{resolved.sobjectType2Job, replacements[42]},
+        hooking::detour::Spec{resolved.activeManagerRefresh, replacements[43]},
     };
 }
 

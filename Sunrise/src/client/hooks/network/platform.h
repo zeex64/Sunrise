@@ -60,6 +60,7 @@ enum class HookSlot : std::size_t {
     sobjectBackendBusy,
     sobjectDirtyRow,
     sobjectType2Job,
+    activeManagerRefresh,
     count,
 };
 

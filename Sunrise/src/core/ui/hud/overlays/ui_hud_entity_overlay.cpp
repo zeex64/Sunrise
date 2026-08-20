@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <imgui.h>
 
+#include "../../../../client/hooks/network/sobject_apply_probe.h"
 #include "../../../../client/hooks/network/sobject_bind_probe.h"
 #include "../../../../state/activity/membership/activity_membership_query.h"
 
@@ -60,9 +61,20 @@ void begin_row(const char* label) noexcept {
 
 /** Draws the synthetic replicated-entity lifecycle inside the active overlay window. */
 void draw() noexcept {
+    client::hooks::network::sobject_apply_probe::ActiveManagerDebugSnapshot manager{};
+    const bool managerPresent =
+        client::hooks::network::sobject_apply_probe::active_manager_debug_snapshot(manager);
     probe::EntityDebugSnapshot entity{};
     if (!probe::debug_snapshot(entity)) {
         ImGui::TextDisabled("no synthetic entity sent");
+        if (managerPresent) {
+            ImGui::Text("region %d  slice %d  active %d  wanted ns %d%s",
+                        manager.region,
+                        manager.nativeSlice,
+                        manager.activeAfter,
+                        manager.requestedNamespace,
+                        manager.ready ? "  ready" : "  waiting");
+        }
         return;
     }
 
@@ -70,7 +82,6 @@ void draw() noexcept {
     const bool worldPresent = membership::primary_world(world);
     const bool ownerMismatch = worldPresent && world.region != membership::kAbsentRegionIndex
                                && entity.region >= 0 && world.region != entity.region;
-
     if (!ImGui::BeginTable("##sunrise_hud_entity_table", kColumnCount)) {
         return;
     }
@@ -119,6 +130,22 @@ void draw() noexcept {
                 entity.type2Seen ? entity.type2Result : -1,
                 entity.type2JobReturned ? 1U : 0U,
                 entity.applied ? 1U : 0U);
+
+    begin_row("Manager");
+    if (!managerPresent) {
+        ImGui::TextDisabled("unknown");
+    } else if (!manager.ready) {
+        ImGui::TextColored(ImVec4{1.0F, 0.55F, 0.25F, 1.0F},
+                           "active %d  wanted ns %d  NOT PROMOTED",
+                           manager.activeAfter,
+                           manager.requestedNamespace);
+    } else {
+        ImGui::Text("active ns %d  region %d  slice %d%s",
+                    manager.activeAfter,
+                    manager.region,
+                    manager.nativeSlice,
+                    manager.promoted ? "  promoted" : "");
+    }
 
     begin_row("Native");
     ImGui::Text("kind0 %u/%u  reg %u  bind %u/%u  index 0x%08X",
