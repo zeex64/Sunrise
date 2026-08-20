@@ -740,6 +740,25 @@ Once the director evaluates an encounter and creates native squad/member objects
   region/hash, transition token, and whether the state transaction observed a region move, token
   move, or published snapshot. It changes no publication or native transition behavior. Release
   SHA-256: `a4acaa0296a1070ed27fb38bf91da5b4ebeddea8b98a7c5e080531d8a847d021`.
+- The `a4acaa...` traversal proves region and transition token are independent native signals.
+  Ordinary load starts usually carry both together, but several physical boundary crossings carried
+  a new region with `has_token=0`; later messages advanced the token while keeping the same region.
+  Sunrise must always update the player's coherent region, but must not invent a new load token for
+  a region-only delta. The run traversed public 408/24/448/280 and private
+  416/424/456/96/488/496 without a network hitch, assertion, forced disconnect, or phantom private
+  host. Shutdown was orderly.
+- No synthetic entity was sent in that traversal. Every candidate window had an unsupported or
+  unsettled scheduler layout, so the fail-closed gate preserved the channel. The three large native
+  scheduler bodies captured during reconfiguration had no accompanying kind-0 create/update encoder
+  call and are control/topology traffic, not hidden Vandal records.
+- The supplied retail packet bundle contains the real enemy replication only in its raw port-3074
+  gameplay UDP flows. Those flows total thousands of high-rate datagrams and cover EDZ/lost-sector
+  play, but the bundle retains only framing plus high-entropy payload and omits the gameplay cipher
+  state. The decrypted port-30000 activity-host TCP covers joins, membership, roster and activity
+  messages; service-123 Investment objects are static resource data. Neither `0x815B204B` nor shared
+  Vandal definition `0x80C187BD` appears as a literal in any bundled binary body. The captures are
+  useful timing/lifecycle evidence, but cannot by themselves supply a spawn record; the actionable
+  plaintext boundary remains the in-process scheduler/entity hooks.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

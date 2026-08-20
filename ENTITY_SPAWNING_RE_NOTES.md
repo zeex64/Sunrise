@@ -3028,6 +3028,50 @@ the diagnostic.
 Release SHA-256 for the authoritative-order diagnostic:
 `a4acaa0296a1070ed27fb38bf91da5b4ebeddea8b98a7c5e080531d8a847d021`.
 
+### Traversal ordering and retail packet-layer assessment
+
+The `a4acaa...` traversal establishes that the client has two independent notions that must not be
+collapsed. Most authored load starts moved region and transition token together, for example
+`24/2`, `416/3`, `448/6`, `280/11`, and `496/16`. Several physical crossings instead sent a region
+with no token field at all: region 408 at `t=88887`, region 24 at `t=94652`, region 448 at
+`t=102069`, and region 280 at `t=109669`. The stored token correctly remained unchanged. Token-only
+updates then occurred without a region move, including region 24 tokens 7 and 8 and region 456
+token 10. Therefore a region delta is authoritative player location, while a present changed token
+is a native load/visit generation. Server publication may react to both, but it must never synthesize
+one from the other.
+
+The run exercised public regions 408, 24, 448, and 280 and rapid private crossings through 416,
+424, 456, 96, 488, and 496. Only the four public groups routed gameplay views. Private publication
+retained `group=0`, and no phantom private activity host appeared. There was no assertion hit,
+network hitch, forced disconnect, or corrupt-channel failure; shutdown completed normally. No
+synthetic `entity-create-out` occurred because every candidate window remained on an unproven
+scheduler shape. This is the intended fail-closed result.
+
+Three unusually large scheduler bodies (1114, 1124, and 1178 bits) were captured during public
+session reconfiguration. None coincided with `sobject-create` or `sobject-update`, and the first
+carried a signature update whose logical registered-view count was zero. They are scheduler
+control/topology output, not native enemy-creation exemplars.
+
+The shared retail captures separate cleanly into three relevant layers:
+
+- Port-30000 activity-host TCP is decrypted. Its service-8 requests and service-9 pushes contain
+  join, authoritative activity, roster, membership, and related coordination. The inner activity
+  bodies are not fully typed, but this channel is not the high-rate replicated-entity transport.
+- Service-123 Investment objects are decompressed static resource/profile objects. They can supply
+  definitions and content identifiers, but do not prove that one runtime enemy instance spawned.
+- Port-3074 gameplay UDP contains the high-rate EDZ and lost-sector simulation stream where retail
+  create/update/remove records necessarily travel. The bundle kept framing and raw datagrams, but
+  their payload is high entropy and the gameplay cipher/session state is absent. Port 3075 is only
+  short probe/handshake traffic in this capture.
+
+A binary scan found zero literal occurrences of synthetic Vandal RSAT `0x815B204B` and zero of the
+shared Vandal definition `0x80C187BD` across the bundled bodies, in either byte order. That negative
+result is expected for encrypted, bit-packed gameplay data and also prevents falsely attributing an
+Investment or activity message to the Vandal. Without a post-decryption gameplay buffer or the
+ephemeral UDP cipher state, these captures cannot yield an exact enemy wire record. Continue at the
+in-process plaintext scheduler and entity-codec boundaries; use the retail captures for connection
+lifetimes, traffic timing, and later ciphertext validation.
+
 After manual deployment, inspect:
 
 ```text
