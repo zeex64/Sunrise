@@ -2525,12 +2525,22 @@ to the outgoing Town view while the player and renderer are in Basin.
 
 The upstream mismatch begins before entity replication. The captured EDZ selection names Town
 hash `0xB8459D59`; Sunrise consequently publishes arrival slice 408 and the client completes an
-initial Town transition. Spawn set `0x9617A6E7` nevertheless places the local player in Basin, so
-the client immediately begins a normal z-leg to region 24. Basin becomes a public target but does
-not become the serviced simulation manager during the stationary test. An authored arrival
-override for `edz_freeroam` now selects bubble ordinal 3, making slice 24 the initial world. This
-tests the correct ownership tuple directly: first active namespace, current Basin view, and map
-cell 11. It does not force the native active-manager index or alter entity wire fields.
+initial Town transition. Broad spawn set `0x9617A6E7` has 54 points whose mask spans cells
+30, 38, 63, 73, 82, 145, and 155. Its `(509.151,30.129,73.822)` cluster places this character on
+the Basin side, so the client immediately begins a normal z-leg to region 24. Basin becomes a
+public target but does not become the serviced simulation manager during the stationary test.
+
+Directly selecting Basin bubble 3 did not provide a valid initial world. With SHA `f6aeb696...`,
+the client completed slice 24 as PUBLIC CURRENT, but namespace 1 contained only one active kind-2
+object rather than Town's normal 13-object baseline. View readiness remained pending and the local
+player never instantiated, leaving a black screen. This disproves direct-Basin arrival as a safe
+ownership shortcut and shows that the authored initial baseline is tied to the arrival pairing.
+
+The cache provides a narrower coherent control without bypassing that baseline. Spawn set
+`0xCB8903DF` is map-resident, has three points around `(527,159,75)`, and references only map cell
+145. The current override pairs it with Town bubble 51. If the player remains in Town, the ordinary
+one-view path should create the Vandal in active namespace 1/cell 145, removing the prior renderer
+versus entity-owner mismatch without forcing the active manager or changing entity wire fields.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -2583,13 +2593,14 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Start a fresh EDZ session with direct Basin arrival SHA `f6aeb696...`. Require the initial roster
-   and initial slice-set transition to name region/slice 24, not 408, and no immediate Town-to-Basin
-   normal z-leg.
-2. Require the ordinary one-view create to target the first serviced namespace with
-   `region=24 bubble=3 cell=11`, then confirm type-2 result 0, native registration, kind-0 success,
-   and a completed bind. This is the first test where simulation owner and renderer cell agree.
-3. If this makes the Vandal visible, keep the arrival/spawn pairing coherent and generalize entity
+1. Start a fresh EDZ session with Town bubble 51 and Town-only spawn set `0xCB8903DF`. Require the
+   initial roster/slice to remain 408, the normal 13-object public baseline, and no immediate
+   Town-to-Basin normal z-leg.
+2. Require the ordinary one-view create to target active namespace 1 with
+   `region=408 bubble=51 cell=145`, then confirm type-2 result 0, native registration, kind-0
+   success, and a completed bind. This is the first test where player, simulation owner, and
+   renderer cell should all agree without skipping the authored initial baseline.
+3. If this makes the Vandal visible, retain coherent arrival/spawn pairing and generalize entity
    residency per bubble. If it remains audio-only, capture parent/stream-source state from a real
    authored biped before changing the payload.
 4. Require `sobject-kind0 result=1`, target native registration, and
@@ -2664,8 +2675,11 @@ Deployed passive dirty-row probe SHA-256:
 Successful Town-cell construction control SHA-256:
 `1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
 
-Direct-Basin-arrival Release candidate SHA-256:
+Rejected direct-Basin-arrival SHA-256 (black screen; missing normal baseline):
 `f6aeb6968e0251e32a66acb0eb250ed083016a82d4862e118667ea5a344a012e`.
+
+Town bubble 51 plus Town-only spawn-set `0xCB8903DF` Release candidate SHA-256:
+`f70cd002c75cf9e42d2345340f17d564b66b77ad51f6d00e241cafca3b68aa7f`.
 
 After manual deployment, inspect:
 

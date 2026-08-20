@@ -98,7 +98,8 @@
       "arrival_overrides": [
         {
           "package_name": "edz_freeroam",
-          "bubble": 3
+          "bubble": 51,
+          "spawn_set_hash": "0xCB8903DF"
         },
         {
           "package_name": "raid_envy_v310",

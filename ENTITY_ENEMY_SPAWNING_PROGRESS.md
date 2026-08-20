@@ -412,11 +412,18 @@ The slot-14 atomic run then completed the current wire milestone:
   view/cell ownership, not create grammar, RSAT, transform, job dispatch, native construction, or
   glue binding.
 - The launch itself exposes the ownership bug: the client requests EDZ Town and Sunrise grants
-  initial slice 408, while spawn set `0x9617A6E7` places the player in Basin. The client immediately
-  starts a Town-to-Basin z-leg, leaving Town namespace 1 current and Basin namespace 2 only a
-  target. A narrow EDZ arrival override now makes Basin bubble 3/slice 24 the initial world so the
-  first serviced namespace should own map cell 11. The Release SHA is
-  `f6aeb6968e0251e32a66acb0eb250ed083016a82d4862e118667ea5a344a012e`.
+  initial slice 408, while broad spawn set `0x9617A6E7` has 54 points across seven cells and places
+  this character on the Basin boundary. The client immediately starts a Town-to-Basin z-leg,
+  leaving Town namespace 1 current and Basin namespace 2 only a target.
+- Directly overriding the initial arrival to Basin was not a valid shortcut. The client completed
+  slice 24 as PUBLIC CURRENT, but the public view contained only one kind-2 object instead of the
+  normal 13-object Town baseline. Readiness remained pending and the player never instantiated,
+  producing the reported black screen. Direct-Basin SHA
+  `f6aeb6968e0251e32a66acb0eb250ed083016a82d4862e118667ea5a344a012e` is therefore rejected.
+- Cache inspection found a coherent Town-only alternative. Spawn set `0xCB8903DF` contains three
+  map-resident points around `(527,159,75)` and references only Town map cell 145. The current
+  settings pair that spawn set with Town bubble 51 so the player, the active namespace, and the
+  synthetic Vandal should all share the same owner and cell.
 - The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
   remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
   when that view leaves. This control runs only while Basin 24/3/11 is current, but deliberately
@@ -424,17 +431,16 @@ The slot-14 atomic run then completed the current wire milestone:
 
 ## Immediate plan
 
-### 1. Validate direct Basin ownership
+### 1. Validate coherent Town ownership
 
-- Start a fresh EDZ session with the Basin arrival override. Require the initial roster and initial
-  slice-set transition to name region/slice 24 rather than 408, with no immediate normal z-leg from
-  Town to Basin.
-- Require the ordinary one-view path to emit `entity-create-out region=24 bubble=3 cell=11` in the
-  first serviced namespace, followed by a batch increase, type-2 result 0, kind-0 success, target
-  native registration, and a completed bind.
-- If that object is audible and visible, cell ownership was the last rendering blocker. If it is
-  still audible but invisible while current namespace and cell agree, capture the authored
-  parent/stream-source fields next.
+- Start a fresh EDZ session with Town bubble 51 and spawn set `0xCB8903DF`. Require roster/slice 408,
+  a normal 13-object public baseline, and no immediate Town-to-Basin z-leg.
+- Require the ordinary one-view path to emit `entity-create-out region=408 bubble=51 cell=145` in
+  namespace 1, followed by type-2 result 0, kind-0 success, target native registration, and a
+  completed bind.
+- If that object is audible and visible, the former failure was the mismatched arrival/spawn pair.
+  If it is still audio-only while the player and object genuinely share Town view/cell ownership,
+  capture the authored parent/stream-source fields next.
 - A type-2 job result of 4 means serialization failed; 1, 2, or 3 is an allocator/queue refusal;
   result 0 with a non-null job means dispatch should reach `sobject-apply`.
 - Only after `sobject-apply`, `sobject-kind0 result=1`, target native registration, and
@@ -531,8 +537,10 @@ Once the director evaluates an encounter and creates native squad/member objects
   rejects Basin cell 11 as inactive.
 - The successful Town-cell construction control has SHA-256
   `1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
-- The direct-Basin-arrival Release candidate has SHA-256
+- The rejected direct-Basin-arrival build has SHA-256
   `f6aeb6968e0251e32a66acb0eb250ed083016a82d4862e118667ea5a344a012e`.
+- The Town bubble 51 plus Town-only spawn-set `0xCB8903DF` Release candidate has SHA-256
+  `f70cd002c75cf9e42d2345340f17d564b66b77ad51f6d00e241cafca3b68aa7f`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
