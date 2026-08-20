@@ -121,6 +121,14 @@ constexpr std::uint16_t kTwoViewProbeBodyBits = 501;
 constexpr std::uint64_t kTwoViewProbeTimeout = 3000;
 /** Stay below half of the 128-entry packet ring while waiting for direct acknowledgement. */
 constexpr std::uint8_t kTwoViewProbeMaximumPacketsAfter = 63;
+/** Stable post-handoff layouts contain the current view plus one or two retained views. */
+constexpr std::uint8_t kPostHandoffProbeMinimumViews = 2;
+constexpr std::uint8_t kPostHandoffProbeMaximumViews = 3;
+/** Both exact signature widths have been observed after PUBLIC CURRENT changes. */
+constexpr std::uint16_t kPostHandoffProbeWireBitsA = 203;
+constexpr std::uint16_t kPostHandoffProbeWireBitsB = 275;
+/** Bound repeated validation attempts across one peer-link lifetime. */
+constexpr std::uint8_t kPostHandoffProbeAttemptLimit = 4;
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
@@ -218,6 +226,27 @@ struct TwoViewProbeReport {
     const char* reason{};
 };
 
+/** One empty, fail-contained validation of the scheduler layout after native handoff. */
+struct PostHandoffProbePlan {
+    state::gameplay::SchedulerSignature scheduler{};
+    std::uint64_t token{};
+    std::uint8_t selectedView{};
+    std::uint8_t remoteViews{};
+    bool present{};
+};
+
+/** Deferred post-handoff probe diagnostic. */
+struct PostHandoffProbeReport {
+    std::uint64_t token{};
+    std::uint64_t elapsed{};
+    std::uint16_t packet{};
+    std::uint8_t selectedView{};
+    std::uint8_t viewCount{};
+    std::uint8_t packetsAfter{};
+    bool handlerComplete{};
+    const char* reason{};
+};
+
 /** Stable reason the first server-authored create is not ready to leave. */
 enum class EntityCreateGate : std::uint8_t {
     ready,
@@ -225,6 +254,7 @@ enum class EntityCreateGate : std::uint8_t {
     view,
     schedulerShape,
     schedulerTrace,
+    schedulerProbe,
     captureMissing,
     candidate,
     baseline,
@@ -350,6 +380,8 @@ select_replication_view(const state::gameplay::PeerLink& peer) noexcept {
         return "scheduler-shape";
     case EntityCreateGate::schedulerTrace:
         return "scheduler-trace";
+    case EntityCreateGate::schedulerProbe:
+        return "scheduler-probe";
     case EntityCreateGate::captureMissing:
         return "capture-missing";
     case EntityCreateGate::candidate:
@@ -520,6 +552,61 @@ write_scheduler_signature(bits::Writer& writer,
            && writer.write(1, 1) && writer.write(0, 1);
 }
 
+/** @return True for the bounded stable layouts observed after native PUBLIC CURRENT changes. */
+[[nodiscard]] bool
+post_handoff_scheduler_shape(const state::gameplay::SchedulerSignature& scheduler) noexcept {
+    return scheduler.present && scheduler.viewCount >= kPostHandoffProbeMinimumViews
+           && scheduler.viewCount <= kPostHandoffProbeMaximumViews
+           && (scheduler.wireBits == kPostHandoffProbeWireBitsA
+               || scheduler.wireBits == kPostHandoffProbeWireBitsB);
+}
+
+/** @return Exact equality for a captured scheduler encoding and all logical view entries. */
+[[nodiscard]] bool
+same_scheduler_layout(const state::gameplay::SchedulerSignature& left,
+                      const state::gameplay::SchedulerSignature& right) noexcept {
+    if (left.present != right.present || left.value != right.value || left.wire != right.wire
+        || left.wireBits != right.wireBits || left.viewCount != right.viewCount
+        || left.viewCount > left.views.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < left.viewCount; ++index) {
+        if (left.views[index].key != right.views[index].key
+            || left.views[index].tag != right.views[index].tag) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** Exact number of scheduler bits in an empty post-handoff validation. */
+[[nodiscard]] std::uint16_t
+post_handoff_probe_body_bits(const state::gameplay::SchedulerSignature& scheduler) noexcept {
+    if (!post_handoff_scheduler_shape(scheduler)) {
+        return 0;
+    }
+    return static_cast<std::uint16_t>(scheduler.wireBits + 5 + 6 * (scheduler.viewCount - 1));
+}
+
+/** Writes an empty body for every view in one exact post-handoff scheduler signature. */
+[[nodiscard]] bool write_post_handoff_probe(bits::Writer& writer,
+                                            const PostHandoffProbePlan& plan) noexcept {
+    if (!plan.present || plan.token == 0 || !post_handoff_scheduler_shape(plan.scheduler)
+        || plan.selectedView >= plan.scheduler.viewCount
+        || plan.scheduler.views[plan.selectedView].key != plan.token
+        || !write_scheduler_signature(writer, plan.scheduler)) {
+        return false;
+    }
+    for (std::size_t index = 0; index < plan.scheduler.viewCount; ++index) {
+        const bool written = index == 0 ? write_empty_scheduler_view(writer)
+                                        : write_complete_empty_scheduler_view(writer);
+        if (!written) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /** Writes a captured MSB-first native body whose final byte is left-aligned. */
 [[nodiscard]] bool write_native_update(bits::Writer& writer,
                                        const EntityCreatePlan& plan) noexcept {
@@ -609,24 +696,24 @@ write_scheduler_signature(bits::Writer& writer,
                                    const EntityCreatePlan& plan) noexcept {
     const bool oneView = signature.viewCount == kProvenSchedulerViewCount
                          && signature.wireBits == kProvenSchedulerWireBits;
-    const bool twoView = signature.viewCount == kTwoViewProbeViewCount
-                         && signature.wireBits == kTwoViewProbeWireBits;
-    if ((!oneView && !twoView) || !write_scheduler_signature(writer, signature)) {
+    const bool multiView = post_handoff_scheduler_shape(signature);
+    if ((!oneView && !multiView) || !write_scheduler_signature(writer, signature)) {
         return false;
     }
     for (std::size_t index = 0; index < signature.viewCount; ++index) {
         if (plan.present && index == plan.viewIndex) {
             // The stored signature's final bit supplies view 0's event lane. Every later view
             // must publish that event-absence bit before the common post-event entity body.
-            if ((twoView && index != 0 && !writer.write(0, 1))
+            if ((multiView && index != 0 && !writer.write(0, 1))
                 || !write_entity_create_view(writer, plan)) {
                 return false;
             }
         } else {
             // View 0 likewise needs only its five-bit post-event remainder; subsequent empty
             // views own all six handler bits.
-            const bool written = twoView && index != 0 ? write_complete_empty_scheduler_view(writer)
-                                                       : write_empty_scheduler_view(writer);
+            const bool written = multiView && index != 0
+                                     ? write_complete_empty_scheduler_view(writer)
+                                     : write_empty_scheduler_view(writer);
             if (!written) {
                 return false;
             }
@@ -970,6 +1057,162 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
            && capture.schedulerRemoteSignature == kEmptySignature
            && capture.schedulerRemoteViewKeys == kEmptyKeys
            && capture.schedulerRemoteViewTags == kEmptyTags;
+}
+
+/** Resolves one selected scheduler entry and rejects duplicate key/tag pairs. */
+[[nodiscard]] bool
+selected_scheduler_index(const state::gameplay::SchedulerSignature& scheduler,
+                         const client::hooks::network::entity_slot_probe::ViewCapture& capture,
+                         std::uint8_t& output) noexcept {
+    std::size_t match = scheduler.views.size();
+    for (std::size_t index = 0; index < scheduler.viewCount; ++index) {
+        if (scheduler.views[index].key != capture.schedulerKey
+            || scheduler.views[index].tag != capture.schedulerTag) {
+            continue;
+        }
+        if (match != scheduler.views.size()) {
+            return false;
+        }
+        match = index;
+    }
+    if (match == scheduler.views.size()) {
+        return false;
+    }
+    output = static_cast<std::uint8_t>(match);
+    return true;
+}
+
+/** Builds one empty scheduler validation after the game's native active manager changes. */
+[[nodiscard]] bool prepare_post_handoff_probe(const state::gameplay::PeerLink& peer,
+                                              const SelectedReplicationView& selected,
+                                              PostHandoffProbePlan& output) noexcept {
+    output = {};
+    if (!selected.present || !selected.signature.bound || selected.signature.token == 0
+        || !selected.capturePresent || !selected.worldPresent
+        || selected.world.region == state::activity::membership::kAbsentRegionIndex
+        || !post_handoff_scheduler_shape(peer.schedulerSignature)) {
+        return false;
+    }
+    const std::uint64_t currentGroup = group::advertised_group_session(selected.world.region);
+    if (currentGroup == 0 || group::holding_group_session(selected.signature.token) != currentGroup
+        || !unique_view_token(peer, selected.signature.token)) {
+        return false;
+    }
+    const auto& capture = selected.capture;
+    if (capture.token != selected.signature.token || capture.schedulerKey != capture.token
+        || capture.namespaceId < 0 || capture.manager == nullptr
+        || !scheduler_matches_local_capture(peer.schedulerSignature, capture)
+        || (!scheduler_matches_remote_capture(peer.schedulerSignature, capture)
+            && !scheduler_remote_is_pristine(capture))
+        || !client::hooks::network::sobject_apply_probe::current_region_manager_active(
+            capture.token, capture.namespaceId)) {
+        return false;
+    }
+    std::uint8_t selectedIndex = 0;
+    if (!selected_scheduler_index(peer.schedulerSignature, capture, selectedIndex)) {
+        return false;
+    }
+    output.scheduler = peer.schedulerSignature;
+    output.token = selected.signature.token;
+    output.selectedView = selectedIndex;
+    output.remoteViews = capture.schedulerRemoteViewCount;
+    output.present = true;
+    return true;
+}
+
+/** @return True only while the exact empty layout received both parser and transport proof. */
+[[nodiscard]] bool post_handoff_layout_ready(const state::gameplay::PeerLink& peer,
+                                             const SelectedReplicationView& selected) noexcept {
+    if (!peer.postHandoffProbeTransportAccepted || !peer.postHandoffProbeHandlerComplete
+        || peer.postHandoffProbeToken == 0 || !selected.present || !selected.signature.bound
+        || selected.signature.token != peer.postHandoffProbeToken || !selected.capturePresent
+        || !same_scheduler_layout(peer.postHandoffProbeScheduler, peer.schedulerSignature)
+        || !scheduler_matches_local_capture(peer.postHandoffProbeScheduler, selected.capture)) {
+        return false;
+    }
+    return selected.capture.namespaceId >= 0
+           && client::hooks::network::sobject_apply_probe::current_region_manager_active(
+               selected.capture.token, selected.capture.namespaceId);
+}
+
+/** Builds a current-view atomic create only after the exact empty multi-view probe passed. */
+[[nodiscard]] bool prepare_entity_create_after_post_handoff(const state::gameplay::PeerLink& peer,
+                                                            const SelectedReplicationView& selected,
+                                                            const EntityCreatePlan* retained,
+                                                            EntityCreatePlan& output,
+                                                            EntityCreateGate& gate) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    if (!post_handoff_layout_ready(peer, selected)) {
+        gate = EntityCreateGate::schedulerTrace;
+        return false;
+    }
+    const auto& scheduler = peer.postHandoffProbeScheduler;
+    const auto& capture = selected.capture;
+    if (!capture.candidatePresent || capture.namespaceId < 0) {
+        gate = EntityCreateGate::candidate;
+        return false;
+    }
+    if (capture.occupiedCount < kFirstEntityBaselineOccupied) {
+        gate = EntityCreateGate::baseline;
+        return false;
+    }
+    if (capture.slot >= 0x2000 || capture.availableCount == 0) {
+        gate = EntityCreateGate::slot;
+        return false;
+    }
+    if (capture.handleGeneration != 0 || capture.reservedGeneration != 0
+        || capture.objectGeneration != 0) {
+        gate = EntityCreateGate::generation;
+        return false;
+    }
+    if (!client::hooks::network::sobject_rsat_probe::first_entity_ready()) {
+        gate = EntityCreateGate::rsat;
+        return false;
+    }
+    if (!resolve_entity_spatial_cell(selected, output)) {
+        gate = EntityCreateGate::spatialCell;
+        return false;
+    }
+    std::uint8_t selectedIndex = 0;
+    if (!selected_scheduler_index(scheduler, capture, selectedIndex)
+        || selectedIndex != peer.postHandoffProbeView) {
+        gate = EntityCreateGate::schedulerEntry;
+        return false;
+    }
+
+    output.token = capture.token;
+    output.schedulerKey = capture.schedulerKey;
+    output.schedulerTag = capture.schedulerTag;
+    output.rsat = state::gameplay::kFirstEntityRsat;
+    output.slot = capture.slot;
+    output.handleGeneration = capture.handleGeneration;
+    output.objectGeneration = kFirstObjectGeneration;
+    output.viewIndex = selectedIndex;
+    output.namespaceId = capture.namespaceId;
+    if (retained == nullptr) {
+        client::hooks::network::sobject_update_probe::NearbyUpdateCapture update{};
+        if (!client::hooks::network::sobject_update_probe::take_nearby_player_update(
+                state::gameplay::kFirstEntityRsat, update)
+            || update.bitCount != kFirstEntityUpdateBits) {
+            gate = EntityCreateGate::rsat;
+            return false;
+        }
+        output.updateWire = update.wire;
+        output.updateBits = update.bitCount;
+    } else {
+        output.updateWire = retained->updateWire;
+        output.updateBits = retained->updateBits;
+    }
+    output.combinedCreate = true;
+    output.present = true;
+    if (output.updateBits != kFirstEntityUpdateBits
+        || (retained != nullptr && !same_entity_create_plan(output, *retained))) {
+        gate = EntityCreateGate::rsat;
+        return false;
+    }
+    gate = EntityCreateGate::ready;
+    return true;
 }
 
 /**
@@ -2189,6 +2432,15 @@ void consume_established(const state::gameplay::Endpoint& from,
     std::uint8_t twoViewProbePacketsAfter = 0;
     bool twoViewProbeAccepted = false;
     bool twoViewProbeExpired = false;
+    std::uint64_t postHandoffProbeToken = 0;
+    std::uint64_t postHandoffProbeElapsed = 0;
+    std::uint16_t postHandoffProbePacket = 0;
+    std::uint8_t postHandoffProbeView = 0;
+    std::uint8_t postHandoffProbeViews = 0;
+    std::uint8_t postHandoffProbePacketsAfter = 0;
+    bool postHandoffProbeHandlerComplete = false;
+    bool postHandoffProbeAccepted = false;
+    bool postHandoffProbeExpired = false;
     // The reliable window never resynchronises, so a stalled queue is only visible as a refused
     // record against the sequence it is still waiting for.
     std::size_t largeDropped = 0;
@@ -2226,6 +2478,34 @@ void consume_established(const state::gameplay::Endpoint& from,
                 peer->twoViewProbeAwaitingAcknowledgement = false;
                 peer->twoViewProbeAccepted = true;
                 twoViewProbeAccepted = true;
+            }
+        }
+        if (peer->postHandoffProbeAwaitingAcknowledgement) {
+            const std::uint64_t elapsed = now - peer->postHandoffProbeSentAt;
+            if (elapsed >= kTwoViewProbeTimeout) {
+                postHandoffProbeToken = peer->postHandoffProbeToken;
+                postHandoffProbePacket = peer->postHandoffProbePacket;
+                postHandoffProbeView = peer->postHandoffProbeView;
+                postHandoffProbeViews = peer->postHandoffProbeScheduler.viewCount;
+                postHandoffProbePacketsAfter = peer->postHandoffProbePacketsAfter;
+                postHandoffProbeElapsed = elapsed;
+                peer->postHandoffProbeAwaitingAcknowledgement = false;
+                postHandoffProbeExpired = true;
+            } else if (wire::acknowledgement_covers(packet.ack, peer->postHandoffProbePacket)) {
+                peer->postHandoffProbeHandlerComplete =
+                    peer->postHandoffProbeHandlerComplete
+                    || client::hooks::network::scheduler_handler_probe::completed(
+                        peer->postHandoffProbeScheduler.viewCount);
+                peer->postHandoffProbeTransportAccepted = true;
+                postHandoffProbeToken = peer->postHandoffProbeToken;
+                postHandoffProbePacket = peer->postHandoffProbePacket;
+                postHandoffProbeView = peer->postHandoffProbeView;
+                postHandoffProbeViews = peer->postHandoffProbeScheduler.viewCount;
+                postHandoffProbePacketsAfter = peer->postHandoffProbePacketsAfter;
+                postHandoffProbeElapsed = elapsed;
+                postHandoffProbeHandlerComplete = peer->postHandoffProbeHandlerComplete;
+                peer->postHandoffProbeAwaitingAcknowledgement = false;
+                postHandoffProbeAccepted = true;
             }
         }
         peer->acknowledgementOwed = true;
@@ -2284,6 +2564,32 @@ void consume_established(const state::gameplay::Endpoint& from,
                static_cast<unsigned>(twoViewProbePacket),
                static_cast<unsigned>(twoViewProbePacketsAfter),
                static_cast<unsigned long long>(twoViewProbeElapsed));
+    }
+    if (postHandoffProbeAccepted) {
+        report(postHandoffProbeHandlerComplete ? core::log::Level::info : core::log::Level::warn,
+               "ev=gameplay stage=scheduler-post-handoff-probe result=transport-accepted "
+               "proof=ack handler_complete=%u token=0x%016llX view=%u views=%u packet=%u "
+               "ack_base=%u ack_entries=%u packets_after=%u elapsed_ms=%llu",
+               postHandoffProbeHandlerComplete ? 1U : 0U,
+               static_cast<unsigned long long>(postHandoffProbeToken),
+               static_cast<unsigned>(postHandoffProbeView),
+               static_cast<unsigned>(postHandoffProbeViews),
+               static_cast<unsigned>(postHandoffProbePacket),
+               static_cast<unsigned>(packet.ack.receiveHead),
+               static_cast<unsigned>(packet.ack.reportedCount),
+               static_cast<unsigned>(postHandoffProbePacketsAfter),
+               static_cast<unsigned long long>(postHandoffProbeElapsed));
+    } else if (postHandoffProbeExpired) {
+        report(core::log::Level::warn,
+               "ev=gameplay stage=scheduler-post-handoff-probe result=unacknowledged "
+               "reason=timeout token=0x%016llX view=%u views=%u packet=%u packets_after=%u "
+               "elapsed_ms=%llu",
+               static_cast<unsigned long long>(postHandoffProbeToken),
+               static_cast<unsigned>(postHandoffProbeView),
+               static_cast<unsigned>(postHandoffProbeViews),
+               static_cast<unsigned>(postHandoffProbePacket),
+               static_cast<unsigned>(postHandoffProbePacketsAfter),
+               static_cast<unsigned long long>(postHandoffProbeElapsed));
     }
     if (externalReadable) {
         const bool viewAccepted = sessionId != 0 && group::view_accepted(sessionId);
@@ -2397,11 +2703,13 @@ void consume_established(const state::gameplay::Endpoint& from,
  * @param peer Peer state copied under the lock before the send.
  * @param entityCreate Optional guarded entity body in a proven one- or two-view layout.
  * @param twoViewProbe Optional one-shot two-view validation carrying entityCreate.
+ * @param postHandoffProbe Optional empty validation of the stable current-manager layout.
  * @return True when the packet left the endpoint.
  */
 [[nodiscard]] bool send_acknowledgement(const state::gameplay::PeerLink& peer,
                                         const EntityCreatePlan& entityCreate,
-                                        const TwoViewProbePlan& twoViewProbe) noexcept {
+                                        const TwoViewProbePlan& twoViewProbe,
+                                        const PostHandoffProbePlan& postHandoffProbe) noexcept {
     wire::AckState ack{};
     ack.outboundHead = peer.outboundHead;
     ack.outboundHeadPresent = peer.outboundHeadPresent;
@@ -2418,9 +2726,9 @@ void consume_established(const state::gameplay::Endpoint& from,
     bits::Writer writer(buffer);
     const auto guard = static_cast<std::uint8_t>(peer.localConnectionSequence % kSequenceGuardBase);
     // One-view packets remain accepted after signature convergence and after a successful create.
-    // In both captured two-view transitions the client applied the remote signature, then marked
-    // that packet and every repeated scheduler packet corrupt until its four-second timeout. Keep
-    // ordinary transport acknowledgements healthy while the multi-view handler tail is unmapped.
+    // Earlier malformed multi-view tails caused repeated corrupt packets until the four-second
+    // timeout. Keep ordinary acknowledgements scheduler-free; multi-view data appears only in one
+    // bounded validation or one entity packet after that exact validation succeeds.
     const SelectedReplicationView selected = select_replication_view(peer);
     const bool viewPresent = selected.present && selected.signature.token != 0;
     if (twoViewProbe.present) {
@@ -2445,14 +2753,36 @@ void consume_established(const state::gameplay::Endpoint& from,
             return false;
         }
     }
+    if (postHandoffProbe.present) {
+        PostHandoffProbePlan verified{};
+        if (entityCreate.present || twoViewProbe.present
+            || !prepare_post_handoff_probe(peer, selected, verified)
+            || verified.token != postHandoffProbe.token
+            || verified.selectedView != postHandoffProbe.selectedView
+            || !same_scheduler_layout(verified.scheduler, postHandoffProbe.scheduler)) {
+            return false;
+        }
+    }
     const state::gameplay::SchedulerSignature& scheduler = peer.schedulerSignature;
     const bool oneViewScheduler = scheduler.present
                                   && scheduler.viewCount == kProvenSchedulerViewCount
                                   && scheduler.wireBits == kProvenSchedulerWireBits;
     const bool twoViewEntityScheduler =
-        !twoViewProbe.present && entityCreate.present && scheduler.present
-        && scheduler.viewCount == kTwoViewProbeViewCount
+        !twoViewProbe.present && !postHandoffProbe.present && entityCreate.present
+        && scheduler.present && scheduler.viewCount == kTwoViewProbeViewCount
         && scheduler.wireBits == kTwoViewProbeWireBits && two_view_layout_ready(peer, selected);
+    const bool postHandoffEntityScheduler =
+        !twoViewProbe.present && !postHandoffProbe.present && entityCreate.present
+        && post_handoff_layout_ready(peer, selected)
+        && same_scheduler_layout(scheduler, peer.postHandoffProbeScheduler);
+    if (postHandoffEntityScheduler) {
+        EntityCreatePlan verifiedEntity{};
+        EntityCreateGate ignoredGate = EntityCreateGate::view;
+        if (!prepare_entity_create_after_post_handoff(
+                peer, selected, &entityCreate, verifiedEntity, ignoredGate)) {
+            return false;
+        }
+    }
     if (twoViewEntityScheduler) {
         if (!selected.capturePresent || entityCreate.token != selected.signature.token
             || entityCreate.viewIndex >= scheduler.viewCount
@@ -2461,8 +2791,8 @@ void consume_established(const state::gameplay::Endpoint& from,
             return false;
         }
     }
-    if (entityCreate.present && !twoViewProbe.present && !oneViewScheduler
-        && !twoViewEntityScheduler) {
+    if (entityCreate.present && !twoViewProbe.present && !postHandoffProbe.present
+        && !oneViewScheduler && !twoViewEntityScheduler && !postHandoffEntityScheduler) {
         return false;
     }
     // Once an entity create has been attempted, its native decoder may retain a pending body
@@ -2473,22 +2803,29 @@ void consume_established(const state::gameplay::Endpoint& from,
     // one-view layout through entityCreate.present.
     const bool schedulerWanted =
         entityCreate.present || (peer.entityCreateAttempts == 0 && !peer.twoViewProbeAttempted);
-    const bool schedulerBodyPresent = !twoViewProbe.present && schedulerWanted && viewPresent
-                                      && (oneViewScheduler || twoViewEntityScheduler);
-    const bool schedulerPresent = schedulerBodyPresent || twoViewProbe.present;
+    const bool schedulerBodyPresent =
+        !twoViewProbe.present && !postHandoffProbe.present && schedulerWanted && viewPresent
+        && (oneViewScheduler || twoViewEntityScheduler || postHandoffEntityScheduler);
+    const bool schedulerPresent =
+        schedulerBodyPresent || twoViewProbe.present || postHandoffProbe.present;
     std::size_t size = 0;
     // Only the 32-byte queue carries this host's messages; the 6-byte queue stays empty.
     if (!wire::write_head_and_ack(writer, guard, ack) || !wire::write_queue(writer, peer.outbound)
         || !wire::write_empty_queue(writer)
         || !wire::write_external_status(writer, viewPresent, schedulerPresent)
         || (twoViewProbe.present && !write_two_view_probe(writer, twoViewProbe, entityCreate))
+        || (postHandoffProbe.present && !write_post_handoff_probe(writer, postHandoffProbe))
         || (schedulerBodyPresent && !write_scheduler(writer, scheduler, entityCreate))
         || !writer.finish(size)) {
         return false;
     }
-    const bool traceTwoView = twoViewProbe.present || twoViewEntityScheduler;
-    if (traceTwoView) {
-        client::hooks::network::scheduler_handler_probe::arm(kTwoViewProbeViewCount);
+    const std::uint8_t traceViews =
+        postHandoffProbe.present ? postHandoffProbe.scheduler.viewCount
+        : (twoViewProbe.present || twoViewEntityScheduler || postHandoffEntityScheduler)
+            ? scheduler.viewCount
+            : 0;
+    if (traceViews != 0) {
+        client::hooks::network::scheduler_handler_probe::arm(traceViews);
     }
     // Publish the plan before loopback transport can synchronously enter the client decoder.
     if (entityCreate.present && !entityCreate.updateOnly) {
@@ -2504,7 +2841,7 @@ void consume_established(const state::gameplay::Endpoint& from,
                                                                 false);
     }
     const bool sent = send_transport(peer.endpoint, {buffer.data(), size});
-    if (traceTwoView && !sent) {
+    if (traceViews != 0 && !sent) {
         client::hooks::network::scheduler_handler_probe::cancel();
     }
     return sent;
@@ -2630,6 +2967,15 @@ static void reset_entity_create(state::gameplay::PeerLink& peer) noexcept {
     peer.entityFollowupSent = false;
     peer.entityCreateAcceptedSince = 0;
     peer.entityCreateGate = 0xFF;
+    peer.postHandoffProbeScheduler = {};
+    peer.postHandoffProbeToken = 0;
+    peer.postHandoffProbeSentAt = 0;
+    peer.postHandoffProbePacket = 0;
+    peer.postHandoffProbeView = 0;
+    peer.postHandoffProbePacketsAfter = 0;
+    peer.postHandoffProbeAwaitingAcknowledgement = false;
+    peer.postHandoffProbeTransportAccepted = false;
+    peer.postHandoffProbeHandlerComplete = false;
 }
 
 /** Publishes one session's provisional or bound view signature. */
@@ -2716,11 +3062,15 @@ void service(std::uint64_t now) noexcept {
     std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> owed{};
     std::array<EntityCreatePlan, state::gameplay::kAssociationCapacity> entityCreates{};
     std::array<TwoViewProbePlan, state::gameplay::kAssociationCapacity> twoViewProbes{};
+    std::array<PostHandoffProbePlan, state::gameplay::kAssociationCapacity> postHandoffProbes{};
     std::array<EntityCreateGateReport, state::gameplay::kAssociationCapacity> gateReports{};
     std::array<TwoViewProbeReport, state::gameplay::kAssociationCapacity> twoViewProbeReports{};
+    std::array<PostHandoffProbeReport, state::gameplay::kAssociationCapacity>
+        postHandoffProbeReports{};
     std::size_t count = 0;
     std::size_t gateReportCount = 0;
     std::size_t twoViewProbeReportCount = 0;
+    std::size_t postHandoffProbeReportCount = 0;
     AcquireSRWLockExclusive(&g_lock);
     for (state::gameplay::PeerLink& peer : g_peers) {
         if (peer.stage == state::gameplay::PeerStage::absent) {
@@ -2760,6 +3110,26 @@ void service(std::uint64_t now) noexcept {
                 }
             }
         }
+        if (peer.postHandoffProbeAwaitingAcknowledgement) {
+            const std::uint64_t elapsed = now - peer.postHandoffProbeSentAt;
+            const bool timedOut = elapsed >= kTwoViewProbeTimeout;
+            const bool packetBoundReached =
+                peer.postHandoffProbePacketsAfter >= kTwoViewProbeMaximumPacketsAfter;
+            if ((timedOut || packetBoundReached)
+                && postHandoffProbeReportCount < postHandoffProbeReports.size()) {
+                PostHandoffProbeReport& probe =
+                    postHandoffProbeReports[postHandoffProbeReportCount++];
+                probe.token = peer.postHandoffProbeToken;
+                probe.elapsed = elapsed;
+                probe.packet = peer.postHandoffProbePacket;
+                probe.selectedView = peer.postHandoffProbeView;
+                probe.viewCount = peer.postHandoffProbeScheduler.viewCount;
+                probe.packetsAfter = peer.postHandoffProbePacketsAfter;
+                probe.handlerComplete = peer.postHandoffProbeHandlerComplete;
+                probe.reason = timedOut ? "timeout" : "ack-window";
+                peer.postHandoffProbeAwaitingAcknowledgement = false;
+            }
+        }
         // A settled native slot may become ready after the last packet was acknowledged. Poll the
         // first guarded create directly so an idle zone does not need movement traffic to wake it.
         EntityCreatePlan candidate{};
@@ -2774,12 +3144,38 @@ void service(std::uint64_t now) noexcept {
         if (firstAttempt) {
             (void)synchronise_scheduler_layout(peer, selected);
         }
+        // A stable token may publish more than one exact scheduler encoding while the old root
+        // view retires. Once the preceding probe is no longer in flight, discard its acceptance
+        // when either the current token or exact signature changed and validate the new layout.
+        if (!peer.postHandoffProbeAwaitingAcknowledgement && peer.postHandoffProbeScheduler.present
+            && (peer.postHandoffProbeToken != (selected.present ? selected.signature.token : 0)
+                || !same_scheduler_layout(peer.postHandoffProbeScheduler,
+                                          peer.schedulerSignature))) {
+            peer.postHandoffProbeScheduler = {};
+            peer.postHandoffProbeToken = 0;
+            peer.postHandoffProbeSentAt = 0;
+            peer.postHandoffProbePacket = 0;
+            peer.postHandoffProbeView = 0;
+            peer.postHandoffProbePacketsAfter = 0;
+            peer.postHandoffProbeTransportAccepted = false;
+            peer.postHandoffProbeHandlerComplete = false;
+        }
         const bool validatedTwoView = two_view_layout_ready(peer, selected);
+        const bool validatedPostHandoff = post_handoff_layout_ready(peer, selected);
         TwoViewProbePlan twoViewProbe{};
         const bool twoViewProbeReady = !peer.twoViewProbeAttempted && firstAttempt
                                        && !peer.entityCreateAccepted
                                        && peer.stage == state::gameplay::PeerStage::connected
                                        && prepare_two_view_probe(peer, selected, twoViewProbe);
+        PostHandoffProbePlan postHandoffProbe{};
+        const bool postHandoffProbeReady =
+            !twoViewProbeReady && !validatedTwoView && !validatedPostHandoff && firstAttempt
+            && !peer.entityCreateAccepted
+            && peer.postHandoffProbeAttempts < kPostHandoffProbeAttemptLimit
+            && !peer.postHandoffProbeAwaitingAcknowledgement
+            && !peer.postHandoffProbeScheduler.present
+            && peer.stage == state::gameplay::PeerStage::connected
+            && prepare_post_handoff_probe(peer, selected, postHandoffProbe);
         bool prepared = false;
         EntityCreateGate gate = firstAttempt ? EntityCreateGate::view : EntityCreateGate::attempted;
         if (firstAttempt) {
@@ -2797,11 +3193,18 @@ void service(std::uint64_t now) noexcept {
                     candidatePrepared = prepare_entity_create_with_two_view_probe(
                         peer, selected, twoViewProbe, nullptr, candidate, gate);
                 }
+            } else if (postHandoffProbeReady) {
+                gate = controlQueueSettled ? EntityCreateGate::schedulerProbe
+                                           : EntityCreateGate::controlQueue;
+            } else if (validatedPostHandoff && !controlQueueSettled) {
+                gate = EntityCreateGate::controlQueue;
             } else {
                 candidatePrepared =
                     validatedTwoView
                         ? prepare_entity_create_after_two_view(peer, selected, candidate, gate)
-                        : prepare_entity_create(peer, selected, candidate, gate);
+                    : validatedPostHandoff ? prepare_entity_create_after_post_handoff(
+                                                 peer, selected, nullptr, candidate, gate)
+                                           : prepare_entity_create(peer, selected, candidate, gate);
             }
             if (!candidatePrepared) {
                 peer.entityCreateReadyToken = 0;
@@ -2822,7 +3225,7 @@ void service(std::uint64_t now) noexcept {
                 }
                 if (!controlQueueSettled) {
                     gate = EntityCreateGate::controlQueue;
-                } else if (twoViewProbeReady || validatedTwoView) {
+                } else if (twoViewProbeReady || validatedTwoView || validatedPostHandoff) {
                     // The transition window is short. Send its first proven signature with the
                     // fully guarded atomic create instead of adding the one-view settle age.
                     prepared = true;
@@ -2835,6 +3238,7 @@ void service(std::uint64_t now) noexcept {
             }
         }
         const bool twoViewProbeDue = twoViewProbeReady && prepared;
+        const bool postHandoffProbeDue = postHandoffProbeReady && controlQueueSettled;
         const auto gateValue = static_cast<std::uint8_t>(gate);
         if (peer.entityCreateGate != gateValue && gateReportCount < gateReports.size()) {
             peer.entityCreateGate = gateValue;
@@ -2849,7 +3253,8 @@ void service(std::uint64_t now) noexcept {
             && peer.entityCreateAttempts < kEntityCreateAttemptLimit
             && peer.entityCreateScheduler.viewCount == kProvenSchedulerViewCount
             && now - peer.lastEntityCreate >= kEntityCreateRetryInterval;
-        const bool entityFirstDue = firstAttempt && prepared && !twoViewProbeDue;
+        const bool entityFirstDue =
+            firstAttempt && prepared && !twoViewProbeDue && !postHandoffProbeDue;
         const bool twoViewUpdateReady =
             peer.entityCreateAttempts != 0
             && peer.entityCreateScheduler.viewCount == kTwoViewProbeViewCount
@@ -2864,7 +3269,7 @@ void service(std::uint64_t now) noexcept {
             && (twoViewUpdateReady ? prepare_entity_update_after_two_view(peer, selected, candidate)
                                    : prepare_entity_combined_create(peer, selected, candidate));
         const bool due = peer.acknowledgementOwed || resendDue || entityFirstDue || entityRetryDue
-                         || entityFollowupDue || twoViewProbeDue;
+                         || entityFollowupDue || twoViewProbeDue || postHandoffProbeDue;
         if (!due) {
             continue;
         }
@@ -2885,6 +3290,9 @@ void service(std::uint64_t now) noexcept {
         if (peer.twoViewProbeAwaitingAcknowledgement && !twoViewProbeDue) {
             ++peer.twoViewProbePacketsAfter;
         }
+        if (peer.postHandoffProbeAwaitingAcknowledgement && !postHandoffProbeDue) {
+            ++peer.postHandoffProbePacketsAfter;
+        }
         if (entityRetryDue) {
             prepared = prepare_entity_retry(peer, selected, candidate);
         }
@@ -2897,10 +3305,10 @@ void service(std::uint64_t now) noexcept {
             entityCreates[count] = candidate;
         } else if (twoViewProbeDue || entityFirstDue || sameAttempt) {
             if (firstAttempt) {
-                peer.entityCreateScheduler =
-                    twoViewProbeDue
-                        ? twoViewProbe.scheduler
-                        : (validatedTwoView ? peer.twoViewProbeScheduler : peer.schedulerSignature);
+                peer.entityCreateScheduler = twoViewProbeDue        ? twoViewProbe.scheduler
+                                             : validatedTwoView     ? peer.twoViewProbeScheduler
+                                             : validatedPostHandoff ? peer.postHandoffProbeScheduler
+                                                                    : peer.schedulerSignature;
                 peer.entityCreateToken = candidate.token;
                 peer.entityCreateSlot = candidate.slot;
                 peer.entityCreateHandleGeneration = candidate.handleGeneration;
@@ -2926,6 +3334,19 @@ void service(std::uint64_t now) noexcept {
             peer.twoViewProbeAccepted = false;
             peer.twoViewProbeMutationReported = twoViewProbe.remoteAlreadyMatches;
             twoViewProbes[count] = twoViewProbe;
+        }
+        if (postHandoffProbeDue) {
+            peer.postHandoffProbeScheduler = postHandoffProbe.scheduler;
+            peer.postHandoffProbeToken = postHandoffProbe.token;
+            peer.postHandoffProbeSentAt = now;
+            peer.postHandoffProbePacket = peer.outboundHead;
+            peer.postHandoffProbeView = postHandoffProbe.selectedView;
+            peer.postHandoffProbePacketsAfter = 0;
+            ++peer.postHandoffProbeAttempts;
+            peer.postHandoffProbeAwaitingAcknowledgement = true;
+            peer.postHandoffProbeTransportAccepted = false;
+            peer.postHandoffProbeHandlerComplete = false;
+            postHandoffProbes[count] = postHandoffProbe;
         }
         owed[count] = peer;
         if (entityCreates[count].present) {
@@ -2961,6 +3382,21 @@ void service(std::uint64_t now) noexcept {
                static_cast<unsigned long long>(probe.entityToken),
                static_cast<unsigned>(kTwoViewProbeEntityView),
                static_cast<unsigned>(probe.packet),
+               static_cast<unsigned>(probe.packetsAfter),
+               static_cast<unsigned long long>(probe.elapsed));
+    }
+    for (std::size_t index = 0; index < postHandoffProbeReportCount; ++index) {
+        const PostHandoffProbeReport& probe = postHandoffProbeReports[index];
+        report(core::log::Level::warn,
+               "ev=gameplay stage=scheduler-post-handoff-probe result=unacknowledged reason=%s "
+               "token=0x%016llX view=%u views=%u packet=%u handler_complete=%u "
+               "packets_after=%u elapsed_ms=%llu",
+               probe.reason,
+               static_cast<unsigned long long>(probe.token),
+               static_cast<unsigned>(probe.selectedView),
+               static_cast<unsigned>(probe.viewCount),
+               static_cast<unsigned>(probe.packet),
+               probe.handlerComplete ? 1U : 0U,
                static_cast<unsigned>(probe.packetsAfter),
                static_cast<unsigned long long>(probe.elapsed));
     }
@@ -3005,8 +3441,8 @@ void service(std::uint64_t now) noexcept {
                static_cast<unsigned>(gate.attempts));
     }
     for (std::size_t index = 0; index < count; ++index) {
-        const bool sent =
-            send_acknowledgement(owed[index], entityCreates[index], twoViewProbes[index]);
+        const bool sent = send_acknowledgement(
+            owed[index], entityCreates[index], twoViewProbes[index], postHandoffProbes[index]);
         if (twoViewProbes[index].present) {
             if (sent) {
                 report(core::log::Level::info,
@@ -3050,6 +3486,51 @@ void service(std::uint64_t now) noexcept {
                            static_cast<unsigned>(owed[index].outboundHead));
                 }
             }
+        }
+        if (postHandoffProbes[index].present) {
+            const bool handlerComplete =
+                sent
+                && client::hooks::network::scheduler_handler_probe::completed(
+                    postHandoffProbes[index].scheduler.viewCount);
+            bool stateMatched = false;
+            AcquireSRWLockExclusive(&g_lock);
+            state::gameplay::PeerLink* const peer = find_locked(owed[index].endpoint);
+            if (peer != nullptr && peer->postHandoffProbePacket == owed[index].outboundHead
+                && peer->postHandoffProbeToken == postHandoffProbes[index].token
+                && same_scheduler_layout(peer->postHandoffProbeScheduler,
+                                         postHandoffProbes[index].scheduler)) {
+                peer->postHandoffProbeHandlerComplete = handlerComplete;
+                if (!sent) {
+                    peer->postHandoffProbeAwaitingAcknowledgement = false;
+                }
+                stateMatched = true;
+            }
+            ReleaseSRWLockExclusive(&g_lock);
+            const std::uint16_t bodyBits =
+                post_handoff_probe_body_bits(postHandoffProbes[index].scheduler);
+            report(sent && handlerComplete ? core::log::Level::info : core::log::Level::warn,
+                   "ev=gameplay stage=scheduler-post-handoff-probe result=%s "
+                   "token=0x%016llX view=%u packet=%u signature_bits=%u body_bits=%u "
+                   "views=%u remote=%u handler_complete=%u state=%u "
+                   "e0=0x%016llX/%u e1=0x%016llX/%u e2=0x%016llX/%u",
+                   !sent             ? "send-fail"
+                   : handlerComplete ? "sent"
+                                     : "decoder-fail",
+                   static_cast<unsigned long long>(postHandoffProbes[index].token),
+                   static_cast<unsigned>(postHandoffProbes[index].selectedView),
+                   static_cast<unsigned>(owed[index].outboundHead),
+                   static_cast<unsigned>(postHandoffProbes[index].scheduler.wireBits),
+                   static_cast<unsigned>(bodyBits),
+                   static_cast<unsigned>(postHandoffProbes[index].scheduler.viewCount),
+                   static_cast<unsigned>(postHandoffProbes[index].remoteViews),
+                   handlerComplete ? 1U : 0U,
+                   stateMatched ? 1U : 0U,
+                   static_cast<unsigned long long>(postHandoffProbes[index].scheduler.views[0].key),
+                   static_cast<unsigned>(postHandoffProbes[index].scheduler.views[0].tag),
+                   static_cast<unsigned long long>(postHandoffProbes[index].scheduler.views[1].key),
+                   static_cast<unsigned>(postHandoffProbes[index].scheduler.views[1].tag),
+                   static_cast<unsigned long long>(postHandoffProbes[index].scheduler.views[2].key),
+                   static_cast<unsigned>(postHandoffProbes[index].scheduler.views[2].tag));
         }
         if (entityCreates[index].present) {
             if (!entityCreates[index].updateOnly) {

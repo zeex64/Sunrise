@@ -2662,11 +2662,12 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Start a fresh EDZ session through the normal broad-spawn route. Require membership Region and
-   the native Slice set to agree before any promotion or entity send.
-2. If the current region owns a different namespace than native PUBLIC CURRENT, require
-   `active-region-manager result=promoted`, followed by an Entity Debug Manager row whose active
-   namespace matches the current token's namespace.
+1. Start a fresh EDZ session and remain in the loaded region after native PUBLIC CURRENT changes.
+   Require `scheduler-post-handoff-probe result=sent handler_complete=1`, all 10 or 15 handler
+   lanes to complete, and `result=transport-accepted proof=ack handler_complete=1`.
+2. Require the following atomic create to use that same current host token, namespace, region,
+   bubble, cell, and exact scheduler layout. A layout change must return to empty validation rather
+   than sending through stale scheduler state.
 3. Require the atomic create to use that same current host token, namespace, region, bubble, and
    cell, then confirm type-2 result 0, native registration, kind-0 success, and a completed bind.
    The overlay must say `owner matches` rather than `OWNER MISMATCH`.
@@ -2763,6 +2764,9 @@ Citizen-acceptance passive diagnostic Release candidate SHA-256:
 Visit-aware transaction-retirement Release candidate SHA-256:
 `b2202d68ebdb850298fb4f734bf7edfda19aa60a6bcfcaa14dbd81a55679cc04`.
 
+Post-handoff scheduler-validation Release candidate SHA-256:
+`dabac3c2de0de14f7174c3beb32789ef822342f79f29316ce8c5f90f3b3332e8`.
+
 The `54c55d9b...` run separated replication ownership from native world residency. Namespace 2,
 view 1, region 24, bubble 3, and cell 11 all matched; the record decoded, promoted, and was serviced
 by manager 2. Nevertheless `FUN_14170B660` returned every frame without adding a batch or calling
@@ -2796,6 +2800,24 @@ group using only historical view-accepted and activity-host-published state. Lat
 now treats settled-group history as visit-specific through `activitySettledRegion` and requires the
 same exact native-current activity-host predicate as the keepalive before emitting a
 descriptor-free revision.
+
+The `b2202d68...` traversal run proves visit-aware descriptor retention fixed that immediate
+handoff failure. Region 24 and region 408 both issued citizen joins on revisits and both eventually
+became native `PUBLIC CURRENT`; transport stayed at zero loss and corruption. Entity output remained
+empty because native-current selection trailed the original two-view/275-bit transition frame. At
+the usable post-handoff instants the client exposed 3-view/275-bit, 2-view/203-bit, or
+3-view/203-bit logical layouts. Those shapes were intentionally outside the old one-view/203 and
+two-view/275 create gates.
+
+The new path validates those post-handoff layouts without risking an entity record first. It
+replays the exact captured signature, then emits index-sensitive empty handler bodies: view 0 uses
+the five-bit post-event remainder `00010` because the stored signature supplies its event bit;
+later views use the complete six-bit body `000010`. Total validation width is
+`wireBits + 5 + 6 * (viewCount - 1)`. The passive handler epoch must complete five lanes for every
+view, and the exact packet must receive direct ACK coverage. Parser proof and transport proof are
+stored separately. The next atomic create is permitted only while token, current manager, encoded
+signature, logical key/tag order, selected view, and client capture remain identical. The same
+failed layout is never retried; layout changes consume a bounded new validation attempt.
 
 After manual deployment, inspect:
 
@@ -2836,6 +2858,7 @@ scheduler-body
 scheduler-signature
 scheduler-native-signature
 scheduler-two-view-probe
+scheduler-post-handoff-probe
 scheduler-handler-trace
 activity-host-decode
 citizen-acceptance

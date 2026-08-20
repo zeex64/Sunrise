@@ -246,6 +246,19 @@ struct PeerLink {
     bool twoViewProbeAccepted{};
     /** Suppresses repeat or pre-existing remote-layout mutation diagnostics. */
     bool twoViewProbeMutationReported{};
+    /** Exact stable multi-view layout tested after native PUBLIC CURRENT has changed. */
+    SchedulerSignature postHandoffProbeScheduler{};
+    /** Current-world token and view index authorized by that exact layout. */
+    std::uint64_t postHandoffProbeToken{};
+    std::uint64_t postHandoffProbeSentAt{};
+    std::uint16_t postHandoffProbePacket{};
+    std::uint8_t postHandoffProbeView{};
+    std::uint8_t postHandoffProbePacketsAfter{};
+    /** Bounded across layout changes for one peer-link incarnation. */
+    std::uint8_t postHandoffProbeAttempts{};
+    bool postHandoffProbeAwaitingAcknowledgement{};
+    bool postHandoffProbeTransportAccepted{};
+    bool postHandoffProbeHandlerComplete{};
     /** Exact one-view scheduler snapshot retained for retries of the selected create. */
     SchedulerSignature entityCreateScheduler{};
     /** Bound view token and pristine slot selected by the first guarded entity-create attempt. */

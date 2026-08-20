@@ -622,6 +622,17 @@ Once the director evaluates an encounter and creates native squad/member objects
   `b2202d68ebdb850298fb4f734bf7edfda19aa60a6bcfcaa14dbd81a55679cc04`. A historical settled-group
   entry now counts only when the scalar settled region matches this visit, and transaction refreshes
   retain the citizen descriptor until the exact activity-host token is native `PUBLIC CURRENT`.
+- The `b2202d68...` traversal run validates that fix: revisits issued fresh citizen joins, region 24
+  became native current at `t=83085`, region 408 became native current at `t=110315`, and the run
+  ended with zero packet loss/corruption. No entity packet left. Native-current selection occurred
+  after the proven two-view/275-bit transition window; the usable scheduler had become 3/275,
+  2/203, or 3/203, so the old writer correctly failed closed as `scheduler-shape`.
+- The post-handoff scheduler candidate has SHA-256
+  `dabac3c2de0de14f7174c3beb32789ef822342f79f29316ce8c5f90f3b3332e8`. It sends one empty packet
+  for an exact current-manager two- or three-view layout, traces all five native handler lanes per
+  view, and requires a direct ACK. Only the identical still-current layout may then carry one
+  atomic create. A failed decoder, changed token/signature, or missing ACK cannot emit an entity or
+  repeat the same malformed layout.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
