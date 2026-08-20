@@ -66,6 +66,7 @@ struct Targets {
     std::byte* sobjectType2Job{};
     std::byte* activeManagerRefresh{};
     std::byte* citizenSessionReady{};
+    std::byte* citizenJoinStatus{};
     std::byte* contentIdToken{};
 };
 

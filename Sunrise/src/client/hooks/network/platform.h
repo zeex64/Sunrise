@@ -62,6 +62,7 @@ enum class HookSlot : std::size_t {
     sobjectType2Job,
     activeManagerRefresh,
     citizenSessionReady,
+    citizenJoinStatus,
     count,
 };
 

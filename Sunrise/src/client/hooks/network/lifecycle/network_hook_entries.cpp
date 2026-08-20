@@ -76,6 +76,7 @@ namespace {
         sobject_apply_probe::type2_job_entry_point(),
         sobject_apply_probe::active_manager_refresh_entry_point(),
         sobject_apply_probe::citizen_session_ready_entry_point(),
+        sobject_apply_probe::citizen_join_status_entry_point(),
     };
 }
 
@@ -139,6 +140,7 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.sobjectType2Job, replacements[42]},
         hooking::detour::Spec{resolved.activeManagerRefresh, replacements[43]},
         hooking::detour::Spec{resolved.citizenSessionReady, replacements[44]},
+        hooking::detour::Spec{resolved.citizenJoinStatus, replacements[45]},
     };
 }
 

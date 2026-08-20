@@ -45,6 +45,9 @@ struct ActiveManagerDebugSnapshot {
 /** @return Public-session initialization predicate replacement body. */
 [[nodiscard]] void* citizen_session_ready_entry_point() noexcept;
 
+/** @return Asynchronous world-controller citizen-join status replacement body. */
+[[nodiscard]] void* citizen_join_status_entry_point() noexcept;
+
 /** Refreshes the passive current-region/native-manager observation from gameplay service. */
 void service_current_region_manager() noexcept;
 

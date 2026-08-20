@@ -69,6 +69,7 @@ constexpr std::array<const char*, kHandleCount> kSlotNames{
     "sobject_type2_job",
     "active_manager_refresh",
     "citizen_session_ready",
+    "citizen_join_status",
 };
 // A short table would zero-fill its tail and shift every later name onto the wrong slot.
 static_assert(kSlotNames.back() != nullptr);

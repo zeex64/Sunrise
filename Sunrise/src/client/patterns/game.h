@@ -62,6 +62,7 @@ enum class Id : std::size_t {
     sobjectType2Job,
     activeManagerRefresh,
     citizenSessionReady,
+    citizenJoinStatus,
     contentIdTokenLoad,
     queuezObjectResolver,
     queuezFamily5Subscribe,

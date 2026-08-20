@@ -32,7 +32,10 @@ constexpr std::uint32_t kDirtyRowReportLimit = 8;
 constexpr std::uint32_t kType2JobReportLimit = 16;
 constexpr std::uint32_t kActiveManagerSelectionReportLimit = 8;
 constexpr std::uint32_t kCitizenSessionReportLimit = 64;
+constexpr std::uint32_t kCitizenJoinReportLimit = 32;
 constexpr std::size_t kCitizenSessionCapacity = 8;
+constexpr std::size_t kCitizenJoinCapacity = 4;
+constexpr std::uint64_t kCitizenJoinHeartbeatMilliseconds = 5000;
 constexpr std::size_t kManagerSlotMapOffset = 0x114;
 constexpr std::size_t kManagerSlotMapStride = 6;
 constexpr std::size_t kManagerOccupiedBitsetOffset = 0xC520;
@@ -78,6 +81,7 @@ using DirtyRow = std::uint8_t(__fastcall*)(std::byte*,
 using Type2Job = int(__fastcall*)(std::byte*, const void*, void**);
 using ActiveManagerRefresh = void(__fastcall*)(std::byte*);
 using CitizenSessionReady = bool(__fastcall*)(const std::byte*);
+using CitizenJoinStatus = std::int32_t(__fastcall*)(std::int32_t, std::uint64_t);
 
 std::atomic_uint32_t g_applyReports{};
 std::atomic_uint32_t g_kind0Reports{};
@@ -87,11 +91,13 @@ std::atomic_uint32_t g_dirtyRowReports{};
 std::atomic_uint32_t g_type2JobReports{};
 std::atomic_uint32_t g_activeManagerSelectionReports{};
 std::atomic_uint32_t g_citizenSessionReports{};
+std::atomic_uint32_t g_citizenJoinReports{};
 std::atomic_uint64_t g_lastActiveManagerSelection{};
 std::atomic_uintptr_t g_runtime{};
 SRWLOCK g_activeManagerLock{SRWLOCK_INIT};
 ActiveManagerDebugSnapshot g_activeManagerDebug{};
 SRWLOCK g_citizenSessionLock{SRWLOCK_INIT};
+SRWLOCK g_citizenJoinLock{SRWLOCK_INIT};
 
 struct CitizenSessionObservation {
     const std::byte* session{};
@@ -99,6 +105,15 @@ struct CitizenSessionObservation {
 };
 
 std::array<CitizenSessionObservation, kCitizenSessionCapacity> g_citizenSessions{};
+
+struct CitizenJoinObservation {
+    std::uint64_t handle{};
+    std::uint64_t reportedAt{};
+    std::int32_t state{-1};
+    bool occupied{};
+};
+
+std::array<CitizenJoinObservation, kCitizenJoinCapacity> g_citizenJoins{};
 
 struct CitizenSessionSnapshot {
     const std::byte* session{};
@@ -719,6 +734,70 @@ void report_citizen_session(const CitizenSessionSnapshot& snapshot,
     }
 }
 
+/** Claims a bounded state-change or heartbeat report for one asynchronous citizen join. */
+[[nodiscard]] bool claim_citizen_join_report(std::uint64_t handle,
+                                             std::int32_t state,
+                                             std::uint32_t& occurrence) noexcept {
+    occurrence = 0;
+    if (g_citizenJoinReports.load(std::memory_order_relaxed) >= kCitizenJoinReportLimit
+        || !TryAcquireSRWLockExclusive(&g_citizenJoinLock)) {
+        return false;
+    }
+    const std::uint64_t now = GetTickCount64();
+    CitizenJoinObservation* selected = nullptr;
+    CitizenJoinObservation* oldest = &g_citizenJoins.front();
+    for (CitizenJoinObservation& entry : g_citizenJoins) {
+        if (entry.occupied && entry.handle == handle) {
+            selected = &entry;
+            break;
+        }
+        if (!entry.occupied) {
+            selected = &entry;
+            break;
+        }
+        if (entry.reportedAt < oldest->reportedAt) {
+            oldest = &entry;
+        }
+    }
+    if (selected == nullptr) {
+        selected = oldest;
+    }
+    const bool due = !selected->occupied || selected->handle != handle || selected->state != state
+                     || now - selected->reportedAt >= kCitizenJoinHeartbeatMilliseconds;
+    if (due) {
+        selected->occupied = true;
+        selected->handle = handle;
+        selected->state = state;
+        selected->reportedAt = now;
+    }
+    ReleaseSRWLockExclusive(&g_citizenJoinLock);
+    if (!due) {
+        return false;
+    }
+    occurrence = g_citizenJoinReports.fetch_add(1, std::memory_order_relaxed) + 1;
+    return occurrence <= kCitizenJoinReportLimit;
+}
+
+/** Reports the outer world-controller gate that must return one before citizen acceptance. */
+void report_citizen_join(std::uint64_t handle,
+                         std::int32_t state,
+                         std::uint32_t occurrence) noexcept {
+    std::array<char, 224> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=gameplay stage=citizen-join-status occurrence=%u kind=2 "
+                                      "handle=0x%016llX state=%d ready=%u",
+                                      occurrence,
+                                      static_cast<unsigned long long>(handle),
+                                      state,
+                                      state == 1 ? 1U : 0U);
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 /** Publishes one coherent current-region manager observation for the overlay and send gate. */
 void publish_active_manager(const ActiveManagerDebugSnapshot& snapshot) noexcept {
     AcquireSRWLockExclusive(&g_activeManagerLock);
@@ -1215,6 +1294,27 @@ __declspec(noinline) bool __fastcall citizen_session_ready_body(const std::byte*
     return result;
 }
 
+/** Preserves the sole asynchronous citizen-join query and traces its exact outer-gate state. */
+__declspec(noinline) std::int32_t __fastcall
+citizen_join_status_body(std::int32_t kind, std::uint64_t handle) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(lease, HookSlot::citizenJoinStatus, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<CitizenJoinStatus>(lease.original);
+    std::int32_t state = 0;
+    __try {
+        if (call != nullptr) {
+            state = call(kind, handle);
+        }
+        std::uint32_t occurrence = 0;
+        if (lease.accepting && kind == 2 && claim_citizen_join_report(handle, state, occurrence)) {
+            report_citizen_join(handle, state, occurrence);
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+    return state;
+}
+
 } // namespace
 
 void* apply_entry_point() noexcept {
@@ -1251,6 +1351,10 @@ void* active_manager_refresh_entry_point() noexcept {
 
 void* citizen_session_ready_entry_point() noexcept {
     return reinterpret_cast<void*>(&citizen_session_ready_body);
+}
+
+void* citizen_join_status_entry_point() noexcept {
+    return reinterpret_cast<void*>(&citizen_join_status_body);
 }
 
 void service_current_region_manager() noexcept {
@@ -1313,6 +1417,7 @@ void reset() noexcept {
     g_type2JobReports.store(0, std::memory_order_relaxed);
     g_activeManagerSelectionReports.store(0, std::memory_order_relaxed);
     g_citizenSessionReports.store(0, std::memory_order_relaxed);
+    g_citizenJoinReports.store(0, std::memory_order_relaxed);
     g_lastActiveManagerSelection.store(0, std::memory_order_relaxed);
     g_runtime.store(0, std::memory_order_release);
     AcquireSRWLockExclusive(&g_activeManagerLock);
@@ -1321,6 +1426,9 @@ void reset() noexcept {
     AcquireSRWLockExclusive(&g_citizenSessionLock);
     g_citizenSessions = {};
     ReleaseSRWLockExclusive(&g_citizenSessionLock);
+    AcquireSRWLockExclusive(&g_citizenJoinLock);
+    g_citizenJoins = {};
+    ReleaseSRWLockExclusive(&g_citizenJoinLock);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_apply_probe

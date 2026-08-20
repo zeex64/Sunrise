@@ -442,6 +442,14 @@ constexpr std::string_view kCitizenSessionReadyText = "83 B9 6C 08 00 00 00 0F 9
 constexpr auto kCitizenSessionReady =
     signature<signature_length(kCitizenSessionReadyText)>(kCitizenSessionReadyText);
 
+// Matches the sole asynchronous citizen-join status query used by the world controller. The
+// nonvolatile save set followed by the encrypted-table load is unique in the current image.
+constexpr std::string_view kCitizenJoinStatusText =
+    "48 89 5C 24 08 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 20 48 8B 3D ? ? ? ?";
+/** Compiled pattern bytes of the citizen-join status query signature above. */
+constexpr auto kCitizenJoinStatus =
+    signature<signature_length(kCitizenJoinStatusText)>(kCitizenJoinStatusText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -535,6 +543,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"sobject_type2_job", kSobjectType2Job},
     patterns::Pattern{"active_manager_refresh", kActiveManagerRefresh},
     patterns::Pattern{"citizen_session_ready", kCitizenSessionReady},
+    patterns::Pattern{"citizen_join_status", kCitizenJoinStatus},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},
