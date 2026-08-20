@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <imgui.h>
 
+#include "../../../../client/hooks/network/sobject_apply_probe.h"
 #include "../../../../middleware/content/packages/tables/region_reader.h"
 #include "../../../../server/gameplay/group/group_host.h"
 #include "../../../../server/gameplay/group/group_host_sessions.h"
@@ -43,8 +44,17 @@ constexpr std::array<const char*, 6> kChannelStages{
 struct DisplayRow {
     group::HostSessionRow host{};
     state::gameplay::PeerStage stage{state::gameplay::PeerStage::absent};
-    bool current{};
+    bool reportedCurrent{};
+    bool nativeCurrent{};
 };
+
+/** Names the semantic/native role without presenting a pending target as current. */
+[[nodiscard]] const char* role_name(const DisplayRow& row) noexcept {
+    if (row.nativeCurrent) {
+        return "current";
+    }
+    return row.reportedCurrent ? "target" : "overlap";
+}
 
 /** @param stage Link stage. @return Its name, or the absent one for a value out of range. */
 [[nodiscard]] const char* channel_name(state::gameplay::PeerStage stage) noexcept {
@@ -134,7 +144,10 @@ void draw() noexcept {
         if (!current && !channelPresent && !admittedPresent) {
             continue;
         }
-        rows[rowCount] = {cached[index], stage, current};
+        const bool nativeCurrent =
+            client::hooks::network::sobject_apply_probe::native_manager_active(
+                cached[index].hostSessionId);
+        rows[rowCount] = {cached[index], stage, current, nativeCurrent};
         ++rowCount;
     }
     if (rowCount == 0) {
@@ -157,7 +170,7 @@ void draw() noexcept {
         const DisplayRow& row = rows[index];
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(row.current ? "current" : "overlap");
+        ImGui::TextUnformatted(role_name(row));
         ImGui::TableNextColumn();
         draw_region_cells(row.host.regionIndex);
         ImGui::TableNextColumn();

@@ -2710,8 +2710,8 @@ bool link_stage(std::uint64_t sessionId, state::gameplay::PeerStage& stage) noex
 
 /** Sends any owed acknowledgement. */
 void service(std::uint64_t now) noexcept {
-    // Native PUBLIC CURRENT can lag behind the membership/slice transition. Reconcile the
-    // simulation manager before taking the peer lock so current-view creates are serviceable.
+    // Native PUBLIC CURRENT can lag behind the membership report. Observe it before taking the
+    // peer lock; entity output remains closed until the game itself selects the current manager.
     client::hooks::network::sobject_apply_probe::service_current_region_manager();
     std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> owed{};
     std::array<EntityCreatePlan, state::gameplay::kAssociationCapacity> entityCreates{};

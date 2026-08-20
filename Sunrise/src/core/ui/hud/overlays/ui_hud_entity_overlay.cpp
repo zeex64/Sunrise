@@ -136,15 +136,14 @@ void draw() noexcept {
         ImGui::TextDisabled("unknown");
     } else if (!manager.ready) {
         ImGui::TextColored(ImVec4{1.0F, 0.55F, 0.25F, 1.0F},
-                           "active %d  wanted ns %d  NOT PROMOTED",
+                           "native ns %d  current owner needs ns %d",
                            manager.activeAfter,
                            manager.requestedNamespace);
     } else {
-        ImGui::Text("active ns %d  region %d  slice %d%s",
+        ImGui::Text("native current ns %d  region %d  slice %d",
                     manager.activeAfter,
                     manager.region,
-                    manager.nativeSlice,
-                    manager.promoted ? "  promoted" : "");
+                    manager.nativeSlice);
     }
 
     begin_row("Native");

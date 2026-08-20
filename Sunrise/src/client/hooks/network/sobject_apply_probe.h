@@ -42,12 +42,18 @@ struct ActiveManagerDebugSnapshot {
 /** @return Native public-session active-manager refresh replacement body. */
 [[nodiscard]] void* active_manager_refresh_entry_point() noexcept;
 
-/** Reapplies the guarded current-region manager choice from the gameplay service slice. */
+/** Refreshes the passive current-region/native-manager observation from gameplay service. */
 void service_current_region_manager() noexcept;
 
 /** @return True while the exact current token/namespace is the freshly active native manager. */
 [[nodiscard]] bool current_region_manager_active(std::uint64_t token,
                                                  std::int32_t namespaceId) noexcept;
+
+/** @return True while native PUBLIC CURRENT freshly selects the exact current-region token. */
+[[nodiscard]] bool current_region_manager_active(std::uint64_t token) noexcept;
+
+/** @return True while a live token's captured namespace is the native active manager. */
+[[nodiscard]] bool native_manager_active(std::uint64_t token) noexcept;
 
 /** Copies the last guarded manager-selection observation for the debug overlay. */
 [[nodiscard]] bool active_manager_debug_snapshot(ActiveManagerDebugSnapshot& output) noexcept;

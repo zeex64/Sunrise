@@ -587,6 +587,19 @@ Once the director evaluates an encounter and creates native squad/member objects
   Its predecessor `8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`
   sent nothing: at the 61-ms two-view window membership was region 24 while the retiring slice was
   still 408, so the strict slice-equality gate closed before the scheduler expanded to three views.
+- The deployed `54c55d9b...` run proved that writing the active-manager identity is not equivalent
+  to completing a public-session transition. The current Basin record decoded and promoted in
+  namespace 2, then reached the dirty-row builder every frame with `dirty_flags=0x0003`, an idle
+  backend, and no type-2 job. The native transition remained `PUBLIC TARGET` for more than three
+  minutes, `Slice set` stayed unknown, and later region changes remained absent or preempted.
+- The transition-safe candidate has SHA-256
+  `af9fd044c9d4aada42844c89ea065bdb567a8909e51395a00bcee35c8bd3e487`. It no longer writes the
+  active manager. Citizen-advertisement retirement and entity output both wait for the game's own
+  native `PUBLIC CURRENT` manager selection, so cell residency is established by the normal world
+  handoff rather than inferred from a bound replication view.
+- The sessions overlay now labels the player-reported destination `target` until its captured
+  namespace is the native active manager. `current` therefore means native current, while
+  `overlap` names another still-live session; a merely reported region is no longer mislabeled.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

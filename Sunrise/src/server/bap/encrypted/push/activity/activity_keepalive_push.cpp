@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdio>
 
+#include "../../../../../client/hooks/network/sobject_apply_probe.h"
 #include "../../../../../core/logging/log.h"
 #include "../../../../../state/activity/definition.h"
 #include "../../../../../state/activity/membership/activity_membership_query.h"
@@ -102,15 +103,22 @@ bool consume_activity_keepalive(Session& session,
     // region and reuse that region's group. The scalar region markers supply the visit generation:
     // a group settled on an older visit must be advertised once again after another region has
     // occupied those markers.
-    const bool advertisedGroupPublished =
-        group_published(session, advertisedGroup)
-        && session.activityPublishedRegion == effectiveRegion;
+    const bool advertisedGroupPublished = group_published(session, advertisedGroup)
+                                          && session.activityPublishedRegion == effectiveRegion;
     const bool advertisedGroupSettled =
-        group_settled(session, advertisedGroup)
-        && session.activitySettledRegion == effectiveRegion;
+        group_settled(session, advertisedGroup) && session.activitySettledRegion == effectiveRegion;
+    const std::uint64_t advertisedHost =
+        server::gameplay::group::held_host_session(advertisedGroup);
+    // View bind only proves replication connectivity. The client has not finished the citizen
+    // handoff until native PUBLIC CURRENT selects the new simulation manager. Retiring the
+    // descriptor before then strands the target role, leaves later sessions absent, and prevents
+    // the new region's spatial cells from becoming active.
     const bool retirementReady =
-        advertisedGroup != 0 && server::gameplay::group::view_accepted(advertisedGroup)
-        && server::gameplay::group::activity_host_published(advertisedGroup);
+        advertisedGroup != 0 && advertisedHost != 0
+        && server::gameplay::group::view_accepted(advertisedGroup)
+        && server::gameplay::group::activity_host_published(advertisedGroup)
+        && client::hooks::network::sobject_apply_probe::current_region_manager_active(
+            advertisedHost);
     const bool regionPublicationDue =
         !session.activityJoinedForeignSession && reportedRegion >= 0
         && (advertisedGroup != 0 ? !advertisedGroupPublished && !advertisedGroupSettled
@@ -196,8 +204,8 @@ bool consume_activity_keepalive(Session& session,
     const bool rootMembership = !session.activityJoinedForeignSession;
     const bool citizenAdvertisementUnsettled =
         rootMembership && effectiveRegion >= 0 && !advertisedGroupSettled;
-    const bool settleCitizenAdvertisement = citizenAdvertisementUnsettled
-                                            && advertisedGroupPublished && retirementReady;
+    const bool settleCitizenAdvertisement =
+        citizenAdvertisementUnsettled && advertisedGroupPublished && retirementReady;
     const bool includeCitizenAdvertisement =
         citizenAdvertisementUnsettled && !settleCitizenAdvertisement;
     const bool publishesMembership =

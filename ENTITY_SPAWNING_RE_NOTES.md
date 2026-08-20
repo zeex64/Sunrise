@@ -2754,6 +2754,20 @@ Town bubble 51 plus Town-only spawn-set `0xCB8903DF` Release candidate SHA-256:
 Current-region simulation-manager promotion Release candidate SHA-256:
 `54c55d9b2e6cdc40ac3634181d36506d23f3bc734d7632355bd0909d3c419edf`.
 
+Transition-safe passive-manager Release candidate SHA-256:
+`af9fd044c9d4aada42844c89ea065bdb567a8909e51395a00bcee35c8bd3e487`.
+
+The `54c55d9b...` run separated replication ownership from native world residency. Namespace 2,
+view 1, region 24, bubble 3, and cell 11 all matched; the record decoded, promoted, and was serviced
+by manager 2. Nevertheless `FUN_14170B660` returned every frame without adding a batch or calling
+the type-2 builder. In the same run the normal-z-leg stayed `PUBLIC TARGET`, never logged a
+`PUBLIC CURRENT` swap or completed transition, and later target sessions stayed absent. A manual
+write to `runtime+0x560E0` therefore services an unready manager but does not activate its spatial
+world. The replacement now observes `FUN_1416EC250` passively. The server retains the citizen
+descriptor and suppresses entity output until native selection reaches the exact current token.
+The sessions overlay applies the same distinction: a player-reported row is `target` until its
+captured namespace equals the native active manager, then and only then becomes `current`.
+
 After manual deployment, inspect:
 
 ```text
