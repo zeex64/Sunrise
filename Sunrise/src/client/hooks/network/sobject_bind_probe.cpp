@@ -231,6 +231,7 @@ void record_plan(std::uint64_t token,
         g_debug.namespaceId = -1;
         g_debug.region = -1;
         g_debug.type2Result = -1;
+        g_debug.collectorInternal = -1;
         g_debug.nativeObjectIndex = 0xFFFFFFFF;
     }
     g_debug.token = token;
@@ -274,7 +275,7 @@ void record_promoted(std::int32_t namespaceId, std::uint32_t entityId, bool occu
 
 void record_dirty_service(std::int32_t namespaceId, std::uint32_t entityId) noexcept {
     AcquireSRWLockExclusive(&g_debugLock);
-    if (g_debug.decoded && g_debug.namespaceId == namespaceId
+    if (g_debug.present && g_debug.namespaceId == namespaceId
         && g_debug.slot == (entityId & kEntitySlotMask)) {
         g_debug.dirtyServiced = true;
     }
@@ -331,6 +332,30 @@ void record_binding(std::uint32_t entityId, std::uint32_t nativeObjectIndex, boo
     ReleaseSRWLockExclusive(&g_debugLock);
 }
 
+void record_collector(std::int32_t namespaceId,
+                      std::uint32_t entityId,
+                      std::int32_t internalIndex,
+                      bool active,
+                      bool eligible,
+                      bool candidate,
+                      std::uint16_t objectFlags,
+                      std::uint16_t namespaceFlags,
+                      std::uint32_t supportMask) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.present && g_debug.namespaceId == namespaceId
+        && g_debug.slot == (entityId & kEntitySlotMask)) {
+        g_debug.collectorInternal = internalIndex;
+        g_debug.collectorObjectFlags = objectFlags;
+        g_debug.collectorNamespaceFlags = namespaceFlags;
+        g_debug.collectorSupportMask = supportMask;
+        g_debug.collectorSeen = true;
+        g_debug.collectorActive = active;
+        g_debug.collectorEligible = eligible;
+        g_debug.collectorCandidate = candidate;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
 bool debug_snapshot(EntityDebugSnapshot& output) noexcept {
     AcquireSRWLockShared(&g_debugLock);
     output = g_debug;
@@ -378,6 +403,7 @@ void reset() noexcept {
     g_debug.namespaceId = -1;
     g_debug.region = -1;
     g_debug.type2Result = -1;
+    g_debug.collectorInternal = -1;
     g_debug.nativeObjectIndex = 0xFFFFFFFF;
     ReleaseSRWLockExclusive(&g_debugLock);
 }

@@ -477,6 +477,15 @@ constexpr std::string_view kSchedulerEntityFinalizerText =
 constexpr auto kSchedulerEntityFinalizer =
     signature<signature_length(kSchedulerEntityFinalizerText)>(kSchedulerEntityFinalizerText);
 
+// Matches the replicated-entity scheduler candidate collector. It walks manager +0xC920 and
+// appends packed entity/view/lane/priority candidates without writing their encoded bodies.
+constexpr std::string_view kSchedulerEntityCollectorText =
+    "44 89 44 24 18 89 54 24 10 56 41 57 48 81 EC C8 00 00 00 33 F6 "
+    "4C 89 49 18 4C 8B F9 89 B4 24 F8 00 00 00";
+/** Compiled pattern bytes of the entity candidate collector signature above. */
+constexpr auto kSchedulerEntityCollector =
+    signature<signature_length(kSchedulerEntityCollectorText)>(kSchedulerEntityCollectorText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -574,6 +583,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"z_leg_state", kZLegState},
     patterns::Pattern{"scheduler_zero_finalizer", kSchedulerZeroFinalizer},
     patterns::Pattern{"scheduler_entity_finalizer", kSchedulerEntityFinalizer},
+    patterns::Pattern{"scheduler_entity_collector", kSchedulerEntityCollector},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},

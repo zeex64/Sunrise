@@ -11,6 +11,7 @@
 #include "../membership_update_probe.h"
 #include "../platform.h"
 #include "../runtime.h"
+#include "../scheduler_entity_collector_probe.h"
 #include "../scheduler_handler_probe.h"
 #include "../scheduler_output_probe.h"
 #include "../scheduler_signature_probe.h"
@@ -154,6 +155,7 @@ bool uninstall() noexcept {
         entity_slot_probe::reset();
         membership_update_probe::reset();
         scheduler_handler_probe::reset();
+        scheduler_entity_collector_probe::reset();
         scheduler_output_probe::reset();
         scheduler_signature_probe::reset();
         sobject_apply_probe::reset();

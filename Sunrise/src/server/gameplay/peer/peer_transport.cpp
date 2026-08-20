@@ -77,7 +77,7 @@ constexpr std::uint8_t kMinimumHeadCursor = 1;
 constexpr std::size_t kExternalProbeWords = 4;
 /** Bits retained in each diagnostic scheduler-prefix word. */
 constexpr std::uint8_t kExternalProbeWordBits = 64;
-/** Complete scheduler-body bytes retained for one bounded diagnostic line. */
+/** Remaining external-trailer bytes retained for one bounded diagnostic line. */
 constexpr std::size_t kExternalProbeByteCapacity = 256;
 /**
  * Milliseconds between two resends of the same queue. The peer discards a packet more than 128
@@ -2589,8 +2589,8 @@ void consume_established(const state::gameplay::Endpoint& from,
     }
     if (externalReadable) {
         const bool viewAccepted = sessionId != 0 && group::view_accepted(sessionId);
-        // The scheduler boundary is proven. Retain its large diagnostic body only when the
-        // signature changes instead of synchronously writing it for every simulation packet.
+        // The scheduler start is proven, but its end is not. Retain the remaining external trailer
+        // only when the signature changes instead of copying it for every simulation packet.
         if (external.schedulerSignatureUpdate
             && (viewAccepted || external.status.gatekeeperEnabled
                 || external.status.schedulerPresent)) {
@@ -2620,7 +2620,7 @@ void consume_established(const state::gameplay::Endpoint& from,
                               external.schedulerByteCount),
                           schedulerHex);
             report(core::log::Level::info,
-                   "ev=gameplay stage=scheduler-body bits=%zu captured=%zu bytes=%zu "
+                   "ev=gameplay stage=scheduler-tail remaining_bits=%zu captured=%zu bytes=%zu "
                    "tail=%u truncated=%u hex=%s",
                    external.schedulerBitsBeforeProbe,
                    external.schedulerCapturedBits,

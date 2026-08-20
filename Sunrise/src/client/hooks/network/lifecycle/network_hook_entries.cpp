@@ -11,6 +11,7 @@
 #include "../entity_create_probe.h"
 #include "../entity_slot_probe.h"
 #include "../membership_update_probe.h"
+#include "../scheduler_entity_collector_probe.h"
 #include "../scheduler_handler_probe.h"
 #include "../scheduler_output_probe.h"
 #include "../scheduler_signature_probe.h"
@@ -81,6 +82,7 @@ namespace {
         sobject_apply_probe::z_leg_state_entry_point(),
         scheduler_output_probe::zero_finalizer_entry_point(),
         scheduler_output_probe::entity_finalizer_entry_point(),
+        scheduler_entity_collector_probe::collector_entry_point(),
     };
 }
 
@@ -148,6 +150,7 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.zLegState, replacements[46]},
         hooking::detour::Spec{resolved.schedulerZeroFinalizer, replacements[47]},
         hooking::detour::Spec{resolved.schedulerEntityFinalizer, replacements[48]},
+        hooking::detour::Spec{resolved.schedulerEntityCollector, replacements[49]},
     };
 }
 

@@ -66,6 +66,7 @@ enum class Id : std::size_t {
     zLegState,
     schedulerZeroFinalizer,
     schedulerEntityFinalizer,
+    schedulerEntityCollector,
     contentIdTokenLoad,
     queuezObjectResolver,
     queuezFamily5Subscribe,

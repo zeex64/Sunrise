@@ -76,6 +76,8 @@ bool derive(std::span<const patterns::ImageRange> image,
         matches[index(patterns::game::Id::schedulerZeroFinalizer)].address;
     resolved.schedulerEntityFinalizer =
         matches[index(patterns::game::Id::schedulerEntityFinalizer)].address;
+    resolved.schedulerEntityCollector =
+        matches[index(patterns::game::Id::schedulerEntityCollector)].address;
     resolved.sobjectCreateEncoder =
         matches[index(patterns::game::Id::sobjectCreateEncoder)].address;
     resolved.sobjectUpdateEncoder =

@@ -124,6 +124,23 @@ void service(std::uint64_t now) noexcept;
 [[nodiscard]] bool session_admitted(std::uint64_t sessionId) noexcept;
 
 /**
+ * Reports whether one citizen descriptor may consume a public-session slot.
+ * An already-admitted candidate is safe to refresh. A new candidate waits until fewer than two
+ * public sessions remain and the native current/target teardown grace has elapsed.
+ * @param sessionId Candidate group session the descriptor would advertise.
+ * @param now Monotonic tick count in milliseconds.
+ * @return True when publishing the candidate cannot overlap a third public session.
+ */
+[[nodiscard]] bool citizen_publication_ready(std::uint64_t sessionId, std::uint64_t now) noexcept;
+
+/**
+ * Marks the admitted group owned by one activity-host session as leaving.
+ * The normal gameplay leave still releases it immediately; this marker supplies a bounded
+ * fallback when the client drops a stale public target locally and sends no gameplay leave.
+ */
+void note_citizen_leave(std::uint64_t activityHostSessionId) noexcept;
+
+/**
  * Frees every admitted record at one endpoint.
  * Only an association timeout calls this. A connect-closed must not: the client rebuilds its
  * channel within 50 ms and keeps every group session it held.

@@ -891,12 +891,12 @@ first 16 bytes of both native dirty/sent mask objects, the component scratch bas
 delta, accumulator state, and up to 64 flushed bytes. The hook calls the original encoder first
 and never edits its context, masks, or writer.
 
-The server's existing external-body probe now also records the scheduler body after the two
-gatekeeper/presence bits as `stage=scheduler-body`. It retains up to 256 bytes, preserves a final
-partial byte as an MSB-aligned value, and reports the original/captured bit counts plus a
-truncation flag. This replaces the old need to reconstruct a potentially 1500-bit native scheduler
-frame from only four 64-bit prefix words; it is read-only and is emitted only after the server
-considers the view accepted and the client declares a scheduler body.
+The server's external-body probe records the entire remaining external trailer after the two
+gatekeeper/presence bits. It retains up to 256 bytes, preserves a final partial byte as an
+MSB-aligned value, and reports the original/captured bit counts plus a truncation flag. This data
+was originally labeled `stage=scheduler-body`, but later native lane-finalizer measurements prove
+that the retained range extends beyond the scheduler into reserve/padding. New builds label it
+`stage=scheduler-tail`; only its starting boundary is proven.
 
 The copied-reader path originally treated the bits after schema `0x80806AEA` as a two-bit view
 count followed by 64/8-bit view entries. The 2026-08-18 run disproved that layout: while the native
@@ -968,8 +968,8 @@ view emits immediately without movement.
 That run was force-closed after the main activity/network path stopped during a public-bubble
 session-ID transition. It did not reach the entity-list decoder, so the freeze was not caused by
 native sobject decoding. Diagnostic pressure was nevertheless excessive: 9,390 cosmetic channel
-name-change lines plus roughly 1,400 full scheduler bodies were synchronously copied to the log in
-157 seconds. Sunrise now suppresses that cosmetic retail line and retains the full scheduler-body
+name-change lines plus roughly 1,400 full external scheduler tails were synchronously copied to the
+log in 157 seconds. Sunrise now suppresses that cosmetic retail line and retains the external-tail
 diagnostic only on signature updates. If the freeze reproduces with that pressure removed, capture
 the stopped thread rather than attributing it to the entity codec.
 
@@ -1110,7 +1110,7 @@ Client hooks now cover:
   signature value (`stage=entity-view`).
 - The exact bit delta of native schema `0x80806AEA` output plus its 16-byte input value
   (`stage=scheduler-native-signature`).
-- Up to 2048 exact client scheduler-body bits after the gatekeeper/presence prefix.
+- Up to 2048 exact remaining external-trailer bits after the gatekeeper/presence prefix.
 - View-slot manager state plus scheduler view count, complete local/remote signature objects, and
   flags.
 - Membership-to-view synchronization predicates.
@@ -3047,10 +3047,10 @@ network hitch, forced disconnect, or corrupt-channel failure; shutdown completed
 synthetic `entity-create-out` occurred because every candidate window remained on an unproven
 scheduler shape. This is the intended fail-closed result.
 
-Three unusually large scheduler bodies (1114, 1124, and 1178 bits) were captured during public
-session reconfiguration. None coincided with `sobject-create` or `sobject-update`, and the first
-carried a signature update whose logical registered-view count was zero. They are scheduler
-control/topology output, not native enemy-creation exemplars.
+Three unusually large external scheduler tails (1114, 1124, and 1178 bits) were captured during
+public session reconfiguration. None coincided with `sobject-create` or `sobject-update`, and the
+first carried a signature update whose logical registered-view count was zero. They are scheduler
+control/topology output plus trailing reserve/padding, not native enemy-creation exemplars.
 
 The shared retail captures separate cleanly into three relevant layers:
 
@@ -3094,14 +3094,66 @@ terminal-bit delta to equal one, and retains only copied scalar fields. It never
 scheduler-stack writer after the detour returns. Schema widths derive registered views exactly as
 `(signatureBits - 130) / 72`, accepting 202, 274, and 346 bits for one through three views. A commit
 requires exactly `views * 4` ordered finalizers and a same-thread signature within 500 ms. The
-reported total is `1 update gate + signature bits + sum(finalized lane bits)`, which should equal
-the server's captured `scheduler-body bits` at the matching timestamp.
+reported native total is `1 update gate + signature bits + sum(finalized lane bits)`. It must not
+be compared directly with the server's old `scheduler-body` value: that diagnostic retained the
+rest of the external trailer and therefore included data after the scheduler.
 
 Logging is one compact, deduplicated `scheduler-outbound-shape` line per unique signature/width
 shape, hard-capped at 32 per process. No hot candidate call logs are emitted. Release SHA-256:
 `4dd1685f070b1d46d15b41b37b72fd05a92f1e44734a87b028c286e342349870`.
 
-After manual deployment, inspect:
+### Outbound entity candidate enrollment
+
+The lane-split run captured five complete shapes across one- and two-view layouts. In every view,
+event/mask/fixed widths varied but the finalized entity lane was exactly 11 bits. Because the
+entity finalizer itself appends one bit, all observed native entity bodies were the same empty
+10-bit prelude. The run contained no outbound kind-0 create/update call, decoded entity record,
+promotion, type-2 job, native construction, or bind. Slot occupancy and dependency registration
+therefore do not by themselves enroll an object for entity replication.
+
+The next boundary is collector `FUN_14170C080` at `0x14170C080`, with ABI
+`int32_t __fastcall(void* self, uint32_t view, uint32_t lane, void* context, int32_t capacity,
+uint32_t* output)`. Its fixed 35-byte entry signature is unique in the current image. It walks the
+manager's `+0xC920` candidate bitset and, for each internal object, applies these gates before
+emitting a packed candidate word:
+
+- handler enable bytes `self+9` and `self+0xA`;
+- replicated-slot to internal-object mapping at manager `+0x114`, stride six;
+- namespace support from metadata `+4` and owner compatibility;
+- per-namespace dependency/eligibility flag `0x80` at metadata namespace state `+0x50`;
+- object suppression bit `0x0200` at object `+0x50`;
+- remaining output capacity.
+
+The passive collector hook snapshots the watched plan before and after the native call, scans all
+safely reported candidates (bounded to 1024), and records whether the target was active, eligible,
+and emitted. It also captures a bounded sample of packed candidate words, whose low 13 bits are the
+entity slot and whose high fields carry priority/lane/view. It changes no manager, bitset, object,
+or output value.
+
+### Public descriptor overcommit hang
+
+The last traversal's 20-second `network_update` hitch began after Sunrise published a third public
+descriptor while two public views were still alive. The client force-disconnected the outgoing
+target, opened the replacement, reached peer establishment, and queued join-complete at retail
+site 86. The server had admitted the join; the expected site-87 send did not occur because the
+managed pump stopped being entered afterward. This is a client lifecycle overcommit/reuse race,
+not a missing server reply and not activity in either scheduler finalizer hook.
+
+The bounded repair delays publication of a not-yet-admitted public descriptor while two admitted
+public slots remain occupied, then waits 125 ms after a real release before republishing. Both
+synchronous membership transactions and periodic keepalives apply the gate, so an authoritative
+region delta cannot bypass it. Activity message 15 marks the exact leaving group through its bound
+activity-host token. An ordinary gameplay leave still releases that row immediately; if the client
+drops the stale target locally and sends no gameplay leave, a one-second fallback retires only the
+marked row before the same 125-ms grace. This avoids the previous LRU/capacity deadlock while
+preserving stable per-region group/activity-host identities. Reducing capacity or rejecting the
+replacement after publication is unsafe because it allows the client to begin the same
+forced-disconnect path first.
+
+Release SHA-256 for the candidate-collector and public-slot lifecycle build:
+`203cce8b1121e33ee1ad39eea9dcefa470602f9dff8349343f71f34bfcf248f1`.
+
+For the deployed build, inspect:
 
 ```text
 /home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log
@@ -3136,10 +3188,12 @@ entity-create
 entity-create-out
 entity-slots
 entity-view
-scheduler-body
+scheduler-tail
 scheduler-signature
 scheduler-native-signature
 scheduler-outbound-shape
+scheduler-outbound-commit
+scheduler-entity-collector
 scheduler-two-view-probe
 scheduler-post-handoff-probe
 scheduler-handler-trace

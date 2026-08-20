@@ -116,6 +116,8 @@ struct Admitted {
     std::uint64_t viewLastRetry{};
     /** Order in which the peer last named this session. The lowest is the least recently used. */
     std::uint64_t lastUse{};
+    /** Activity-side leave request tick; gameplay leave normally clears the row first. */
+    std::uint64_t leaveRequestedAt{};
 };
 
 /**
@@ -123,6 +125,11 @@ struct Admitted {
  * The peer resolves a session through a two-element array, so a third is one it left.
  */
 constexpr std::size_t kPublicSessionCapacity = 2;
+/** Native current/target teardown completed within 104 ms in every observed public leave. */
+constexpr std::uint64_t kPublicSessionReleaseGraceMs = 125;
+/** Stale targets can disappear locally without a gameplay leave; retire only after this fallback.
+ */
+constexpr std::uint64_t kCitizenLeaveFallbackMs = 1'000;
 
 /** Revision of the last published snapshot. The consumer refuses one that does not increase. */
 std::atomic<std::uint32_t> g_membershipRevision{0};
@@ -134,6 +141,8 @@ SRWLOCK g_admittedLock{SRWLOCK_INIT};
 std::array<Admitted, kAdmittedCapacity> g_admitted{};
 /** Recently promoted public groups; retained after their admitted row is released. */
 std::array<std::uint64_t, kPublicSessionCapacity> g_activityHostPublished{};
+/** Tick of the latest admitted-row release. Guarded by `g_admittedLock`. */
+std::uint64_t g_lastPublicSessionReleaseTick{};
 
 /** Tests the durable activity-host history while the admitted lock is held. */
 [[nodiscard]] bool activity_host_was_published(std::uint64_t sessionId) noexcept {
@@ -714,10 +723,15 @@ void release(std::uint64_t sessionId) noexcept {
     // The region's activity host stays. A leave is also how the peer fast travels to the region it
     // is already in, and a fresh id there is `public_activity_host_mismatch`.
     AcquireSRWLockExclusive(&g_admittedLock);
+    bool released = false;
     for (Admitted& entry : g_admitted) {
         if (entry.occupied && entry.sessionId == sessionId) {
             entry = {};
+            released = true;
         }
+    }
+    if (released) {
+        g_lastPublicSessionReleaseTick = GetTickCount64();
     }
     ReleaseSRWLockExclusive(&g_admittedLock);
 }
@@ -734,6 +748,9 @@ void release_endpoint(const state::gameplay::Endpoint& endpoint) noexcept {
             ++count;
             entry = {};
         }
+    }
+    if (count != 0) {
+        g_lastPublicSessionReleaseTick = GetTickCount64();
     }
     ReleaseSRWLockExclusive(&g_admittedLock);
     if (count != 0) {
@@ -952,6 +969,7 @@ bool publish_membership(const state::gameplay::Endpoint& peer,
         record->view = {};
         record->lastRetry = 0;
         record->viewLastRetry = 0;
+        record->leaveRequestedAt = 0;
         published = publish_snapshot(*record);
     }
     ReleaseSRWLockExclusive(&g_admittedLock);
@@ -980,9 +998,25 @@ void service(std::uint64_t now) noexcept {
             oldest = &record;
         }
     }
-    if (occupied > kPublicSessionCapacity && oldest != nullptr) {
+    Admitted* requestedLeave = nullptr;
+    for (Admitted& record : g_admitted) {
+        if (!record.occupied || record.leaveRequestedAt == 0 || now < record.leaveRequestedAt
+            || now - record.leaveRequestedAt < kCitizenLeaveFallbackMs) {
+            continue;
+        }
+        if (requestedLeave == nullptr
+            || record.leaveRequestedAt < requestedLeave->leaveRequestedAt) {
+            requestedLeave = &record;
+        }
+    }
+    if (requestedLeave != nullptr) {
+        retired = requestedLeave->sessionId;
+        *requestedLeave = {};
+        g_lastPublicSessionReleaseTick = now;
+    } else if (occupied > kPublicSessionCapacity && oldest != nullptr) {
         retired = oldest->sessionId;
         *oldest = {};
+        g_lastPublicSessionReleaseTick = now;
     }
     for (Admitted& record : g_admitted) {
         if (!record.occupied || !record.view.started || record.view.bound
@@ -1093,6 +1127,59 @@ bool session_admitted(std::uint64_t sessionId) noexcept {
     return admitted;
 }
 
+/** Marks the exact activity-host-owned group for bounded stale-target retirement. */
+void note_citizen_leave(std::uint64_t activityHostSessionId) noexcept {
+    const std::uint64_t groupSessionId = holding_group_session(activityHostSessionId);
+    if (groupSessionId == 0) {
+        return;
+    }
+    const std::uint64_t now = GetTickCount64();
+    bool marked = false;
+    AcquireSRWLockExclusive(&g_admittedLock);
+    for (Admitted& entry : g_admitted) {
+        if (entry.occupied && entry.sessionId == groupSessionId) {
+            if (entry.leaveRequestedAt == 0) {
+                entry.leaveRequestedAt = now;
+            }
+            marked = true;
+            break;
+        }
+    }
+    ReleaseSRWLockExclusive(&g_admittedLock);
+    if (marked) {
+        report(core::log::Level::debug,
+               "ev=gameplay stage=admitted result=leave-requested session=0x%016llX "
+               "activity_host=0x%016llX",
+               static_cast<unsigned long long>(groupSessionId),
+               static_cast<unsigned long long>(activityHostSessionId));
+    }
+}
+
+/** Reports whether one citizen descriptor can safely consume a public-session slot. */
+bool citizen_publication_ready(std::uint64_t sessionId, std::uint64_t now) noexcept {
+    if (sessionId == 0) {
+        return false;
+    }
+    std::size_t admittedCount = 0;
+    bool candidateAdmitted = false;
+    std::uint64_t lastReleaseTick = 0;
+    AcquireSRWLockShared(&g_admittedLock);
+    for (const Admitted& entry : g_admitted) {
+        if (!entry.occupied) {
+            continue;
+        }
+        ++admittedCount;
+        candidateAdmitted = candidateAdmitted || entry.sessionId == sessionId;
+    }
+    lastReleaseTick = g_lastPublicSessionReleaseTick;
+    ReleaseSRWLockShared(&g_admittedLock);
+
+    const bool releaseGraceElapsed =
+        lastReleaseTick == 0
+        || (now >= lastReleaseTick && now - lastReleaseTick >= kPublicSessionReleaseGraceMs);
+    return candidateAdmitted || (admittedCount < kPublicSessionCapacity && releaseGraceElapsed);
+}
+
 /** Copies every admitted group-session record. */
 void snapshot_admitted(std::span<AdmittedRow> output, std::size_t& count) noexcept {
     count = 0;
@@ -1119,6 +1206,7 @@ void reset() noexcept {
     AcquireSRWLockExclusive(&g_admittedLock);
     g_admitted = {};
     g_activityHostPublished = {};
+    g_lastPublicSessionReleaseTick = 0;
     ReleaseSRWLockExclusive(&g_admittedLock);
 }
 

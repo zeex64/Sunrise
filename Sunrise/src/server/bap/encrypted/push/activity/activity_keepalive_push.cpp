@@ -151,13 +151,19 @@ bool consume_activity_keepalive(Session& session,
                         && session.activityPublishedTransitionToken == visitToken)
                           && !(session.activitySettledRegion == effectiveRegion
                                && session.activitySettledTransitionToken == visitToken)));
+    // The native client has two public slots. Keep the descriptor trigger armed while a previous
+    // target still occupies both slots, and for the measured teardown window after its release.
+    const bool citizenPublicationHeld =
+        regionPublicationDue && publicRegion && advertisedGroup != 0
+        && !server::gameplay::group::citizen_publication_ready(advertisedGroup, now);
+    const bool actionableRegionPublication = regionPublicationDue && !citizenPublicationHeld;
     // A reused group retains its old ready state. Do not let that historical state retire the new
     // visit before its descriptor-bearing membership has actually reached the client.
     const bool citizenRetirementDue = !session.activityJoinedForeignSession && effectiveRegion >= 0
                                       && advertisedGroupPublished && !advertisedGroupSettled
                                       && retirementReady;
     if (session.activitySessionId == 0
-        || (!burstDue && !keepaliveDue && !regionPublicationDue && !citizenRetirementDue)) {
+        || (!burstDue && !keepaliveDue && !actionableRegionPublication && !citizenRetirementDue)) {
         return false;
     }
     touchesScratch = true;
@@ -170,7 +176,7 @@ bool consume_activity_keepalive(Session& session,
     std::uint64_t stagedReflectedGroupSession = 0;
     // The burst is what step 36 waits on. When both timers fire together the roster goes out last,
     // because the type-13 key binds to the player message 12 creates.
-    if (!keepaliveDue && !regionPublicationDue && !citizenRetirementDue) {
+    if (!keepaliveDue && !actionableRegionPublication && !citizenRetirementDue) {
         session.activityRosterDueTick = now + kRosterBurstIntervalMs;
         published = append_roster_notification(
             session, scratch, key, nextSendNonce, scratch.framed, framedSize, true);
@@ -190,7 +196,7 @@ bool consume_activity_keepalive(Session& session,
         reflectedGroup != 0 && reflectedGroup != session.activityReflectedGroupSession;
     // The client applies one membership update per revision and drops repeats. Either a new region
     // or a newly admitted gameplay host therefore needs a fresh root-membership revision.
-    const bool regionRepublishReady = regionPublicationDue
+    const bool regionRepublishReady = actionableRegionPublication
                                       && (!publicRegion
                                           || server::gameplay::advertisement_state(effectiveRegion)
                                                  == server::gameplay::AdvertisementState::ready);
@@ -239,9 +245,9 @@ bool consume_activity_keepalive(Session& session,
     const bool settleCitizenAdvertisement =
         citizenAdvertisementUnsettled && advertisedGroupPublished && retirementReady;
     const bool includeCitizenAdvertisement =
-        citizenAdvertisementUnsettled && !settleCitizenAdvertisement;
+        citizenAdvertisementUnsettled && !settleCitizenAdvertisement && !citizenPublicationHeld;
     const bool publishesMembership =
-        hasMembership
+        hasMembership && !citizenPublicationHeld
         && ((regionPublicationDue && (!citizenRetryDue || membershipRepublished))
             || settleCitizenAdvertisement || groupReflectionChanged
             || (!citizenRetryDue
@@ -329,7 +335,8 @@ bool consume_activity_keepalive(Session& session,
                       line.size(),
                       "ev=activity stage=keepalive result=%s bytes=%zu membership=%u key=0x%llX "
                       "spawn_state=%d teleport_state=%d teleport_slice=%d token=%u revision=%u "
-                      "advert=%u citizen=%u settle=%u visit=%u published=%d/%u settled=%d/%u "
+                      "advert=%u citizen=%u held=%u settle=%u visit=%u published=%d/%u "
+                      "settled=%d/%u "
                       "public=%u group=0x%llX group_published=%u group_settled=%u ready=%u "
                       "admit=%llu/%llu retry=%u/%u",
                       published ? "ok" : "fail",
@@ -343,6 +350,7 @@ bool consume_activity_keepalive(Session& session,
                       reportedRevision,
                       static_cast<unsigned>(advertisement),
                       static_cast<unsigned>(includeCitizenAdvertisement),
+                      static_cast<unsigned>(citizenPublicationHeld),
                       static_cast<unsigned>(settleCitizenAdvertisement),
                       static_cast<unsigned>(visitToken),
                       session.activityPublishedRegion,

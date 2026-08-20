@@ -748,9 +748,9 @@ Once the director evaluates an encounter and creates native squad/member objects
   416/424/456/96/488/496 without a network hitch, assertion, forced disconnect, or phantom private
   host. Shutdown was orderly.
 - No synthetic entity was sent in that traversal. Every candidate window had an unsupported or
-  unsettled scheduler layout, so the fail-closed gate preserved the channel. The three large native
-  scheduler bodies captured during reconfiguration had no accompanying kind-0 create/update encoder
-  call and are control/topology traffic, not hidden Vandal records.
+  unsettled scheduler layout, so the fail-closed gate preserved the channel. The three large
+  external scheduler tails captured during reconfiguration had no accompanying kind-0
+  create/update encoder call and are control/topology traffic, not hidden Vandal records.
 - The supplied retail packet bundle contains the real enemy replication only in its raw port-3074
   gameplay UDP flows. Those flows total thousands of high-rate datagrams and cover EDZ/lost-sector
   play, but the bundle retains only framing plus high-entropy payload and omits the gameplay cipher
@@ -768,18 +768,40 @@ Once the director evaluates an encounter and creates native squad/member objects
   views, and emits one deduplicated `scheduler-outbound-shape` summary. It changes no packet,
   scheduler, view, entity, or transition state and is capped at 32 unique shapes per process.
 - Release SHA-256 for the outbound lane-split test is
-  `4dd1685f070b1d46d15b41b37b72fd05a92f1e44734a87b028c286e342349870`. On the next traversal,
-  `predicted_bits` must equal the corresponding server `scheduler-body bits`; the per-view
-  `entity=` width will then prove whether the 1114/1124/1178-bit retail-like bodies contain entity
-  lane data or only event/mask/fixed topology. A nonzero entity lane alone is not yet an enemy:
-  genuine kind-0 creation still requires a matching native `sobject-create`/`sobject-update` or
-  decoded entity record.
+  `4dd1685f070b1d46d15b41b37b72fd05a92f1e44734a87b028c286e342349870`. The traversal captured
+  five complete native shapes. Every view's entity lane was exactly 11 bits including the native
+  one-bit finalizer, so its payload body was the same empty 10-bit prelude every time. There was no
+  `sobject-create`, `sobject-update`, decoded entity record, promotion, type-2 job, or binding.
+  The earlier 1050/1114/1178-bit server values are the remaining external trailer after scheduler
+  presence, not the scheduler's own width; their long zero suffix is reserve/padding. The server
+  diagnostic is consequently renamed `scheduler-tail`, while the client reports its independently
+  delimited native width as `native_bits`.
+- The missing outbound boundary is now before kind-0 encoding. Ghidra identifies
+  `FUN_14170C080` as the native entity-candidate collector: it walks manager bitset `+0xC920`, maps
+  each replicated slot to its internal object, checks namespace support/ownership/dependency state,
+  and only then emits a packed entity/view/lane candidate. The next passive hook records the exact
+  watched slot's active bit, support mask, owner match, per-namespace `0x80` eligibility bit,
+  suppression flag, and whether the collector actually emitted it. This determines why the entity
+  lane remains empty without altering the scheduler or object state.
+- The final traversal hang is independent of the scheduler probe. The client received a third
+  public descriptor while two public views were still alive, force-disconnected one target, queued
+  the replacement's join-complete, and then stopped entering the managed network pump. The server
+  had already admitted and established the replacement; no join response was missing. The safe
+  repair is to hold a new public descriptor until an admitted slot is genuinely free, including a
+  short post-release grace, rather than forcing native role/namespace state or rejecting the join
+  after the client has begun teardown.
+- The implemented hold covers both immediate transaction replies and periodic keepalives. Activity
+  message 15 marks the exact leaving group through its bound activity-host token; an ordinary
+  gameplay leave releases it immediately, while a one-second fallback retires only that marked row
+  when the client drops it locally without a gameplay leave. The descriptor then waits a further
+  125 ms teardown grace. Release SHA-256 for the collector plus lifecycle candidate is
+  `203cce8b1121e33ee1ad39eea9dcefa470602f9dff8349343f71f34bfcf248f1`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
-- Deployment remains manual.
+- The deployed game DLL matches the Release SHA-256 above.
 
 ## Assessment of upstream commit `b8ccfb9b`
 

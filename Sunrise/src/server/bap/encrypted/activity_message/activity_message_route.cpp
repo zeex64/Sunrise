@@ -19,6 +19,7 @@
 #include "../../../../middleware/bap/activity_message/entity_slots.h"
 #include "../../../../middleware/bap/activity_message/incident.h"
 #include "../../../../state/activity/runtime.h"
+#include "../../../gameplay/group/group_host.h"
 #include "membership/activity_membership_route.h"
 #include "middleware/bap/activity_message/activity_entity_slot_request_parser.h"
 #include "patch_epoch/activity_patch_epoch_route.h"
@@ -174,16 +175,16 @@ void report_message(std::uint32_t messageType,
     plan.delivery = Delivery::joinNotifications;
     plan.mutationDomain = MutationDomain::entitySlots;
     std::array<char, core::log::kLineCapacity> line{};
-    const int written = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=activity stage=join result=prepared session=0x%016llX member=0x%016llX "
-        "character=0x%016llX granted=%zu reserve=%zu",
-        static_cast<unsigned long long>(parsed.sessionId),
-        static_cast<unsigned long long>(parsed.memberKey),
-        static_cast<unsigned long long>(parsed.characterSoid),
-        granted,
-        reserve);
+    const int written =
+        std::snprintf(line.data(),
+                      line.size(),
+                      "ev=activity stage=join result=prepared session=0x%016llX member=0x%016llX "
+                      "character=0x%016llX granted=%zu reserve=%zu",
+                      static_cast<unsigned long long>(parsed.sessionId),
+                      static_cast<unsigned long long>(parsed.memberKey),
+                      static_cast<unsigned long long>(parsed.characterSoid),
+                      granted,
+                      reserve);
     if (written > 0) {
         core::log::write(core::log::Channel::server,
                          core::log::Level::info,
@@ -394,6 +395,9 @@ bool process(std::uint64_t boundSessionId,
         return true;
     } else if (const char* name = accepted_name(request.messageType); name != nullptr) {
         // One-way with nothing to change here. Accepting is the whole contract.
+        if (request.messageType == 15) {
+            server::gameplay::group::note_citizen_leave(boundSessionId);
+        }
         report_accepted(request.messageType, name, request.payload.size());
         return true;
     } else {

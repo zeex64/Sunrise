@@ -89,13 +89,13 @@ __declspec(noinline) std::uint8_t __fastcall encode(std::uint32_t schema,
             capture.bitCount = static_cast<std::uint16_t>(delta);
             capture.present = true;
 
-            scheduler_output_probe::commit_signature(capture.bitCount, capture.value);
-
             AcquireSRWLockExclusive(&g_captureLock);
             const bool changed = g_capture.value != capture.value
                                  || g_capture.bitCount != capture.bitCount || !g_capture.present;
             g_capture = capture;
             ReleaseSRWLockExclusive(&g_captureLock);
+
+            scheduler_output_probe::commit_signature(capture.bitCount, capture.value, changed);
 
             if (changed) {
                 std::uint64_t first = 0;

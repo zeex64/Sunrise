@@ -1,5 +1,7 @@
 #include "activity_transaction_notifications.h"
 
+#include <Windows.h>
+
 #include "../../../../core/logging/log.h"
 #include "../../../gameplay/gameplay_advertisement.h"
 #include "../../../gameplay/group/group_host.h"
@@ -118,7 +120,13 @@ membership_publication(const Session& session,
         return false;
     }
     const MembershipPublication publication = membership_publication(session, activity);
-    held = publication.includesCitizenAdvertisement && advertisement_pending(activity);
+    // Synchronous membership, refresh, and authoritative replies all pass here. Apply the same
+    // two-slot boundary as the keepalive so none can publish a third public descriptor while the
+    // previous target is still admitted or inside its native teardown grace.
+    held = publication.includesCitizenAdvertisement
+           && (advertisement_pending(activity)
+               || !server::gameplay::group::citizen_publication_ready(publication.groupSession,
+                                                                      GetTickCount64()));
     if (held) {
         return false;
     }
@@ -252,7 +260,8 @@ bool stage_notifications(Session& session,
         bool held = false;
         const bool staged =
             stage_membership(session, scratch, activity, key, nonce, response, written, held);
-        // A held membership is published by the next keepalive once its gameplay host exists.
+        // A held membership is published by the next keepalive once its host and public slot are
+        // ready.
         return staged || held;
     }
     if (activity.delivery == activity_message::Delivery::refreshNotifications) {

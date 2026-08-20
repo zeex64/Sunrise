@@ -12,9 +12,13 @@ struct EntityDebugSnapshot {
     std::uint32_t rsat{};
     std::uint32_t nativeObjectId{};
     std::uint32_t nativeObjectIndex{0xFFFFFFFF};
+    std::uint32_t collectorSupportMask{};
     std::int32_t namespaceId{-1};
     std::int32_t region{-1};
     std::int32_t type2Result{-1};
+    std::int32_t collectorInternal{-1};
+    std::uint16_t collectorObjectFlags{};
+    std::uint16_t collectorNamespaceFlags{};
     std::uint16_t slot{};
     std::uint16_t cell{};
     std::uint16_t wireFlags{};
@@ -34,6 +38,10 @@ struct EntityDebugSnapshot {
     bool nativeSeen{};
     bool bindSeen{};
     bool bound{};
+    bool collectorSeen{};
+    bool collectorActive{};
+    bool collectorEligible{};
+    bool collectorCandidate{};
 };
 
 /** @return Replicated-handle to native-object binding replacement body. */
@@ -80,6 +88,17 @@ void record_native(std::uint32_t rsat, std::uint32_t objectId) noexcept;
 
 /** Records one glue-table dispatch and whether its postcondition became true. */
 void record_binding(std::uint32_t entityId, std::uint32_t nativeObjectIndex, bool bound) noexcept;
+
+/** Records the watched entity's passive outbound scheduler-collector state. */
+void record_collector(std::int32_t namespaceId,
+                      std::uint32_t entityId,
+                      std::int32_t internalIndex,
+                      bool active,
+                      bool eligible,
+                      bool candidate,
+                      std::uint16_t objectFlags,
+                      std::uint16_t namespaceFlags,
+                      std::uint32_t supportMask) noexcept;
 
 /** Copies the latest synthetic entity snapshot for the HUD. */
 [[nodiscard]] bool debug_snapshot(EntityDebugSnapshot& output) noexcept;

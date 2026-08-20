@@ -146,6 +146,17 @@ void draw() noexcept {
                 entity.type2JobReturned ? 1U : 0U,
                 entity.applied ? 1U : 0U);
 
+    begin_row("Outbound");
+    if (!entity.collectorSeen) {
+        ImGui::TextDisabled("collector not observed");
+    } else {
+        ImGui::Text("internal %d  active %u  eligible %u  candidate %u",
+                    entity.collectorInternal,
+                    entity.collectorActive ? 1U : 0U,
+                    entity.collectorEligible ? 1U : 0U,
+                    entity.collectorCandidate ? 1U : 0U);
+    }
+
     begin_row("Manager");
     if (!managerPresent) {
         ImGui::TextDisabled("unknown");
