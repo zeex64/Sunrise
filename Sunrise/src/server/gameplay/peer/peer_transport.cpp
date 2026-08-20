@@ -107,13 +107,16 @@ constexpr std::uint16_t kProvenSchedulerWireBits = 203;
 constexpr std::uint8_t kTwoViewProbeViewCount = 2;
 /** Captured two-view signature, including its one-bit update gate. */
 constexpr std::uint16_t kTwoViewProbeWireBits = 275;
-/** The transition capture orders the outgoing EDZ view before the current Basin view. */
-constexpr std::uint8_t kTwoViewProbeTargetView = 1;
+/** The transition capture orders the outgoing EDZ view before the current Basin authority view. */
+constexpr std::uint8_t kTwoViewProbeEntityView = 0;
+constexpr std::uint8_t kTwoViewProbeAuthorityView = 1;
+/** Namespace owned by the live outgoing EDZ view in the captured transition. */
+constexpr std::int32_t kTwoViewProbeEntityNamespace = 1;
 /** Current Basin's signed region and scenario-resolved map cell. */
 constexpr std::int32_t kTwoViewProbeRegion = 24;
 constexpr std::uint8_t kTwoViewProbeBubble = 3;
 constexpr std::uint8_t kTwoViewProbeCell = 11;
-/** Signature, complete old-view tail, and the target view's full 220-bit handler body. */
+/** Signature, target view's 220-bit entity body, and the current view's complete empty tail. */
 constexpr std::uint16_t kTwoViewProbeBodyBits = 501;
 /** Fail before the native four-second corrupt-packet timeout can close the channel. */
 constexpr std::uint64_t kTwoViewProbeTimeout = 3000;
@@ -184,11 +187,16 @@ struct EntityCreatePlan {
     bool present{};
 };
 
-/** One fail-contained scheduler validation carrying an atomic create in the selected view. */
+/** One fail-contained scheduler validation carrying an atomic create in a distinct live view. */
 struct TwoViewProbePlan {
     state::gameplay::SchedulerSignature scheduler{};
+    /** Current Basin authority token retained for topology and acknowledgement proof. */
     std::uint64_t token{};
+    /** Live scheduler-view token whose entity manager receives the bounded record. */
+    std::uint64_t entityToken{};
+    /** Current Basin authority view; this remains the globally selected spatial context. */
     std::uint8_t selectedView{};
+    std::uint8_t entityView{};
     std::uint8_t remoteViews{};
     bool remoteAlreadyMatches{};
     bool present{};
@@ -202,6 +210,7 @@ struct TwoViewProbeReport {
     };
 
     std::uint64_t token{};
+    std::uint64_t entityToken{};
     std::uint64_t elapsed{};
     std::uint16_t packet{};
     std::uint8_t packetsAfter{};
@@ -235,6 +244,7 @@ enum class EntityCreateGate : std::uint8_t {
 /** One transition-only snapshot of the guarded entity-create inputs. */
 struct EntityCreateGateReport {
     std::uint64_t token{};
+    std::uint64_t entityToken{};
     std::uint64_t readyAge{};
     std::size_t queueCount{};
     std::uint32_t occupied{};
@@ -246,6 +256,8 @@ struct EntityCreateGateReport {
     std::int32_t spatialRegion{state::activity::membership::kAbsentRegionIndex};
     EntityCreateGate gate{EntityCreateGate::view};
     std::uint8_t signatureViews{};
+    std::uint8_t authorityView{};
+    std::uint8_t entityView{};
     std::uint8_t localViews{};
     std::uint8_t remoteViews{};
     std::uint8_t handleGeneration{};
@@ -611,19 +623,21 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
-/** Writes the exact two-view signature, an empty old view, and one atomic current-view create. */
+/** Writes the exact two-view signature, one old-view create, and an empty current-view tail. */
 [[nodiscard]] bool write_two_view_probe(bits::Writer& writer,
                                         const TwoViewProbePlan& plan,
                                         const EntityCreatePlan& entityCreate) noexcept {
     if (!plan.present || !plan.scheduler.present
         || plan.scheduler.viewCount != kTwoViewProbeViewCount
         || plan.scheduler.wireBits != kTwoViewProbeWireBits
-        || plan.selectedView != kTwoViewProbeTargetView || !entityCreate.present
-        || !entityCreate.combinedCreate || entityCreate.updateOnly
-        || entityCreate.updateBits != kFirstEntityUpdateBits || entityCreate.token != plan.token
-        || entityCreate.viewIndex != plan.selectedView
-        || entityCreate.schedulerKey != plan.scheduler.views[plan.selectedView].key
-        || entityCreate.schedulerTag != plan.scheduler.views[plan.selectedView].tag
+        || plan.selectedView != kTwoViewProbeAuthorityView
+        || plan.entityView != kTwoViewProbeEntityView || plan.entityToken == 0
+        || plan.entityToken == plan.token || !entityCreate.present || !entityCreate.combinedCreate
+        || entityCreate.updateOnly || entityCreate.updateBits != kFirstEntityUpdateBits
+        || entityCreate.token != plan.entityToken || entityCreate.viewIndex != plan.entityView
+        || entityCreate.namespaceId != kTwoViewProbeEntityNamespace
+        || entityCreate.schedulerKey != plan.scheduler.views[plan.entityView].key
+        || entityCreate.schedulerTag != plan.scheduler.views[plan.entityView].tag
         || entityCreate.rsat != state::gameplay::kFirstEntityRsat
         || !entityCreate.spatialCellPresent || entityCreate.spatialRegion != kTwoViewProbeRegion
         || entityCreate.spatialBubble != kTwoViewProbeBubble
@@ -632,8 +646,8 @@ write_scheduler_signature(bits::Writer& writer,
         return false;
     }
     for (std::size_t index = 0; index < kTwoViewProbeViewCount; ++index) {
-        if (index == plan.selectedView ? !write_entity_create_view(writer, entityCreate)
-                                       : !write_complete_empty_scheduler_view(writer)) {
+        if (index == plan.entityView ? !write_entity_create_view(writer, entityCreate)
+                                     : !write_complete_empty_scheduler_view(writer)) {
             return false;
         }
     }
@@ -678,6 +692,25 @@ write_scheduler_signature(bits::Writer& writer,
     return true;
 }
 
+/** @return True only when one server view row owns the requested scheduler token. */
+[[nodiscard]] bool unique_view_token(const state::gameplay::PeerLink& peer,
+                                     std::uint64_t token) noexcept {
+    if (token == 0) {
+        return false;
+    }
+    bool found = false;
+    for (const state::gameplay::ViewSignature& view : peer.views) {
+        if (view.token != token) {
+            continue;
+        }
+        if (found) {
+            return false;
+        }
+        found = true;
+    }
+    return found;
+}
+
 /**
  * Builds the one-shot two-view validation only for the bound view owned by the current world.
  * The remote layout need only be readable: direct packet acknowledgement, not mutation, is proof.
@@ -720,14 +753,18 @@ write_scheduler_signature(bits::Writer& writer,
         }
         selectedIndex = index;
     }
-    if (selectedIndex == scheduler.views.size() || selectedIndex != kTwoViewProbeTargetView
-        || scheduler.views[0].key == capture.schedulerKey) {
+    const std::uint64_t entityToken = scheduler.views[kTwoViewProbeEntityView].key;
+    if (selectedIndex == scheduler.views.size() || selectedIndex != kTwoViewProbeAuthorityView
+        || entityToken == 0 || entityToken == capture.schedulerKey
+        || !unique_view_token(peer, entityToken)) {
         return false;
     }
 
     output.scheduler = scheduler;
     output.token = selected.signature.token;
+    output.entityToken = entityToken;
     output.selectedView = static_cast<std::uint8_t>(selectedIndex);
+    output.entityView = kTwoViewProbeEntityView;
     output.remoteViews = capture.schedulerRemoteViewCount;
     output.remoteAlreadyMatches = scheduler_matches_remote_capture(scheduler, capture);
     output.present = true;
@@ -752,12 +789,13 @@ write_scheduler_signature(bits::Writer& writer,
 }
 
 /**
- * Builds the current-Basin atomic create that accompanies the first two-view signature.
+ * Builds an outgoing-view atomic create under the current Basin authority/spatial context.
  * A retained plan supplies only the already-consumed native update during send revalidation;
  * every topology, slot, resource, and cell field is rebuilt from current live state.
  */
 [[nodiscard]] bool
-prepare_entity_create_with_two_view_probe(const SelectedReplicationView& selected,
+prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
+                                          const SelectedReplicationView& selected,
                                           const TwoViewProbePlan& probe,
                                           const EntityCreatePlan* retained,
                                           EntityCreatePlan& output,
@@ -767,7 +805,10 @@ prepare_entity_create_with_two_view_probe(const SelectedReplicationView& selecte
     if (!probe.present || !probe.scheduler.present
         || probe.scheduler.viewCount != kTwoViewProbeViewCount
         || probe.scheduler.wireBits != kTwoViewProbeWireBits
-        || probe.selectedView != kTwoViewProbeTargetView) {
+        || probe.selectedView != kTwoViewProbeAuthorityView
+        || probe.entityView != kTwoViewProbeEntityView || probe.entityToken == 0
+        || probe.entityToken == probe.token
+        || probe.scheduler.views[probe.entityView].key != probe.entityToken) {
         gate = EntityCreateGate::schedulerShape;
         return false;
     }
@@ -783,14 +824,28 @@ prepare_entity_create_with_two_view_probe(const SelectedReplicationView& selecte
         gate = EntityCreateGate::view;
         return false;
     }
-    if (!selected.capturePresent) {
-        gate = EntityCreateGate::captureMissing;
+    if (!unique_view_token(peer, probe.entityToken)) {
+        gate = EntityCreateGate::view;
         return false;
     }
 
-    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
-    if (!capture.candidatePresent || capture.namespaceId < 0) {
+    client::hooks::network::entity_slot_probe::ViewCapture capture{};
+    if (!client::hooks::network::entity_slot_probe::find(probe.entityToken, capture)) {
+        gate = EntityCreateGate::captureMissing;
+        return false;
+    }
+    if (capture.token != probe.entityToken || capture.schedulerKey != capture.token
+        || capture.namespaceId != kTwoViewProbeEntityNamespace || capture.manager == nullptr) {
+        gate = EntityCreateGate::schedulerIdentity;
+        return false;
+    }
+    if (!capture.candidatePresent) {
         gate = EntityCreateGate::candidate;
+        return false;
+    }
+    if (capture.occupiedCount != kFirstEntityBaselineOccupied
+        || capture.slot != kFirstEntityBaselineOccupied) {
+        gate = EntityCreateGate::baseline;
         return false;
     }
     if (capture.slot >= 0x2000 || capture.availableCount == 0) {
@@ -812,8 +867,7 @@ prepare_entity_create_with_two_view_probe(const SelectedReplicationView& selecte
         gate = EntityCreateGate::spatialCell;
         return false;
     }
-    if (capture.token != selected.signature.token || capture.schedulerKey != capture.token
-        || !scheduler_matches_local_capture(probe.scheduler, capture)) {
+    if (!scheduler_matches_local_capture(probe.scheduler, capture)) {
         gate = EntityCreateGate::schedulerIdentity;
         return false;
     }
@@ -830,7 +884,7 @@ prepare_entity_create_with_two_view_probe(const SelectedReplicationView& selecte
         }
         match = index;
     }
-    if (match != probe.selectedView) {
+    if (match != probe.entityView) {
         gate = EntityCreateGate::schedulerEntry;
         return false;
     }
@@ -1323,11 +1377,15 @@ prepare_entity_create_with_two_view_probe(const SelectedReplicationView& selecte
 [[nodiscard]] EntityCreateGateReport
 capture_entity_create_gate(const state::gameplay::PeerLink& peer,
                            const SelectedReplicationView& selected,
+                           const TwoViewProbePlan& probe,
                            const EntityCreatePlan& candidate,
                            EntityCreateGate gate,
                            std::uint64_t now) noexcept {
     EntityCreateGateReport output{};
     output.token = selected.present ? selected.signature.token : 0;
+    output.entityToken = candidate.present ? candidate.token : output.token;
+    output.authorityView = candidate.present ? candidate.viewIndex : 0;
+    output.entityView = candidate.present ? candidate.viewIndex : 0;
     output.gate = gate;
     output.queueCount = peer.outbound.count;
     output.awaitingAcknowledgement = peer.outbound.awaitingAcknowledgement;
@@ -1345,24 +1403,39 @@ capture_entity_create_gate(const state::gameplay::PeerLink& peer,
     output.spatialBubble = spatial.spatialBubble;
     output.spatialCell = spatial.spatialCell;
 
-    output.capturePresent = selected.capturePresent;
+    client::hooks::network::entity_slot_probe::ViewCapture entityCapture{};
+    const client::hooks::network::entity_slot_probe::ViewCapture* capture = nullptr;
+    if (probe.present) {
+        output.entityToken = probe.entityToken;
+        output.authorityView = probe.selectedView;
+        output.entityView = probe.entityView;
+        output.capturePresent =
+            client::hooks::network::entity_slot_probe::find(probe.entityToken, entityCapture);
+        if (output.capturePresent) {
+            capture = &entityCapture;
+        }
+    } else {
+        output.capturePresent = selected.capturePresent;
+        if (output.capturePresent) {
+            capture = &selected.capture;
+        }
+    }
     if (!output.capturePresent) {
         return output;
     }
-    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
-    output.candidatePresent = capture.candidatePresent;
-    output.namespaceId = capture.namespaceId;
-    output.occupied = capture.occupiedCount;
-    output.occupiedLow = capture.occupiedLow;
-    output.available = capture.availableCount;
-    output.slot = capture.slot;
-    output.handleGeneration = capture.handleGeneration;
-    output.reservedGeneration = capture.reservedGeneration;
-    output.objectGeneration = capture.objectGeneration;
-    output.localSignatureValid = capture.schedulerSignatureValid;
-    output.remoteSignatureValid = capture.schedulerRemoteSignatureValid;
-    output.localViews = capture.schedulerViewCount;
-    output.remoteViews = capture.schedulerRemoteViewCount;
+    output.candidatePresent = capture->candidatePresent;
+    output.namespaceId = capture->namespaceId;
+    output.occupied = capture->occupiedCount;
+    output.occupiedLow = capture->occupiedLow;
+    output.available = capture->availableCount;
+    output.slot = capture->slot;
+    output.handleGeneration = capture->handleGeneration;
+    output.reservedGeneration = capture->reservedGeneration;
+    output.objectGeneration = capture->objectGeneration;
+    output.localSignatureValid = capture->schedulerSignatureValid;
+    output.remoteSignatureValid = capture->schedulerRemoteSignatureValid;
+    output.localViews = capture->schedulerViewCount;
+    output.remoteViews = capture->schedulerRemoteViewCount;
     return output;
 }
 
@@ -2075,6 +2148,7 @@ void consume_established(const state::gameplay::Endpoint& from,
     std::uint16_t clearedPacket = 0;
     std::uint64_t sessionId = 0;
     std::uint64_t twoViewProbeToken = 0;
+    std::uint64_t twoViewProbeEntityToken = 0;
     std::uint64_t twoViewProbeElapsed = 0;
     std::uint16_t twoViewProbePacket = 0;
     std::uint8_t twoViewProbePacketsAfter = 0;
@@ -2100,6 +2174,8 @@ void consume_established(const state::gameplay::Endpoint& from,
             const std::uint64_t elapsed = now - peer->twoViewProbeSentAt;
             if (elapsed >= kTwoViewProbeTimeout) {
                 twoViewProbeToken = peer->twoViewProbeToken;
+                twoViewProbeEntityToken =
+                    peer->twoViewProbeScheduler.views[kTwoViewProbeEntityView].key;
                 twoViewProbePacket = peer->twoViewProbePacket;
                 twoViewProbePacketsAfter = peer->twoViewProbePacketsAfter;
                 twoViewProbeElapsed = elapsed;
@@ -2107,6 +2183,8 @@ void consume_established(const state::gameplay::Endpoint& from,
                 twoViewProbeExpired = true;
             } else if (wire::acknowledgement_covers(packet.ack, peer->twoViewProbePacket)) {
                 twoViewProbeToken = peer->twoViewProbeToken;
+                twoViewProbeEntityToken =
+                    peer->twoViewProbeScheduler.views[kTwoViewProbeEntityView].key;
                 twoViewProbePacket = peer->twoViewProbePacket;
                 twoViewProbePacketsAfter = peer->twoViewProbePacketsAfter;
                 twoViewProbeElapsed = elapsed;
@@ -2147,9 +2225,13 @@ void consume_established(const state::gameplay::Endpoint& from,
     if (twoViewProbeAccepted) {
         report(core::log::Level::info,
                "ev=gameplay stage=scheduler-two-view-probe result=transport-accepted proof=ack "
-               "token=0x%016llX packet=%u ack_base=%u ack_entries=%u packets_after=%u "
+               "authority=0x%016llX/%u entity=0x%016llX/%u packet=%u "
+               "ack_base=%u ack_entries=%u packets_after=%u "
                "elapsed_ms=%llu",
                static_cast<unsigned long long>(twoViewProbeToken),
+               static_cast<unsigned>(kTwoViewProbeAuthorityView),
+               static_cast<unsigned long long>(twoViewProbeEntityToken),
+               static_cast<unsigned>(kTwoViewProbeEntityView),
                static_cast<unsigned>(twoViewProbePacket),
                static_cast<unsigned>(packet.ack.receiveHead),
                static_cast<unsigned>(packet.ack.reportedCount),
@@ -2158,8 +2240,12 @@ void consume_established(const state::gameplay::Endpoint& from,
     } else if (twoViewProbeExpired) {
         report(core::log::Level::warn,
                "ev=gameplay stage=scheduler-two-view-probe result=unacknowledged reason=timeout "
-               "token=0x%016llX packet=%u packets_after=%u elapsed_ms=%llu",
+               "authority=0x%016llX/%u entity=0x%016llX/%u packet=%u packets_after=%u "
+               "elapsed_ms=%llu",
                static_cast<unsigned long long>(twoViewProbeToken),
+               static_cast<unsigned>(kTwoViewProbeAuthorityView),
+               static_cast<unsigned long long>(twoViewProbeEntityToken),
+               static_cast<unsigned>(kTwoViewProbeEntityView),
                static_cast<unsigned>(twoViewProbePacket),
                static_cast<unsigned>(twoViewProbePacketsAfter),
                static_cast<unsigned long long>(twoViewProbeElapsed));
@@ -2308,9 +2394,11 @@ void consume_established(const state::gameplay::Endpoint& from,
         EntityCreateGate ignoredGate = EntityCreateGate::view;
         if (!entityCreate.present || !prepare_two_view_probe(peer, selected, verified)
             || !prepare_entity_create_with_two_view_probe(
-                selected, verified, &entityCreate, verifiedEntity, ignoredGate)
+                peer, selected, verified, &entityCreate, verifiedEntity, ignoredGate)
             || verified.token != twoViewProbe.token
+            || verified.entityToken != twoViewProbe.entityToken
             || verified.selectedView != twoViewProbe.selectedView
+            || verified.entityView != twoViewProbe.entityView
             || verified.scheduler.value != twoViewProbe.scheduler.value
             || verified.scheduler.wire != twoViewProbe.scheduler.wire
             || verified.scheduler.wireBits != twoViewProbe.scheduler.wireBits
@@ -2327,7 +2415,8 @@ void consume_established(const state::gameplay::Endpoint& from,
                                   && scheduler.viewCount == kProvenSchedulerViewCount
                                   && scheduler.wireBits == kProvenSchedulerWireBits;
     const bool twoViewEntityScheduler =
-        entityCreate.present && scheduler.present && scheduler.viewCount == kTwoViewProbeViewCount
+        !twoViewProbe.present && entityCreate.present && scheduler.present
+        && scheduler.viewCount == kTwoViewProbeViewCount
         && scheduler.wireBits == kTwoViewProbeWireBits && two_view_layout_ready(peer, selected);
     if (twoViewEntityScheduler) {
         if (!selected.capturePresent || entityCreate.token != selected.signature.token
@@ -2595,6 +2684,7 @@ void service(std::uint64_t now) noexcept {
                 && twoViewProbeReportCount < twoViewProbeReports.size()) {
                 TwoViewProbeReport& probe = twoViewProbeReports[twoViewProbeReportCount++];
                 probe.token = peer.twoViewProbeToken;
+                probe.entityToken = peer.twoViewProbeScheduler.views[kTwoViewProbeEntityView].key;
                 probe.packet = peer.twoViewProbePacket;
                 probe.packetsAfter = peer.twoViewProbePacketsAfter;
                 probe.elapsed = elapsed;
@@ -2608,6 +2698,8 @@ void service(std::uint64_t now) noexcept {
                     && twoViewProbeReportCount < twoViewProbeReports.size()) {
                     TwoViewProbeReport& probe = twoViewProbeReports[twoViewProbeReportCount++];
                     probe.token = peer.twoViewProbeToken;
+                    probe.entityToken =
+                        peer.twoViewProbeScheduler.views[kTwoViewProbeEntityView].key;
                     probe.packet = peer.twoViewProbePacket;
                     probe.packetsAfter = peer.twoViewProbePacketsAfter;
                     probe.elapsed = elapsed;
@@ -2652,7 +2744,7 @@ void service(std::uint64_t now) noexcept {
                     gate = EntityCreateGate::controlQueue;
                 } else {
                     candidatePrepared = prepare_entity_create_with_two_view_probe(
-                        selected, twoViewProbe, nullptr, candidate, gate);
+                        peer, selected, twoViewProbe, nullptr, candidate, gate);
                 }
             } else {
                 candidatePrepared =
@@ -2696,7 +2788,7 @@ void service(std::uint64_t now) noexcept {
         if (peer.entityCreateGate != gateValue && gateReportCount < gateReports.size()) {
             peer.entityCreateGate = gateValue;
             gateReports[gateReportCount++] =
-                capture_entity_create_gate(peer, selected, candidate, gate, now);
+                capture_entity_create_gate(peer, selected, twoViewProbe, candidate, gate, now);
         }
         // An unacknowledged send queue keeps the packet going out until the peer confirms it.
         // Every packet burns one sequence, so the resend is paced.
@@ -2796,8 +2888,12 @@ void service(std::uint64_t now) noexcept {
         if (probe.kind == TwoViewProbeReport::Kind::remoteMutation) {
             report(core::log::Level::info,
                    "ev=gameplay stage=scheduler-two-view-probe result=remote-mutated proof=none "
-                   "token=0x%016llX packet=%u remote=%u packets_after=%u elapsed_ms=%llu",
+                   "authority=0x%016llX/%u entity=0x%016llX/%u packet=%u remote=%u "
+                   "packets_after=%u elapsed_ms=%llu",
                    static_cast<unsigned long long>(probe.token),
+                   static_cast<unsigned>(kTwoViewProbeAuthorityView),
+                   static_cast<unsigned long long>(probe.entityToken),
+                   static_cast<unsigned>(kTwoViewProbeEntityView),
                    static_cast<unsigned>(probe.packet),
                    static_cast<unsigned>(probe.remoteViews),
                    static_cast<unsigned>(probe.packetsAfter),
@@ -2806,9 +2902,13 @@ void service(std::uint64_t now) noexcept {
         }
         report(core::log::Level::warn,
                "ev=gameplay stage=scheduler-two-view-probe result=unacknowledged reason=%s "
-               "token=0x%016llX packet=%u packets_after=%u elapsed_ms=%llu",
+               "authority=0x%016llX/%u entity=0x%016llX/%u packet=%u packets_after=%u "
+               "elapsed_ms=%llu",
                probe.reason,
                static_cast<unsigned long long>(probe.token),
+               static_cast<unsigned>(kTwoViewProbeAuthorityView),
+               static_cast<unsigned long long>(probe.entityToken),
+               static_cast<unsigned>(kTwoViewProbeEntityView),
                static_cast<unsigned>(probe.packet),
                static_cast<unsigned>(probe.packetsAfter),
                static_cast<unsigned long long>(probe.elapsed));
@@ -2817,13 +2917,17 @@ void service(std::uint64_t now) noexcept {
         const EntityCreateGateReport& gate = gateReports[index];
         report(gate.gate == EntityCreateGate::ready ? core::log::Level::info
                                                     : core::log::Level::debug,
-               "ev=gameplay stage=entity-create-gate result=%s token=0x%016llX "
+               "ev=gameplay stage=entity-create-gate result=%s authority=0x%016llX/%u "
+               "entity=0x%016llX/%u "
                "queue=%zu/%u signature=%u/%u capture=%u candidate=%u namespace=%d "
                "occupied=%u occupied_low=0x%08X available=%u slot=%u gen=%u/%u/%u "
                "local=%u/%u remote=%u/%u spatial=%u region=%d bubble=%u cell=%u "
                "ready_ms=%llu attempts=%u",
                entity_create_gate_name(gate.gate),
                static_cast<unsigned long long>(gate.token),
+               static_cast<unsigned>(gate.authorityView),
+               static_cast<unsigned long long>(gate.entityToken),
+               static_cast<unsigned>(gate.entityView),
                gate.queueCount,
                gate.awaitingAcknowledgement ? 1U : 0U,
                static_cast<unsigned>(gate.signatureViews),
@@ -2856,13 +2960,16 @@ void service(std::uint64_t now) noexcept {
             if (sent) {
                 report(core::log::Level::info,
                        "ev=gameplay stage=scheduler-two-view-probe result=sent "
-                       "token=0x%016llX packet=%u signature_bits=%u body_bits=%u "
-                       "selected=%u local=%u remote=%u e0=0x%016llX/%u e1=0x%016llX/%u",
+                       "authority=0x%016llX/%u entity=0x%016llX/%u packet=%u "
+                       "signature_bits=%u body_bits=%u local=%u remote=%u "
+                       "e0=0x%016llX/%u e1=0x%016llX/%u",
                        static_cast<unsigned long long>(twoViewProbes[index].token),
+                       static_cast<unsigned>(twoViewProbes[index].selectedView),
+                       static_cast<unsigned long long>(twoViewProbes[index].entityToken),
+                       static_cast<unsigned>(twoViewProbes[index].entityView),
                        static_cast<unsigned>(owed[index].outboundHead),
                        static_cast<unsigned>(twoViewProbes[index].scheduler.wireBits),
                        static_cast<unsigned>(kTwoViewProbeBodyBits),
-                       static_cast<unsigned>(twoViewProbes[index].selectedView),
                        static_cast<unsigned>(twoViewProbes[index].scheduler.viewCount),
                        static_cast<unsigned>(twoViewProbes[index].remoteViews),
                        static_cast<unsigned long long>(twoViewProbes[index].scheduler.views[0].key),
@@ -2882,9 +2989,13 @@ void service(std::uint64_t now) noexcept {
                 if (reportFailure) {
                     report(core::log::Level::warn,
                            "ev=gameplay stage=scheduler-two-view-probe "
-                           "result=unacknowledged reason=send-fail token=0x%016llX packet=%u "
+                           "result=unacknowledged reason=send-fail "
+                           "authority=0x%016llX/%u entity=0x%016llX/%u packet=%u "
                            "packets_after=0 elapsed_ms=0",
                            static_cast<unsigned long long>(twoViewProbes[index].token),
+                           static_cast<unsigned>(twoViewProbes[index].selectedView),
+                           static_cast<unsigned long long>(twoViewProbes[index].entityToken),
+                           static_cast<unsigned>(twoViewProbes[index].entityView),
                            static_cast<unsigned>(owed[index].outboundHead));
                 }
             }

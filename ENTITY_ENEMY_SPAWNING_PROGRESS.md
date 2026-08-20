@@ -328,6 +328,32 @@ The slot-14 atomic run then completed the current wire milestone:
   `sobject-type2-job`. It distinguishes an unserviced namespace-2 manager, a globally suppressed or
   inactive-cell dirty row, serialization failure, queue refusal, and a successfully allocated job
   without changing the accepted entity packet.
+- The promotion/service run with Release SHA
+  `f0467bca1b03b7023767a68f3225b9208ee4a0982a849058a0f2e18a4ebdc7c1` proved the
+  immediate receive promotion succeeds. At `t=79733`, entity `0x00200000` entered namespace 2,
+  Basin cell 11 with wire flags `0x0003`, internal flags `0x0023`, object generation 2, and manager
+  occupancy changing `0 -> 1`. Packet 137 was directly acknowledged at `t=79799`, 67 ms after the
+  send. The exact namespace-2 manager never produced `sobject-dirty-service`; consequently there
+  was no `sobject-type2-job`, apply, kind-0 construction, target native registration, or bind for
+  the rest of the run. The first missing boundary is therefore active-manager selection before the
+  dirty scan, not packet framing, record validation, slot allocation, update decoding, or ACK.
+- The bounded active-manager proof keeps the current Basin token `...0003`, scheduler view 1,
+  region 24, bubble 3, and cell 11 as authority/spatial context, but places the atomic record in
+  scheduler view 0's live namespace-1 manager. The first deployed version, SHA
+  `13d441ff2878130ddd6e6c50a40b3a88a1a2df3ffa3512b76ccbe0e8d3c5b060`, sent
+  nothing. The target `...0002` was client-live as namespace 1 with manager `0x471F040`, exactly 13
+  occupied objects, and pristine next slot 13, but its server view stopped at replication-ready and
+  never reached the server's bound state. The extra target-bound predicate rejected the plan at
+  `t=79237` as `scheduler-shape`; no entity body or handler lane ran. Network health remained clean:
+  794 delivered, zero lost, and zero corrupt reads.
+- The correction treats a unique server view-token row as sufficient target presence while keeping
+  the target fail-closed on a non-null client manager, namespace 1, exact scheduler entry and local
+  layout, occupancy exactly 13, slot exactly 13, zero generations, and the proven 130-bit update.
+  The current `...0003` authority still must be bound and owned by the advertised Basin group. The
+  writer emits the view-0 entity body followed by view 1's complete empty tail, retaining
+  `body_bits=501`, one-shot/no-retry behavior, and direct ACK tracking. This corrected build is not
+  yet deployed; its Release SHA is
+  `f664c98f1a22f338eb41bc3ec62e3bc2b4d11a7e1220779ebe0af94d9894a330`.
 - The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
   remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
   when that view leaves. This candidate is Basin-only (region 24, bubble 3, cell 11), so stay in
@@ -335,13 +361,14 @@ The slot-14 atomic run then completed the current wire milestone:
 
 ## Immediate plan
 
-### 1. Classify the native promotion/service boundary
+### 1. Test the active namespace-1 manager
 
-- Repeat the Town-to-Basin transition once with the promotion diagnostic build and remain in Basin
-  bubble 3. Require the same 216-bit namespace-2 record and direct packet ACK.
-- `sobject-promote` must show internal create/update flags, object generation 2, and occupancy
-  changing from clear to set. `sobject-dirty-service` then reports whether the exact namespace-2
-  manager is selected and whether its root dirty bit is retained or drained.
+- Deploy SHA `f664c98f...`, repeat the Town-to-Basin transition once, and remain in Basin bubble 3.
+  Require the log to distinguish authority `...0003/1` from entity target `...0002/0`, retain
+  `body_bits=501`, decode the record in namespace 1 at slot 13, and directly ACK that packet.
+- `sobject-promote` must show internal create/update flags, object generation 2, and namespace-1
+  occupancy changing from clear to set. `sobject-dirty-service` then reports whether the runtime's
+  active manager is this exact namespace-1 manager and whether its root dirty bit is drained.
 - No service line means the active runtime is servicing another manager. A dirty bit that remains
   set with no job points to the service-wide busy/suppression branch. A dirty bit that clears with
   no `sobject-type2-job` points to a row prerequisite, led by Basin cell 11's active-cell bit.

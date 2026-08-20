@@ -2375,6 +2375,40 @@ root dirty transition at `sobject-dirty-service`, and the serializer/allocator r
 Release DLL SHA-256 is
 `f0467bca1b03b7023767a68f3225b9208ee4a0982a849058a0f2e18a4ebdc7c1`.
 
+That build proved normal receive promotion and isolated the missing service boundary. At `t=79732`,
+packet 137 carried the exact two-view 501-bit body and the namespace-2 view-1 create. At `t=79733`,
+the client decoded entity `0x00200000`, Basin cell 11, wire flags `0x0003`, internal flags `0x0023`,
+and object generation 2; `sobject-promote` reported manager `0x4730E48` occupancy changing `0 -> 1`.
+The packet was directly acknowledged at `t=79799`, after 67 ms. No `sobject-dirty-service` ever ran
+for that watched namespace-2 manager, and no type-2 job, apply, kind-0 construction, target native
+registration, or bind followed during more than two minutes of otherwise healthy traffic. The
+runtime is therefore servicing a different replication manager; the failure precedes dirty-row
+eligibility and active-cell testing.
+
+The next bounded proof preserved the bound/current Basin token `...0003` at scheduler view 1 as
+the authority and spatial source (region 24, bubble 3, cell 11), while moving only the entity record
+to scheduler view 0's namespace-1 token `...0002`. Its first Release SHA was
+`13d441ff2878130ddd6e6c50a40b3a88a1a2df3ffa3512b76ccbe0e8d3c5b060`.
+That deployed run did not emit a scheduler probe or entity record. The client-side target was live:
+manager `0x471F040`, namespace 1, scheduler entry 0, 13 occupied objects (`0x00001FFF`), and pristine
+next slot 13 with zero generations. On the server, however, token `...0002` stopped at
+replication-ready (`local=4 remote=4`) and never reached the bound state. Requiring the target to be
+server-bound made `prepare_two_view_probe` fail; the fallback gate reported `scheduler-shape` at
+`t=79237`. There were consequently no handler lanes, entity decode, promotion, native jobs, or
+synthetic occupancy change. The run was stable: 794 outgoing packets were delivered, none were
+lost, and the client reported zero corrupt reads.
+
+The corrected proof requires only one server view row with the exact target token; it does not
+mistake target stage-5 binding for client-manager liveness. The target remains strictly validated
+by a non-null client manager, namespace 1, exact scheduler key/tag and two-view local layout,
+occupancy exactly 13, next slot exactly 13, zero handle/reserved/object generations, loaded Vandal
+RSAT, and the exact 130-bit nearby update. The authority remains separately required to be the
+bound current Basin group at scheduler view 1. The writer places the full entity handler in view 0,
+then emits view 1's complete six-bit empty tail, so total body width remains 501 bits. It remains a
+one-shot combined create with no retry and direct ACK tracking. This corrected Release build has
+not yet been deployed; its SHA-256 is
+`f664c98f1a22f338eb41bc3ec62e3bc2b4d11a7e1220779ebe0af94d9894a330`.
+
 This synthetic entity is scoped to the selected replication view and map cell. Sunrise does not
 migrate it to a successor view or publish its removal yet, so an overlapping bubble may retain it
 briefly and then cull it when that view leaves. This functional test is deliberately Basin-only:
@@ -2431,14 +2465,15 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Repeat the Town-to-Basin transition with the promotion/service diagnostic and remain in Basin
-   bubble 3. Require the same 216-bit atomic record on token `...0003`, namespace 2, view 1, slot 0,
-   cell 11, plus direct ACK coverage.
+1. Deploy the corrected active-manager proof (`f664c98f...`), repeat the Town-to-Basin transition,
+   and remain in Basin bubble 3. Require authority `...0003/1`, entity target `...0002/0`, the same
+   501-bit total body, a 216-bit namespace-1 atomic record at slot 13/cell 11, and direct ACK.
 2. Classify the first missing post-decode boundary using `sobject-promote`,
-   `sobject-dirty-service`, and `sobject-type2-job`. No service on the namespace-2 manager indicates
-   an active-manager mismatch; retained dirty state with no job indicates service suppression;
-   cleared dirty state with no job indicates a row prerequisite such as active-cell membership;
-   builder result 4 indicates serialization failure; results 1/2/3 indicate queue refusal.
+   `sobject-dirty-service`, and `sobject-type2-job`. No service on the namespace-1 manager would
+   disprove the current active-manager hypothesis; retained dirty state with no job indicates
+   service suppression; cleared dirty state with no job indicates a row prerequisite such as
+   active-cell membership; builder result 4 indicates serialization failure; results 1/2/3
+   indicate queue refusal.
 3. Require `sobject-kind0 result=1`, target native registration, and
    `sobject-bind-dispatch status=bound` before treating the remaining failure as rendering.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
@@ -2489,6 +2524,12 @@ Current first-packet Basin Release candidate SHA-256:
 
 Current promotion/service diagnostic Release candidate SHA-256:
 `f0467bca1b03b7023767a68f3225b9208ee4a0982a849058a0f2e18a4ebdc7c1`.
+
+Deployed target-bound active-manager proof SHA-256 (no packet sent):
+`13d441ff2878130ddd6e6c50a40b3a88a1a2df3ffa3512b76ccbe0e8d3c5b060`.
+
+Pending corrected active-manager proof SHA-256 (not yet deployed):
+`f664c98f1a22f338eb41bc3ec62e3bc2b4d11a7e1220779ebe0af94d9894a330`.
 
 After manual deployment, inspect:
 
