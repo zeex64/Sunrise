@@ -405,11 +405,18 @@ The slot-14 atomic run then completed the current wire milestone:
   retry zero, and create suppression zero. Yet the batch stays `0 -> 0`, `state_out` becomes 1,
   and no type-2 call occurs. In `FUN_14170B660`, that combination is the branch where a cell below
   256 is absent from the active-cell bitset.
-- A bounded control now retains current Basin authority but writes Town cell 145 into the synthetic
-  namespace-1 record. This is expected to restore native construction/audio while remaining
-  invisible or culled in Basin, because the entity still belongs to the outgoing Town view. The
-  pending Release SHA is
-  `1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
+- The bounded Town-cell control conclusively completed the whole native construction chain.
+  Namespace 1 accepted cell 145, allocated the type-2 job, registered target RSAT `0x815B204B`,
+  returned kind-0 success, and bound native handle `0x58FC400C`. The Vandal produced clear
+  positional audio but remained invisible in Basin. This proves the remaining visual failure is
+  view/cell ownership, not create grammar, RSAT, transform, job dispatch, native construction, or
+  glue binding.
+- The launch itself exposes the ownership bug: the client requests EDZ Town and Sunrise grants
+  initial slice 408, while spawn set `0x9617A6E7` places the player in Basin. The client immediately
+  starts a Town-to-Basin z-leg, leaving Town namespace 1 current and Basin namespace 2 only a
+  target. A narrow EDZ arrival override now makes Basin bubble 3/slice 24 the initial world so the
+  first serviced namespace should own map cell 11. The Release SHA is
+  `f6aeb6968e0251e32a66acb0eb250ed083016a82d4862e118667ea5a344a012e`.
 - The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
   remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
   when that view leaves. This control runs only while Basin 24/3/11 is current, but deliberately
@@ -417,14 +424,17 @@ The slot-14 atomic run then completed the current wire milestone:
 
 ## Immediate plan
 
-### 1. Confirm construction in namespace 1's active cell
+### 1. Validate direct Basin ownership
 
-- Deploy SHA `1f3c7939...`, repeat the same Town-to-Basin transition, and remain in Basin bubble 3.
-  Require `entity-create-out region=408 bubble=51 cell=145`, a batch increase, type-2 result, apply,
-  kind-0 success, target native registration, and a completed bind.
-- Hearing but not seeing the Vandal is the expected control result. It proves the entire native
-  construction chain while confirming that visibility requires activating namespace 2/cell 11,
-  not merely sending Basin coordinates through the old manager.
+- Start a fresh EDZ session with the Basin arrival override. Require the initial roster and initial
+  slice-set transition to name region/slice 24 rather than 408, with no immediate normal z-leg from
+  Town to Basin.
+- Require the ordinary one-view path to emit `entity-create-out region=24 bubble=3 cell=11` in the
+  first serviced namespace, followed by a batch increase, type-2 result 0, kind-0 success, target
+  native registration, and a completed bind.
+- If that object is audible and visible, cell ownership was the last rendering blocker. If it is
+  still audible but invisible while current namespace and cell agree, capture the authored
+  parent/stream-source fields next.
 - A type-2 job result of 4 means serialization failed; 1, 2, or 3 is an allocator/queue refusal;
   result 0 with a non-null job means dispatch should reach `sobject-apply`.
 - Only after `sobject-apply`, `sobject-kind0 result=1`, target native registration, and
@@ -519,8 +529,10 @@ Once the director evaluates an encounter and creates native squad/member objects
 - The deployed passive dirty-row Release candidate has SHA-256
   `39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`. It proves namespace 1
   rejects Basin cell 11 as inactive.
-- The pending Town-cell construction control has SHA-256
+- The successful Town-cell construction control has SHA-256
   `1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
+- The direct-Basin-arrival Release candidate has SHA-256
+  `f6aeb6968e0251e32a66acb0eb250ed083016a82d4862e118667ea5a344a012e`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

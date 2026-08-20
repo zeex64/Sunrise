@@ -2515,6 +2515,23 @@ migrate it to a successor view or publish its removal yet, so an overlapping bub
 briefly and then cull it when that view leaves. The control is armed only while Basin region 24,
 bubble 3, cell 11 is current, but its namespace-1 record deliberately names Town cell 145.
 
+The deployed Town-cell control completed the full native path at `t=78967..78972`: the namespace-1
+dirty row accepted cell `0x0091`, the type-2 builder returned result 0 with a job, target RSAT
+`0x815B204B` registered, kind-0 returned 1, and glue slot 13 became native handle `0x58FC400C`.
+The user heard clear positional Vandal audio but saw no model. That is an end-to-end positive
+control for create/update framing, RSAT resolution, type-2 dispatch, native construction, and glue
+binding. Its expected visual failure follows from ownership: namespace 1 and cell 145 still belong
+to the outgoing Town view while the player and renderer are in Basin.
+
+The upstream mismatch begins before entity replication. The captured EDZ selection names Town
+hash `0xB8459D59`; Sunrise consequently publishes arrival slice 408 and the client completes an
+initial Town transition. Spawn set `0x9617A6E7` nevertheless places the local player in Basin, so
+the client immediately begins a normal z-leg to region 24. Basin becomes a public target but does
+not become the serviced simulation manager during the stationary test. An authored arrival
+override for `edz_freeroam` now selects bubble ordinal 3, making slice 24 the initial world. This
+tests the correct ownership tuple directly: first active namespace, current Basin view, and map
+cell 11. It does not force the native active-manager index or alter entity wire fields.
+
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
 public/peer route is the transport milestone that creates a real session and entity slots but only
@@ -2566,31 +2583,33 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Deploy the Town-cell control (`1f3c7939...`), repeat the Town-to-Basin transition, and remain in
-   Basin. Require the exact 501-bit completion and `entity-create-out region=408 bubble=51 cell=145`.
-2. Confirm batch creation, type-2 result, apply, kind-0 success, target native registration, bind,
-   and the expected positional audio. Invisibility remains expected because the entity belongs to
-   the outgoing Town view/cell.
-3. Then return to the real fix: complete the normal z-leg/public-target role swap so namespace 2
-   becomes the serviced manager for Basin cell 11. Do not force the active-cell bit in namespace 1.
+1. Start a fresh EDZ session with direct Basin arrival SHA `f6aeb696...`. Require the initial roster
+   and initial slice-set transition to name region/slice 24, not 408, and no immediate Town-to-Basin
+   normal z-leg.
+2. Require the ordinary one-view create to target the first serviced namespace with
+   `region=24 bubble=3 cell=11`, then confirm type-2 result 0, native registration, kind-0 success,
+   and a completed bind. This is the first test where simulation owner and renderer cell agree.
+3. If this makes the Vandal visible, keep the arrival/spawn pairing coherent and generalize entity
+   residency per bubble. If it remains audio-only, capture parent/stream-source state from a real
+   authored biped before changing the payload.
 4. Require `sobject-kind0 result=1`, target native registration, and
    `sobject-bind-dispatch status=bound` before treating the remaining failure as rendering.
-4. If a correctly owned and bound object remains audible but invisible, capture a real authored
+5. If a correctly owned and bound object remains audible but invisible, capture a real authored
    biped's parent, stream-source, and RSAT suffix before changing the payload. Do not guess them.
-5. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
+6. Treat AI activation separately: trace EDZ spawn-rule/squad/director creation. Kind-1 receive only
    binds an already-existing native squad and does not turn a standalone kind-0 sobject into an
    active encounter enemy.
-6. Trace the activity-host lifecycle after the already-successful EDZ mode selection
+7. Trace the activity-host lifecycle after the already-successful EDZ mode selection
    (`definition=0x0109ED6B`, activity type 6) and public remote-session constructor. Identify which
    missing host state or server publication starts director/encounter evaluation. Do not modify the
    correct local-posse versus remote-public route selectors.
-7. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
+8. Use archive scenario `0x80B2F00A`, simple encounter `0x80B2F02A`, spawn rule `0x80B2E997`, and
    squad `0x80B2E9A2` only to validate authored relationships. None is interchangeable with the
    runtime sobject RSAT field.
-8. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
+9. Reuse the generic envelope from upstream `b8ccfb9b` only after the payload callback can emit the
    exact native body. Its physics host and activity receipts can then become useful downstream,
    after visible entity replication is proven.
-9. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
+10. If a retail comparison becomes available, capture real UDP gameplay bytes on the game PC from
    before activity launch through initial zone load. The existing NetDuma file contains counters,
    not entity packets.
 
@@ -2642,8 +2661,11 @@ Deployed passive backend-predicate probe SHA-256:
 Deployed passive dirty-row probe SHA-256:
 `39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`.
 
-Pending Town-cell construction control SHA-256:
+Successful Town-cell construction control SHA-256:
 `1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
+
+Direct-Basin-arrival Release candidate SHA-256:
+`f6aeb6968e0251e32a66acb0eb250ed083016a82d4862e118667ea5a344a012e`.
 
 After manual deployment, inspect:
 
