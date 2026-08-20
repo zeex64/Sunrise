@@ -400,27 +400,31 @@ The slot-14 atomic run then completed the current wire milestone:
   service passes, but `FUN_1417084B0` was never called. This rules out the unfinished public-target
   transition as the immediate construction blocker and moves the missing boundary inside
   `FUN_14170B660`, the per-row processor.
-- A new passive row probe records that processor's object flags, cell, defer/retry state, batch
-  changes, caller outputs, and return value for only the watched namespace-1 slot. It does not
-  alter the validated packet or call any game routine. The pending Release SHA is
-  `39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`; the game directory contains
-  the preceding row-probe build `dd9d1150...`.
+- The deployed row probe identifies active-cell rejection exactly. For cell 11, object state is
+  otherwise eligible: kind 0, control `0x00`, create+update flags `0x0003`, defer sentinel `-1`,
+  retry zero, and create suppression zero. Yet the batch stays `0 -> 0`, `state_out` becomes 1,
+  and no type-2 call occurs. In `FUN_14170B660`, that combination is the branch where a cell below
+  256 is absent from the active-cell bitset.
+- A bounded control now retains current Basin authority but writes Town cell 145 into the synthetic
+  namespace-1 record. This is expected to restore native construction/audio while remaining
+  invisible or culled in Basin, because the entity still belongs to the outgoing Town view. The
+  pending Release SHA is
+  `1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
 - The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
   remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
-  when that view leaves. This candidate is Basin-only (region 24, bubble 3, cell 11), so stay in
-  bubble 3 for this test.
+  when that view leaves. This control runs only while Basin 24/3/11 is current, but deliberately
+  writes the outgoing Town cell 145 into the entity record.
 
 ## Immediate plan
 
-### 1. Classify the retained dirty row
+### 1. Confirm construction in namespace 1's active cell
 
-- Deploy SHA `39f8cba8...`, repeat the same Town-to-Basin transition, and remain in Basin bubble 3.
-  Require the already-proven 501-bit handler completion, namespace-1 promotion, and
-  `backend_busy=0`, then inspect `stage=sobject-dirty-row`.
-- The row result now exposes whether cell 11 is rejected, the create bit is deferred, a retry timer
-  is active, create serialization is suppressed by an argument, or the caller is asked to retain
-  the dirty bit for another frame. Do not change the Vandal payload, RSAT, scheduler framing, or
-  cell until this output identifies the failing predicate.
+- Deploy SHA `1f3c7939...`, repeat the same Town-to-Basin transition, and remain in Basin bubble 3.
+  Require `entity-create-out region=408 bubble=51 cell=145`, a batch increase, type-2 result, apply,
+  kind-0 success, target native registration, and a completed bind.
+- Hearing but not seeing the Vandal is the expected control result. It proves the entire native
+  construction chain while confirming that visibility requires activating namespace 2/cell 11,
+  not merely sending Basin coordinates through the old manager.
 - A type-2 job result of 4 means serialization failed; 1, 2, or 3 is an allocator/queue refusal;
   result 0 with a non-null job means dispatch should reach `sobject-apply`.
 - Only after `sobject-apply`, `sobject-kind0 result=1`, target native registration, and
@@ -512,8 +516,11 @@ Once the director evaluates an encounter and creates native squad/member objects
 - The deployed passive backend-predicate Release candidate has SHA-256
   `c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`. It proved
   `backend_count=0`, `backend_busy=0`, and a retained dirty row with no type-2 job.
-- The pending passive dirty-row Release candidate has SHA-256
-  `39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140` and is not deployed.
+- The deployed passive dirty-row Release candidate has SHA-256
+  `39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`. It proves namespace 1
+  rejects Basin cell 11 as inactive.
+- The pending Town-cell construction control has SHA-256
+  `1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

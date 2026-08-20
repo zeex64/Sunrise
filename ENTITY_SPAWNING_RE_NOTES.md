@@ -2496,19 +2496,24 @@ set, but `FUN_1417084B0` was never entered. The unfinished z-leg transition ther
 immediate suppression condition; the row is retained inside `FUN_14170B660` before type-2 job
 construction.
 
-The next diagnostic passively wraps unique entry `0x14170B660`. It derives the global 0x70-byte
-object table from the function's first RIP-relative table load and reports only the exact watched
-namespace/slot mapping. The return log includes object kind/state/cell/handle/entity/parent,
-control and dirty flags, creation pointer, defer timestamp, retry state, batch count, both caller
-outputs, arguments 4/5/9/10, and the native return byte. It does not modify the row, force cell
-residency, or call a game routine. Pending Release SHA-256:
-`39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`; the installed DLL is the
-preceding row-probe build `dd9d1150...`.
+The deployed `FUN_14170B660` probe resolves the missing predicate. Cell 11's row is kind 0 with
+control `0x00`, flags `0x0003`, defer `UINT64_MAX`, retry zero, `suppress_create=0`, and an intact
+creation pointer. Across all eight calls the batch remains `0 -> 0`, no type-2 builder runs, and
+the caller's state output becomes 1. The decompiled processor increments the batch before any
+create/defer/serializer decision; the only eligible pre-increment failure here is its
+`cell < 256 && active_cell_bit == 0` branch. Namespace 1 therefore rejects Basin cell 11 because
+that manager still owns the outgoing Town world.
+
+The next bounded control keeps Basin region 24/cell 11 as the current-authority gate, but writes
+Town region 408/bubble 51/cell 145 into the namespace-1 entity record. No scheduler, RSAT, update,
+slot, or transform bytes change. This should restore type-2 construction and positional audio but
+is not expected to make the object visible in Basin. Pending Release SHA-256:
+`1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
 
 This synthetic entity is scoped to the selected replication view and map cell. Sunrise does not
 migrate it to a successor view or publish its removal yet, so an overlapping bubble may retain it
-briefly and then cull it when that view leaves. This functional test is deliberately Basin-only:
-region 24, bubble 3, map-global cell 11. Stay in bubble 3 while observing this run.
+briefly and then cull it when that view leaves. The control is armed only while Basin region 24,
+bubble 3, cell 11 is current, but its namespace-1 record deliberately names Town cell 145.
 
 The shared *Destiny 2 Activity System & Authored-Content Internals* paper does not provide a peer
 account or membership codec. Its sections 7 and 8 do corroborate the current sequencing: the
@@ -2561,14 +2566,13 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Deploy the passive dirty-row build (`39f8cba8...`), repeat the Town-to-Basin transition, and
-   remain in Basin bubble 3. Reconfirm the proven 501-bit handler completion, namespace-1
-   promotion, and `backend_busy=0`, then require `stage=sobject-dirty-row`.
-2. Use the row's before/after flags, cell, defer/retry state, batch delta, caller output bytes, and
-   return byte to identify the exact predicate retaining it before `FUN_1417084B0`. Do not alter the
-   RSAT, transform, scheduler framing, or cell until this boundary is classified.
-3. If the row reaches the type-2 builder, result 4 indicates serialization failure; 1/2/3 indicate
-   queue refusal; result 0 with a non-null job should proceed to `sobject-apply`.
+1. Deploy the Town-cell control (`1f3c7939...`), repeat the Town-to-Basin transition, and remain in
+   Basin. Require the exact 501-bit completion and `entity-create-out region=408 bubble=51 cell=145`.
+2. Confirm batch creation, type-2 result, apply, kind-0 success, target native registration, bind,
+   and the expected positional audio. Invisibility remains expected because the entity belongs to
+   the outgoing Town view/cell.
+3. Then return to the real fix: complete the normal z-leg/public-target role swap so namespace 2
+   becomes the serviced manager for Basin cell 11. Do not force the active-cell bit in namespace 1.
 4. Require `sobject-kind0 result=1`, target native registration, and
    `sobject-bind-dispatch status=bound` before treating the remaining failure as rendering.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
@@ -2635,8 +2639,11 @@ Runtime-proven final 501-bit active-manager proof SHA-256:
 Deployed passive backend-predicate probe SHA-256:
 `c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`.
 
-Pending passive dirty-row probe SHA-256 (not yet deployed):
+Deployed passive dirty-row probe SHA-256:
 `39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`.
+
+Pending Town-cell construction control SHA-256:
+`1f3c7939e4b84d9337fc0cdbde41696a7ec13018fb0da623402f37ce727da0ac`.
 
 After manual deployment, inspect:
 

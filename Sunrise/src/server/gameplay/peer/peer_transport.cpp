@@ -112,10 +112,14 @@ constexpr std::uint8_t kTwoViewProbeEntityView = 0;
 constexpr std::uint8_t kTwoViewProbeAuthorityView = 1;
 /** Namespace owned by the live outgoing EDZ view in the captured transition. */
 constexpr std::int32_t kTwoViewProbeEntityNamespace = 1;
-/** Current Basin's signed region and scenario-resolved map cell. */
-constexpr std::int32_t kTwoViewProbeRegion = 24;
-constexpr std::uint8_t kTwoViewProbeBubble = 3;
-constexpr std::uint8_t kTwoViewProbeCell = 11;
+/** Current Basin authority required before the bounded outgoing-view control may run. */
+constexpr std::int32_t kTwoViewProbeAuthorityRegion = 24;
+constexpr std::uint8_t kTwoViewProbeAuthorityBubble = 3;
+constexpr std::uint8_t kTwoViewProbeAuthorityCell = 11;
+/** Outgoing namespace 1's active Town cell, used only to confirm native construction. */
+constexpr std::int32_t kTwoViewProbeRegion = 408;
+constexpr std::uint8_t kTwoViewProbeBubble = 51;
+constexpr std::uint8_t kTwoViewProbeCell = 145;
 /**
  * Stored 275-bit signature, target view's 220-bit body, and current view's six-bit empty tail.
  * The native schema consumes 274 signature bits; stored bit 274 supplies view 0's event lane.
@@ -827,7 +831,7 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
     }
     if (!selected.present || !selected.signature.bound || selected.signature.token == 0
         || selected.signature.token != probe.token || !selected.worldPresent
-        || selected.world.region != kTwoViewProbeRegion) {
+        || selected.world.region != kTwoViewProbeAuthorityRegion) {
         gate = EntityCreateGate::view;
         return false;
     }
@@ -875,11 +879,18 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         return false;
     }
     if (!resolve_entity_spatial_cell(selected, output)
-        || output.spatialRegion != kTwoViewProbeRegion
-        || output.spatialBubble != kTwoViewProbeBubble || output.spatialCell != kTwoViewProbeCell) {
+        || output.spatialRegion != kTwoViewProbeAuthorityRegion
+        || output.spatialBubble != kTwoViewProbeAuthorityBubble
+        || output.spatialCell != kTwoViewProbeAuthorityCell) {
         gate = EntityCreateGate::spatialCell;
         return false;
     }
+    // Namespace 1 does not own Basin cell 11: its native dirty-row processor rejects that cell
+    // before type-2 construction. Keep current Basin authority as the hard gate, but address the
+    // outgoing view's proven active Town cell as a bounded end-to-end construction control.
+    output.spatialRegion = kTwoViewProbeRegion;
+    output.spatialBubble = kTwoViewProbeBubble;
+    output.spatialCell = kTwoViewProbeCell;
     if (!scheduler_matches_local_capture(probe.scheduler, capture)) {
         gate = EntityCreateGate::schedulerIdentity;
         return false;
