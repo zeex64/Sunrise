@@ -57,6 +57,7 @@ enum class Id : std::size_t {
     sobjectKind0Constructor,
     sobjectRecordPromotion,
     sobjectDirtyService,
+    sobjectBackendBusy,
     sobjectType2Job,
     contentIdTokenLoad,
     queuezObjectResolver,

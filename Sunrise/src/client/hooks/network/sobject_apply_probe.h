@@ -14,6 +14,9 @@ namespace sunrise::client::hooks::network::sobject_apply_probe {
 /** @return Per-tick replicated-object dirty-service replacement body. */
 [[nodiscard]] void* dirty_service_entry_point() noexcept;
 
+/** @return Dirty-service backend-busy predicate replacement body. */
+[[nodiscard]] void* backend_busy_entry_point() noexcept;
+
 /** @return Type-2 replicated-object serialization/allocation replacement body. */
 [[nodiscard]] void* type2_job_entry_point() noexcept;
 

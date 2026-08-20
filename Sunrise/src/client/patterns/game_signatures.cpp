@@ -403,6 +403,13 @@ constexpr std::string_view kSobjectDirtyServiceText =
 constexpr auto kSobjectDirtyService =
     signature<signature_length(kSobjectDirtyServiceText)>(kSobjectDirtyServiceText);
 
+// Matches the exact replicated-object backend-busy predicate. The current-image 11-byte leaf is
+// unique and reads only the signed work counter at context +0x560E4.
+constexpr std::string_view kSobjectBackendBusyText = "83 B9 E4 60 05 00 00 0F 9F C0 C3";
+/** Compiled pattern bytes of the backend-busy predicate signature above. */
+constexpr auto kSobjectBackendBusy =
+    signature<signature_length(kSobjectBackendBusyText)>(kSobjectBackendBusyText);
+
 // Matches the type-2 replicated-object job builder. The distinct 0x4050-byte frame makes this
 // position-independent entry prefix unique in the current image.
 constexpr std::string_view kSobjectType2JobText = "48 89 5C 24 20 57 B8 50 40 00 00";
@@ -498,6 +505,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"sobject_kind0_constructor", kSobjectKind0Constructor},
     patterns::Pattern{"sobject_record_promotion", kSobjectRecordPromotion},
     patterns::Pattern{"sobject_dirty_service", kSobjectDirtyService},
+    patterns::Pattern{"sobject_backend_busy", kSobjectBackendBusy},
     patterns::Pattern{"sobject_type2_job", kSobjectType2Job},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},

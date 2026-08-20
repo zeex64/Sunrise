@@ -2454,14 +2454,47 @@ normal shutdown, not a gameplay failure.
 The final correction keeps the aligned six-bit empty body `000010`, removes the extra appended
 target zero, and restores `body_bits=501`. This follows the 274/275 signature boundary and leaves
 view 1 at its exact start. The installed Release DLL SHA-256 is
-`28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`; it is installed in the game
-directory but has not yet been run.
+`28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`.
 
 The generic two-view writer now applies the same boundary by index. View 0 uses the signature's
 carried event and writes only the five-bit `00010` remainder; a later empty view writes all six
 `000010` bits, while a later entity view writes an explicit event zero before the common 220-bit
 post-event body. Both two-view target positions therefore remain 501 bits. The special Basin test
 still targets view 0, so this safety correction does not change its packet.
+
+The `28b14320...` runtime test passed the complete wire and promotion path. At `t=78255`, packet
+148 carried authority `...0003/1`, entity target `...0002/0`, namespace 1, slot 13, region 24,
+bubble 3, cell 11, and `body_bits=501`. View 0 consumed handler widths `1,1,2,216,1`; view 1
+consumed `1,1,2,1,1`. Every result was zero and ordinal 9/fixed reported `status=complete`.
+Namespace 1 emitted the exact entity `0x0010000D`, flags `0x0003`, shared Vandal creation, and
+130-bit player-X+3 transform. `sobject-promote` immediately returned on manager `0x471F040` with
+internal flags `0x0023`, object generation 2, and occupied `0 -> 1`. Packet 148 was directly
+acknowledged after 65 ms. Framing, record decoding, atomic update, active-manager selection, and
+promotion are therefore proven and must not be changed again.
+
+The promoted row then reached `FUN_141717790` eight observed times. Every entry and return mapped
+slot 13 to internal row 13 and retained the manager dirty bit `1 -> 1`; no
+`sobject-type2-job`, apply, kind-0 construction, target native registration, or bind followed.
+Ghidra explains this exact signature. `FUN_141717790` resolves a context from the manager provider,
+then calls `FUN_1416EC0F0(context)`. That leaf is exactly
+`return *(int32_t*)(context + 0x560E4) > 0`. When true, dirty service walks dirty rows through
+`FUN_141712850(..., reason=5, ...)`, never calls `FUN_14170B660`, and does not clear the manager's
+dirty bit. The normal branch calls `FUN_14170B660`; absent a successful type-2 job, its row/cell
+failure paths would not match the repeatedly retained dirty state as closely.
+
+The lifecycle log independently supports the suppression interpretation. A normal z-leg to region
+24 began at `t=76451`. The public-target group and activity host joined, but the transition never
+reported `completed` or promoted that target to `PUBLIC CURRENT`; shutdown finally stopped it at
+`t=170369` because the slice-set transition manager was disabled. Network health remained clean:
+the 120-second packet summary reported 19 valid reads, 785 expected discards, and zero corrupt
+reads. Terminal connection-suicide lines were teardown, followed by `shutdown result=ok`.
+
+The next diagnostic adds a unique passive hook at `FUN_1416EC0F0` and arms it only inside the
+watched namespace-1 dirty-service wrapper. The dirty-service return now reports the exact context,
+signed `+0x560E4` count, and native boolean. It never mutates the counter or bypasses the branch.
+The pending Release SHA-256 is
+`c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`; the installed game DLL
+remains `28b14320...`.
 
 This synthetic entity is scoped to the selected replication view and map cell. Sunrise does not
 migrate it to a successor view or publish its removal yet, so an overlapping bubble may retain it
@@ -2519,20 +2552,17 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Restart with the installed final corrected active-manager proof (`28b14320...`), repeat the
-   Town-to-Basin transition, and remain in Basin bubble 3. Require authority `...0003/1`, entity
-   target `...0002/0`, the
-   501-bit total body, a 216-bit namespace-1 atomic record at slot 13/cell 11, and direct ACK.
-   More importantly, require view 0 to consume 221 bits through fixed and view 1 to consume the
-   aligned six-bit empty body `000010` through its own fixed handler. The ACK alone is insufficient.
-2. Only after all ten handler lanes complete, classify the first missing post-decode boundary
-   using `sobject-promote`, `sobject-dirty-service`, and `sobject-type2-job`. No service on the
-   namespace-1 manager would
-   disprove the current active-manager hypothesis; retained dirty state with no job indicates
-   service suppression; cleared dirty state with no job indicates a row prerequisite such as
-   active-cell membership; builder result 4 indicates serialization failure; results 1/2/3
+1. Deploy the passive backend-predicate build (`c7eac837...`), repeat the Town-to-Basin transition,
+   and remain in Basin bubble 3. Reconfirm the already-proven ten handler calls and namespace-1
+   promotion, then require dirty-service return fields `backend_seen=1`, `backend_count`, and
+   `backend_busy`.
+2. If the count is positive and busy is true, stop changing replication data. Trace why the normal
+   z-leg/public-target lifecycle never reaches completion and let that lifecycle bring the counter
+   to zero legitimately. Do not force the counter or active manager.
+3. If busy is false, hook `FUN_14170B660` passively and classify the object flags, active-cell bit,
+   retry timestamp, and builder result. A type-2 result 4 indicates serialization failure; 1/2/3
    indicate queue refusal.
-3. Require `sobject-kind0 result=1`, target native registration, and
+4. Require `sobject-kind0 result=1`, target native registration, and
    `sobject-bind-dispatch status=bound` before treating the remaining failure as rendering.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
    biped's parent, stream-source, and RSAT suffix before changing the payload. Do not guess them.
@@ -2592,8 +2622,11 @@ Deployed 501-bit active-manager proof SHA-256 (old `000100` tail; transaction ro
 Previously deployed 502-bit active-manager proof SHA-256 (extra target zero; rolled back):
 `5262387a228cf793c17aed6b1d2c54b4d3dcd618636bb02bad5db27ca9163d5b`.
 
-Installed final 501-bit active-manager proof SHA-256 (runtime test pending):
+Runtime-proven final 501-bit active-manager proof SHA-256:
 `28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`.
+
+Pending passive backend-predicate probe SHA-256 (not yet deployed):
+`c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`.
 
 After manual deployment, inspect:
 

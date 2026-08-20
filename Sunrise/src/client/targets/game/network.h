@@ -60,6 +60,7 @@ struct Targets {
     std::byte* sobjectKind0Constructor{};
     std::byte* sobjectRecordPromotion{};
     std::byte* sobjectDirtyService{};
+    std::byte* sobjectBackendBusy{};
     std::byte* sobjectType2Job{};
     std::byte* contentIdToken{};
 };

@@ -372,11 +372,33 @@ The slot-14 atomic run then completed the current wire milestone:
 - Ghidra `FUN_141718D90` and the handler traces support the final correction: keep the aligned
   empty view tail `000010`, remove the extra target zero, and return to `body_bits=501`. The final
   Release SHA is `28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`;
-  the repo and game-directory DLLs now match, but this build has not yet been run.
+  its runtime result is now confirmed below.
 - The generic two-view writer is now index-aware as well: view 0 consumes the stored signature's
   carried event bit and writes only its five-bit remainder, while later views publish their own
   event bit. This does not alter the special view-0 Vandal packet, but prevents a later view-1
   create from reintroducing the same one-bit shift.
+- The `28b14320...` run finally completed the entire scheduler transaction. Packet 148 left at
+  `t=78255` with `body_bits=501`; view 0 consumed `1/1/2/216/1`, view 1 consumed
+  `1/1/2/1/1`, all ten handler calls returned zero, and ordinal 9/fixed reported `complete`.
+  Namespace 1 decoded the exact slot-13 Vandal at Basin cell 11 with flags `0x0003` and the
+  player-X+3 transform. `sobject-promote` then reported manager `0x471F040`, internal flags
+  `0x0023`, object generation 2, and occupancy changing `0 -> 1`. The server received a direct ACK
+  after 65 ms.
+- The first missing boundary is now inside the active manager's dirty service. Eight consecutive
+  calls found slot 13 mapped at internal row 13 with its dirty bit still set `1 -> 1`; none reached
+  `sobject-type2-job`. Ghidra shows `FUN_141717790` first tests
+  `FUN_1416EC0F0(context)`, which is exactly signed `context+0x560E4 > 0`. A true result takes the
+  suppression branch, skips `FUN_14170B660` and the type-2 builder, and retains the dirty row. This
+  matches the log: the normal z-leg transition began at `t=76451`, never reported completion, and
+  was stopped only during clean shutdown at `t=170369`.
+- The run was network-clean: the 120-second summary reported 19 valid reads, 785 expected discards,
+  and zero corrupt reads. There was no assert hit or hitch; the terminal connection-suicide lines
+  belong to the graceful shutdown that ended with `shutdown result=ok`.
+- A passive predicate probe now records the exact `+0x560E4` count and boolean only while this
+  watched dirty-service call is active. It does not write the counter, force a manager, or bypass
+  the suppression branch. The pending Release SHA is
+  `c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`; the game directory still
+  contains `28b14320...`.
 - The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
   remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
   when that view leaves. This candidate is Basin-only (region 24, bubble 3, cell 11), so stay in
@@ -384,22 +406,16 @@ The slot-14 atomic run then completed the current wire milestone:
 
 ## Immediate plan
 
-### 1. Validate the final corrected 501-bit active-manager packet
+### 1. Measure the active manager's suppression predicate
 
-- Restart with installed SHA `28b14320...`, repeat the Town-to-Basin transition once, and remain in
-  Basin bubble 3.
-  Require the log to distinguish authority `...0003/1` from entity target `...0002/0`, retain
-  `body_bits=501`, decode the record in namespace 1 at slot 13, and directly ACK that packet.
-- Require all ten handler lanes to remain in view-major order. View 0 must consume 221 bits through
-  its fixed lane; view 1 must consume the aligned six-bit empty body `000010`, return zero from its
-  entity lane, and complete its fixed lane. Do not interpret the ACK as success without those
-  decoder postconditions.
-- `sobject-promote` must show internal create/update flags, object generation 2, and namespace-1
-  occupancy changing from clear to set. `sobject-dirty-service` then reports whether the runtime's
-  active manager is this exact namespace-1 manager and whether its root dirty bit is drained.
-- No service line means the active runtime is servicing another manager. A dirty bit that remains
-  set with no job points to the service-wide busy/suppression branch. A dirty bit that clears with
-  no `sobject-type2-job` points to a row prerequisite, led by Basin cell 11's active-cell bit.
+- Deploy SHA `c7eac837...`, repeat the same Town-to-Basin transition, and remain in Basin bubble 3.
+  Require the already-proven 501-bit handler completion and namespace-1 promotion, then inspect the
+  dirty-service return for `backend_seen=1`, the exact `backend_count`, and `backend_busy`.
+- `backend_busy=1` with a positive count proves the unfinished transition is suppressing native
+  construction before row or cell eligibility. Do not bypass it; the next task is completing the
+  normal z-leg/public-target lifecycle so the game legitimately drains the row.
+- `backend_busy=0` would instead require a passive hook at `FUN_14170B660` to classify its row and
+  active-cell predicates. Do not change the Vandal payload, RSAT, scheduler framing, or cell.
 - A type-2 job result of 4 means serialization failed; 1, 2, or 3 is an allocator/queue refusal;
   result 0 with a non-null job means dispatch should reach `sobject-apply`.
 - Only after `sobject-apply`, `sobject-kind0 result=1`, target native registration, and
@@ -483,11 +499,13 @@ Once the director evaluates an encounter and creates native squad/member objects
   `ec3c4471 test: route Basin Vandal through active manager`, SHA-256
   `f664c98f1a22f338eb41bc3ec62e3bc2b4d11a7e1220779ebe0af94d9894a330`. Its 501-bit body used the
   wrong `000100` empty-tail order, so the transaction rolled back.
-- The currently deployed 502-bit correction has SHA-256
+- The previously deployed 502-bit correction has SHA-256
   `5262387a228cf793c17aed6b1d2c54b4d3dcd618636bb02bad5db27ca9163d5b`. Its extra target zero
   shifted view 1 and again rolled back the transaction.
-- The installed, runtime-untested final 501-bit Release candidate has SHA-256
+- The runtime-proven final 501-bit Release candidate has SHA-256
   `28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`.
+- The pending passive backend-predicate Release candidate has SHA-256
+  `c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae` and is not deployed.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

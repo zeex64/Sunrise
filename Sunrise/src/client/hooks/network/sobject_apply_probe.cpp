@@ -33,6 +33,7 @@ using ApplyJob = void(__fastcall*)(std::byte*);
 using Kind0Constructor = bool(__fastcall*)(void*, const std::uint32_t*, std::uint32_t, int);
 using RecordPromotion = void(__fastcall*)(std::byte*, std::byte*);
 using DirtyService = void(__fastcall*)(std::byte*);
+using BackendBusy = bool(__fastcall*)(const std::byte*);
 using Type2Job = int(__fastcall*)(std::byte*, const void*, void**);
 
 std::atomic_uint32_t g_applyReports{};
@@ -70,6 +71,17 @@ struct DirtyServiceSnapshot {
     bool dirty{};
     bool readable{};
 };
+
+struct BackendBusyTrace {
+    const std::byte* context{};
+    std::int32_t count{-1};
+    bool result{};
+    bool readable{};
+    bool seen{};
+    bool armed{};
+};
+
+thread_local BackendBusyTrace g_backendBusyTrace{};
 
 struct Type2JobSnapshot {
     const std::byte* object{};
@@ -272,14 +284,16 @@ void report_apply(const char* phase,
 void report_dirty_service(const char* phase,
                           std::uint32_t occurrence,
                           const DirtyServiceSnapshot& before,
-                          const DirtyServiceSnapshot& current) noexcept {
-    std::array<char, 384> line{};
+                          const DirtyServiceSnapshot& current,
+                          const BackendBusyTrace& busy) noexcept {
+    std::array<char, 512> line{};
     const int written =
         std::snprintf(line.data(),
                       line.size(),
                       "ev=gameplay stage=sobject-dirty-service phase=%s occurrence=%u "
                       "manager=%p namespace=%d entity=0x%08X slot=%u "
-                      "internal=%d->%d mapped=%u->%u dirty=%u->%u readable=%u",
+                      "internal=%d->%d mapped=%u->%u dirty=%u->%u readable=%u "
+                      "backend_seen=%u backend_context=%p backend_count=%d backend_busy=%u",
                       phase,
                       occurrence,
                       static_cast<const void*>(before.manager),
@@ -292,7 +306,11 @@ void report_dirty_service(const char* phase,
                       current.mapped ? 1U : 0U,
                       before.dirty ? 1U : 0U,
                       current.dirty ? 1U : 0U,
-                      current.readable ? 1U : 0U);
+                      current.readable ? 1U : 0U,
+                      busy.seen ? 1U : 0U,
+                      static_cast<const void*>(busy.context),
+                      busy.readable ? busy.count : -1,
+                      busy.seen && busy.result ? 1U : 0U);
     if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::info,
@@ -478,19 +496,58 @@ __declspec(noinline) void __fastcall dirty_service_body(std::byte* manager) noex
         const std::uint32_t occurrence =
             watched ? g_dirtyServiceReports.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
         if (occurrence != 0 && occurrence <= kDirtyServiceReportLimit) {
-            report_dirty_service("entry", occurrence, before, before);
+            report_dirty_service("entry", occurrence, before, before, {});
         }
+        const BackendBusyTrace previousTrace = g_backendBusyTrace;
+        g_backendBusyTrace = {};
+        g_backendBusyTrace.armed = occurrence != 0 && occurrence <= kDirtyServiceReportLimit;
         if (call != nullptr) {
             call(manager);
         }
+        const BackendBusyTrace busy = g_backendBusyTrace;
+        g_backendBusyTrace = previousTrace;
         if (occurrence != 0 && occurrence <= kDirtyServiceReportLimit) {
             DirtyServiceSnapshot after{};
             (void)inspect_dirty_service(manager, namespaceId, entity, after);
-            report_dirty_service("return", occurrence, before, after);
+            report_dirty_service("return", occurrence, before, after, busy);
         }
     } __finally {
         coordinator::g_callEgress();
     }
+}
+
+/** Preserves the dirty-service suppression predicate and records only an armed watched call. */
+__declspec(noinline) bool __fastcall backend_busy_body(const std::byte* context) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(
+        lease, HookSlot::sobjectBackendBusy, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<BackendBusy>(lease.original);
+    bool result = false;
+    __try {
+        std::int32_t count = -1;
+        bool readable = false;
+        if (lease.accepting && g_backendBusyTrace.armed && context != nullptr) {
+            __try {
+                std::memcpy(&count, context + 0x560E4, sizeof count);
+                readable = true;
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                count = -1;
+            }
+        }
+        if (call != nullptr) {
+            result = call(context);
+        }
+        if (lease.accepting && g_backendBusyTrace.armed) {
+            g_backendBusyTrace.context = context;
+            g_backendBusyTrace.count = count;
+            g_backendBusyTrace.result = result;
+            g_backendBusyTrace.readable = readable;
+            g_backendBusyTrace.seen = true;
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+    return result;
 }
 
 /** Preserves type-2 serialization/allocation and never dereferences the returned job. */
@@ -549,6 +606,10 @@ void* promotion_entry_point() noexcept {
 
 void* dirty_service_entry_point() noexcept {
     return reinterpret_cast<void*>(&dirty_service_body);
+}
+
+void* backend_busy_entry_point() noexcept {
+    return reinterpret_cast<void*>(&backend_busy_body);
 }
 
 void* type2_job_entry_point() noexcept {

@@ -53,6 +53,7 @@ inline constexpr std::array kGameSlots{
     HookSlot::sobjectKind0Constructor,
     HookSlot::sobjectRecordPromotion,
     HookSlot::sobjectDirtyService,
+    HookSlot::sobjectBackendBusy,
     HookSlot::sobjectType2Job,
 };
 
