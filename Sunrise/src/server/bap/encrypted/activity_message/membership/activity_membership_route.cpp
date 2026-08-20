@@ -89,6 +89,39 @@ void report_identity(const service::client_identity::ClientIdentity& parsed) noe
     }
 }
 
+/** Reports the ordering of one changed client-authoritative world update. */
+void report_authoritative(const service::client_authoritative_data::ClientAuthoritativeData& parsed,
+                          const membership_state::PendingMutation& mutation) noexcept {
+    if (!mutation.changesState && !mutation.movesRegion && !mutation.movesTransitionToken) {
+        return;
+    }
+
+    std::array<char, core::log::kLineCapacity> line{};
+    const int written =
+        std::snprintf(line.data(),
+                      line.size(),
+                      "ev=activity stage=authoritative result=ok region=%d region_hash=0x%08X "
+                      "has_region=%u has_region_hash=%u token=%u has_token=%u region_move=%u "
+                      "token_move=%u state_change=%u snapshot=%u spawn=%u teleport=%u",
+                      parsed.region.index,
+                      parsed.region.hash,
+                      parsed.hasRegion ? 1U : 0U,
+                      parsed.region.hasHash ? 1U : 0U,
+                      parsed.transitionToken,
+                      parsed.hasTransitionToken ? 1U : 0U,
+                      mutation.movesRegion ? 1U : 0U,
+                      mutation.movesTransitionToken ? 1U : 0U,
+                      mutation.changesState ? 1U : 0U,
+                      mutation.hasSnapshot ? 1U : 0U,
+                      parsed.hasSpawn ? 1U : 0U,
+                      parsed.hasTeleport ? 1U : 0U);
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::server,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 } // namespace
 
 /** Stages a changed identity push or an unchanged transactional no-op. */
@@ -124,6 +157,7 @@ bool prepare_authoritative(const service::Request& request, ActivityPlan& plan) 
     plan.sessionId = request.accountHandle;
     plan.regionMoved = plan.membershipMutation.movesRegion;
     plan.transitionStarted = plan.membershipMutation.movesTransitionToken;
+    report_authoritative(parsed, plan.membershipMutation);
     // A region move sends the roster even when the host state did not change, because the bubble
     // the player just entered has no authority until the roster grants it.
     plan.delivery = plan.membershipMutation.hasSnapshot || plan.regionMoved

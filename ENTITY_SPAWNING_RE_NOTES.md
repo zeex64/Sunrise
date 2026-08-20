@@ -2998,6 +2998,36 @@ new public host for every PRV region.
 Release SHA-256 for this candidate:
 `b83c295cb35d36328299470242b8a5b99b938fe727fe06461823ae0862ef5e57`.
 
+### Private-region validation and split region/token ordering
+
+The `b83c295...` traversal conclusively validates the authored PUB/PRV repair. Entries into
+`PRV416` and `PRV424` changed the root player's reported region and roster, but created no public
+group, no activity-host token, no citizen descriptor, and no gameplay join. Returning to `PUB24`
+created a fresh public visit and joined the existing region-24 host. Across the run Sunrise
+allocated only `.002` for public region 408 and `.003` for public region 24; the former `.004`
+private-region host did not exist. Durable admission generations also prevented a settled visit
+from being retried merely because the bounded admitted-session table later retired its row.
+
+The remaining public loop is a different boundary. At `t=109959` the committed client-reported
+region changed from 24 to 408 while the visit token remained 10. Sunrise therefore published and
+settled `408/10`. Native code did not start the next `PUB408` citizen join until `t=123995`, after
+token 11 arrived. That transition completed at `t=133894`, gracefully left the same host, and the
+client immediately opened another `PUB408` transition using token 12. The server did not invent
+those tokens, and the durable retry path remained disarmed; they originated in successive
+client-authoritative/native transition events. It is not yet safe to suppress either event because
+the old message-22 logs did not expose which sparse fields accompanied each update.
+
+The passive follow-up reports one `stage=authoritative` line only when a parsed message-22 delta
+changes stored authoritative state, region, or transition token. It includes region/hash and
+presence, token and presence, region/token move flags, snapshot creation, and spawn/teleport
+presence. This will distinguish a deliberate region-only crossing from a stale-token publication
+and will show whether the immediate token-12 restart carries a region delta or only a fresh native
+load token. No State, descriptor, role, active-manager, or native controller field is changed by
+the diagnostic.
+
+Release SHA-256 for the authoritative-order diagnostic:
+`a4acaa0296a1070ed27fb38bf91da5b4ebeddea8b98a7c5e080531d8a847d021`.
+
 After manual deployment, inspect:
 
 ```text

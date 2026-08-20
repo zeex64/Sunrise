@@ -724,6 +724,22 @@ Once the director evaluates an encounter and creates native squad/member objects
   releasing the short-lived admitted row cannot reopen it. Unknown content remains on the previous
   fail-compatible public path. No native controller, role, or active-manager field is written.
   Release SHA-256: `b83c295cb35d36328299470242b8a5b99b938fe727fe06461823ae0862ef5e57`.
+- The deployed `b83c295...` traversal validates both lifecycle changes. `PRV416` and `PRV424`
+  updated the coherent player region without allocating another activity host, advertising a
+  citizen session, or starting a gameplay join. Returning to `PUB24` produced a fresh visit and
+  join. Only the two authored public hosts for regions 408 and 24 existed; no `.004` phantom host
+  was allocated. The durable admission generation also suppressed descriptor retries after each
+  accepted join even when its temporary admitted row was retired.
+- The same run isolates the remaining public handoff ordering. The client reported region 408
+  while the stored transition token was still 10, so Sunrise advertised and settled visit
+  `408/10`. Much later native code opened transition token 11 for that same region, completed it,
+  left the host, and immediately opened token 12. No synthetic entity was sent: the only current
+  manager window had an unproven scheduler shape, so the entity path correctly failed closed.
+  Transport stayed healthy with no assertion, hitch, or forced disconnect evidence.
+- The next diagnostic is passive and logs only changed client-authoritative deltas: field presence,
+  region/hash, transition token, and whether the state transaction observed a region move, token
+  move, or published snapshot. It changes no publication or native transition behavior. Release
+  SHA-256: `a4acaa0296a1070ed27fb38bf91da5b4ebeddea8b98a7c5e080531d8a847d021`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
