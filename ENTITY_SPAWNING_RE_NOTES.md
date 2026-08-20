@@ -2844,6 +2844,23 @@ history, an accepted view, and a published activity host. It no longer requires 
 Thus a reused group's historical view/host state cannot retire before this visit publishes its
 descriptor, but a fully prepared target can proceed to native promotion.
 
+The `a59f8c...` run confirms the revised retirement gate does its server-side job. The initial
+region-408 transition became `PUBLIC CURRENT` and completed normally. On the automatic move to
+region 24, the root membership was republished descriptor-free at `t=65506`, and subsequent
+keepalives reached `published=24 settled=24 group_published=1 group_settled=1 ready=1`. The client
+still did not promote Basin, but the first new event at the transition boundary was an injected
+post-handoff scheduler validation at `t=64530`: logical views 2, signature width 203, body width
+214. Packet 135 received direct ACK coverage, while the synchronous five-lane handler epoch did
+not complete. This means the replayed 203-bit signature does not share the 275-bit signature's
+proven view-boundary overlap; ACK is only transport proof. The run reported zero aggregate corrupt
+reads, but a decoder-incomplete experimental frame is unsafe during a world handoff and cannot be
+used as an entity prerequisite.
+
+The next build therefore narrows `post_handoff_scheduler_shape` to exactly two views and 275 wire
+bits, the only multi-view grammar already accepted end-to-end. Two-/three-view 203-bit layouts and
+three-view 275-bit layouts now fail closed and emit no scheduler body. Release SHA-256:
+`d4df9a600a01285196f727615d5e5295206dec50e5befe69e1db2fa4da63f176`.
+
 After manual deployment, inspect:
 
 ```text

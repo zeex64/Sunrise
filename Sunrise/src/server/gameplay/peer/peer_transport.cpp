@@ -121,12 +121,6 @@ constexpr std::uint16_t kTwoViewProbeBodyBits = 501;
 constexpr std::uint64_t kTwoViewProbeTimeout = 3000;
 /** Stay below half of the 128-entry packet ring while waiting for direct acknowledgement. */
 constexpr std::uint8_t kTwoViewProbeMaximumPacketsAfter = 63;
-/** Stable post-handoff layouts contain the current view plus one or two retained views. */
-constexpr std::uint8_t kPostHandoffProbeMinimumViews = 2;
-constexpr std::uint8_t kPostHandoffProbeMaximumViews = 3;
-/** Both exact signature widths have been observed after PUBLIC CURRENT changes. */
-constexpr std::uint16_t kPostHandoffProbeWireBitsA = 203;
-constexpr std::uint16_t kPostHandoffProbeWireBitsB = 275;
 /** Bound repeated validation attempts across one peer-link lifetime. */
 constexpr std::uint8_t kPostHandoffProbeAttemptLimit = 4;
 SRWLOCK g_lock{SRWLOCK_INIT};
@@ -552,13 +546,15 @@ write_scheduler_signature(bits::Writer& writer,
            && writer.write(1, 1) && writer.write(0, 1);
 }
 
-/** @return True for the bounded stable layouts observed after native PUBLIC CURRENT changes. */
+/** @return True only for the exact two-view layout already accepted by all native handlers. */
 [[nodiscard]] bool
 post_handoff_scheduler_shape(const state::gameplay::SchedulerSignature& scheduler) noexcept {
-    return scheduler.present && scheduler.viewCount >= kPostHandoffProbeMinimumViews
-           && scheduler.viewCount <= kPostHandoffProbeMaximumViews
-           && (scheduler.wireBits == kPostHandoffProbeWireBitsA
-               || scheduler.wireBits == kPostHandoffProbeWireBitsB);
+    // A 203-bit signature with two logical views is not the same wire grammar as the proven
+    // 275-bit transition signature. Replaying the former with the latter's handler tail received
+    // transport acknowledgement but never completed the client decoder, so keep every 203-bit
+    // or three-view layout fail-closed until its exact boundaries are captured.
+    return scheduler.present && scheduler.viewCount == kTwoViewProbeViewCount
+           && scheduler.wireBits == kTwoViewProbeWireBits;
 }
 
 /** @return Exact equality for a captured scheduler encoding and all logical view entries. */

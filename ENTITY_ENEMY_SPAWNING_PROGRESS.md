@@ -646,6 +646,17 @@ Once the director evaluates an encounter and creates native squad/member objects
   `a59f8c047eda82adaab6f7e82a95c3ecd533cdeb424ee013d302a94592b1acc0`. It retires only after this
   visit's descriptor publication plus accepted view and published activity host; historical
   readiness from a reused group cannot satisfy the visit marker.
+- The deployed `a59f8c...` run proves that cycle is fixed: region 24 was republished without its
+  citizen descriptor at `t=65506`, then reached `published=24`, `settled=24`, and `ready=1`.
+  However, one millisecond after the normal-z-leg began, the generalized post-handoff validator
+  sent a two-view/203-bit scheduler packet. The transport ACKed packet 135, but the native handler
+  epoch did not complete (`handler_complete=0`), and Basin remained `PUBLIC TARGET` until shutdown.
+  Packet-loss summaries remained at zero corrupt, but transport acknowledgement alone does not
+  make that scheduler grammar safe.
+- The current fail-closed scheduler candidate has SHA-256
+  `d4df9a600a01285196f727615d5e5295206dec50e5befe69e1db2fa4da63f176`. Post-handoff validation
+  now permits only the runtime-proven two-view/275-bit shape. Every 203-bit and every three-view
+  layout stays scheduler-free until its exact native handler boundaries are captured.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
