@@ -54,8 +54,10 @@ prefer the outgoing region.
 
 Promotion requires all of the following, otherwise it performs no write:
 
-- bootflow is freshly `in_world`;
-- the native world-manager slice set equals `primary_world().region`;
+- bootflow is freshly `in_world`; this keeps initial slice loading fail-closed;
+- `primary_world().region` is present. A normal z-leg may legitimately report the new region while
+  the retiring native slice still names the old one, so slice equality is diagnostic rather than
+  a promotion prerequisite;
 - that region resolves to an advertised group with a bound view and held host token;
 - the host token has a live entity-manager capture with namespace 0..2;
 - the captured manager pointer equals `runtime + 0x20938 + namespace * 0x11E08`;
@@ -69,7 +71,14 @@ bit plus the 220-bit atomic entity body. The entity region/bubble/cell come from
 view. Every create/retry/follow-up path also requires a fresh matching active-manager observation.
 
 Release SHA-256:
-`8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`.
+`54c55d9b2e6cdc40ac3634181d36506d23f3bc734d7632355bd0909d3c419edf`.
+
+The preceding strict-slice candidate
+`8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd` reached the exact
+two-view window at `t=89037` with current token `.003`, namespace 2, region 24/bubble 3/cell 11,
+but refused promotion because the retiring slice was still 408. The scheduler expanded to three
+views 61 ms later, so no entity packet was sent. This proves slice equality cannot gate the normal
+in-world z-leg reconciliation.
 
 ## Environment
 
@@ -2743,7 +2752,7 @@ Town bubble 51 plus Town-only spawn-set `0xCB8903DF` Release candidate SHA-256:
 `f70cd002c75cf9e42d2345340f17d564b66b77ad51f6d00e241cafca3b68aa7f`.
 
 Current-region simulation-manager promotion Release candidate SHA-256:
-`8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`.
+`54c55d9b2e6cdc40ac3634181d36506d23f3bc734d7632355bd0909d3c419edf`.
 
 After manual deployment, inspect:
 

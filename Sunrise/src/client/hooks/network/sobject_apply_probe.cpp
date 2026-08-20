@@ -632,16 +632,18 @@ void report_active_manager_promotion(const ActiveManagerDebugSnapshot& snapshot)
 void promote_current_region_manager(std::byte* runtime) noexcept {
     ActiveManagerDebugSnapshot snapshot{};
     snapshot.observedAt = GetTickCount64();
-    if (runtime == nullptr || !bootflow::in_world()
-        || !bootflow::current_slice_set(snapshot.nativeSlice)) {
+    if (runtime == nullptr || !bootflow::in_world()) {
         publish_active_manager(snapshot);
         return;
     }
+    // A normal z-leg changes the client-reported region before the old native slice retires. That
+    // is precisely the stuck PUBLIC CURRENT overlap this reconciliation repairs. Keep the slice
+    // as a diagnostic, but use in_world to distinguish it from unsafe initial loading.
+    (void)bootflow::current_slice_set(snapshot.nativeSlice);
 
     state::activity::membership::WorldSnapshot world{};
     if (!state::activity::membership::primary_world(world)
-        || world.region == state::activity::membership::kAbsentRegionIndex
-        || world.region != snapshot.nativeSlice) {
+        || world.region == state::activity::membership::kAbsentRegionIndex) {
         snapshot.region = world.region;
         publish_active_manager(snapshot);
         return;
@@ -1091,7 +1093,7 @@ bool current_region_manager_active(std::uint64_t token, std::int32_t namespaceId
     }
     return snapshot.ready && snapshot.managerMatched && snapshot.token == token
            && snapshot.requestedNamespace == namespaceId && snapshot.region >= 0
-           && snapshot.nativeSlice == snapshot.region && snapshot.observedAt != 0
+           && snapshot.observedAt != 0
            && GetTickCount64() - snapshot.observedAt < kActiveManagerFreshMilliseconds;
 }
 

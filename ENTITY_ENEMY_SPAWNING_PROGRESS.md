@@ -23,8 +23,11 @@ the active manager identity at runtime `+0x560E0`; it first marks the chosen man
 `+0x15C`. Sunrise now mirrors only those two manager-local writes. The override is fail-closed
 until the client is in-world, the native slice equals the membership region, the region's group
 view is bound, and the captured manager pointer exactly matches that namespace's fixed runtime
-slot. The atomic two-view create then targets that same current host token, namespace, region,
-bubble, and map-global cell instead of the outgoing Town view.
+slot. A normal in-world z-leg is allowed to report the new region while the retiring native slice
+still names the old one; that mismatch is diagnostic and is the transition this override repairs.
+Initial loading remains blocked by the fresh `in_world` requirement. The atomic two-view create
+then targets that same current host token, namespace, region, bubble, and map-global cell instead
+of the outgoing Town view.
 
 ## Progress by layer
 
@@ -55,7 +58,7 @@ bubble, and map-global cell instead of the outgoing Town view.
 - Current overlay/debug Release SHA-256:
   `5ac62efcbd6f0db1c880a32d6783355a17ac62fa478544b822b2d3115d0bf670`.
 - Current-region manager promotion Release SHA-256:
-  `8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`.
+  `54c55d9b2e6cdc40ac3634181d36506d23f3bc734d7632355bd0909d3c419edf`.
 
 ## Confirmed progress
 
@@ -468,9 +471,9 @@ The slot-14 atomic run then completed the current wire milestone:
 
 ### 1. Validate current-region manager promotion
 
-- Start a fresh EDZ session and let the normal broad-spawn route finish. Do not force an arrival
-  region. Require `active-region-manager result=promoted` when the overlay reports a newer current
-  region than the outgoing PUBLIC CURRENT manager.
+- Start a fresh EDZ session and let the normal broad-spawn route run. Do not force an arrival
+  region. Require `active-region-manager result=promoted` when the in-world overlay reports a newer
+  current region than the retiring native slice/PUBLIC CURRENT manager.
 - The Entity Debug Manager row must show the current region/slice and active namespace agreeing.
   Then require `entity-create-out` to use the same token/namespace and the overlay's exact
   region/bubble/cell, with no `OWNER MISMATCH`.
@@ -578,10 +581,12 @@ Once the director evaluates an encounter and creates native squad/member objects
 - The Town bubble 51 plus Town-only spawn-set `0xCB8903DF` Release candidate has SHA-256
   `f70cd002c75cf9e42d2345340f17d564b66b77ad51f6d00e241cafca3b68aa7f`.
 - The current-region manager promotion candidate has SHA-256
-  `8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`. It dynamically resolves
-  the player's current group host/captured namespace, requires the native slice to match that
-  region, promotes only the matching fixed-stride manager, and sends the Vandal into that same
-  view and spatial cell.
+  `54c55d9b2e6cdc40ac3634181d36506d23f3bc734d7632355bd0909d3c419edf`. It dynamically resolves
+  the player's current group host/captured namespace, promotes only the matching fixed-stride
+  manager after the player is in-world, and sends the Vandal into that same view and spatial cell.
+  Its predecessor `8d72493f382fb5382e3a05570eba87892c9b504082ba54509c3741d38a49cfdd`
+  sent nothing: at the 61-ms two-view window membership was region 24 while the retiring slice was
+  still 408, so the strict slice-equality gate closed before the scheduler expanded to three views.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
