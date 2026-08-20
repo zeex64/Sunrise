@@ -33,9 +33,12 @@ constexpr std::uint32_t kType2JobReportLimit = 16;
 constexpr std::uint32_t kActiveManagerSelectionReportLimit = 8;
 constexpr std::uint32_t kCitizenSessionReportLimit = 64;
 constexpr std::uint32_t kCitizenJoinReportLimit = 32;
+constexpr std::uint32_t kZLegReportLimit = 64;
 constexpr std::size_t kCitizenSessionCapacity = 8;
 constexpr std::size_t kCitizenJoinCapacity = 4;
 constexpr std::uint64_t kCitizenJoinHeartbeatMilliseconds = 5000;
+constexpr std::uint64_t kZLegHeartbeatMilliseconds = 5000;
+constexpr std::uint64_t kZLegFreshMilliseconds = 1500;
 constexpr std::size_t kManagerSlotMapOffset = 0x114;
 constexpr std::size_t kManagerSlotMapStride = 6;
 constexpr std::size_t kManagerOccupiedBitsetOffset = 0xC520;
@@ -82,6 +85,7 @@ using Type2Job = int(__fastcall*)(std::byte*, const void*, void**);
 using ActiveManagerRefresh = void(__fastcall*)(std::byte*);
 using CitizenSessionReady = bool(__fastcall*)(const std::byte*);
 using CitizenJoinStatus = std::int32_t(__fastcall*)(std::int32_t, std::uint64_t);
+using ZLegState = void(__fastcall*)(std::byte*, std::int32_t);
 
 std::atomic_uint32_t g_applyReports{};
 std::atomic_uint32_t g_kind0Reports{};
@@ -92,12 +96,17 @@ std::atomic_uint32_t g_type2JobReports{};
 std::atomic_uint32_t g_activeManagerSelectionReports{};
 std::atomic_uint32_t g_citizenSessionReports{};
 std::atomic_uint32_t g_citizenJoinReports{};
+std::atomic_uint32_t g_zLegReports{};
 std::atomic_uint64_t g_lastActiveManagerSelection{};
 std::atomic_uintptr_t g_runtime{};
 SRWLOCK g_activeManagerLock{SRWLOCK_INIT};
 ActiveManagerDebugSnapshot g_activeManagerDebug{};
 SRWLOCK g_citizenSessionLock{SRWLOCK_INIT};
 SRWLOCK g_citizenJoinLock{SRWLOCK_INIT};
+SRWLOCK g_zLegLock{SRWLOCK_INIT};
+ZLegDebugSnapshot g_zLegDebug{};
+std::uint64_t g_zLegReportedAt{};
+std::uint64_t g_zLegReportSignature{};
 
 struct CitizenSessionObservation {
     const std::byte* session{};
@@ -798,6 +807,149 @@ void report_citizen_join(std::uint64_t handle,
     }
 }
 
+/** Reads only fields used by the native positional normal-z-leg classifier. */
+[[nodiscard]] bool inspect_z_leg(const std::byte* controller, ZLegDebugSnapshot& output) noexcept {
+    output = {};
+    output.controller = reinterpret_cast<std::uintptr_t>(controller);
+    output.requestedState = -1;
+    output.storedBefore = -1;
+    output.storedAfter = -1;
+    output.transitionMode = -1;
+    output.targetRegion = -1;
+    output.regionA = -1;
+    output.regionB = -1;
+    output.authoredRegion = -1;
+    output.entryIndex = -1;
+    output.axis = -1;
+    if (controller == nullptr) {
+        return false;
+    }
+    __try {
+        std::uint8_t transitionMode = 0;
+        std::uint8_t transitionFlags = 0;
+        std::int8_t storedState = -1;
+        std::int16_t authoredRegion = -1;
+        std::uint8_t positionValid = 0;
+        std::memcpy(&transitionMode, controller + 0x209, sizeof transitionMode);
+        std::memcpy(&transitionFlags, controller + 0x20A, sizeof transitionFlags);
+        std::memcpy(&output.targetRegion, controller + 0x210, sizeof output.targetRegion);
+        std::memcpy(&output.regionA, controller + 0x2B0, sizeof output.regionA);
+        std::memcpy(&output.regionB, controller + 0x2B4, sizeof output.regionB);
+        std::memcpy(&storedState, controller + 0x352, sizeof storedState);
+        std::memcpy(&authoredRegion, controller + 0x4EC, sizeof authoredRegion);
+        std::memcpy(
+            &output.previousCoordinate, controller + 0x4F0, sizeof output.previousCoordinate);
+        std::memcpy(&output.entryIndex, controller + 0x4F4, sizeof output.entryIndex);
+        std::memcpy(&output.targetCoordinate, controller + 0x4F8, sizeof output.targetCoordinate);
+        std::memcpy(&output.axis, controller + 0x4FC, sizeof output.axis);
+        std::memcpy(&output.currentCoordinate, controller + 0x500, sizeof output.currentCoordinate);
+        std::memcpy(&positionValid, controller + 0x510, sizeof positionValid);
+        std::memcpy(&output.positionReference, controller + 0x514, sizeof output.positionReference);
+        output.storedAfter = storedState;
+        output.transitionMode = transitionMode;
+        output.transitionFlags = transitionFlags;
+        output.authoredRegion = authoredRegion;
+        output.positionValid = positionValid != 0;
+        output.readable = true;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        output = {};
+        output.requestedState = -1;
+        output.storedBefore = -1;
+        output.storedAfter = -1;
+        output.transitionMode = -1;
+        output.targetRegion = -1;
+        output.regionA = -1;
+        output.regionB = -1;
+        output.authoredRegion = -1;
+        output.entryIndex = -1;
+        output.axis = -1;
+        return false;
+    }
+}
+
+/** @return Stable key for one native positional-classifier observation. */
+[[nodiscard]] std::uint64_t z_leg_signature(const ZLegDebugSnapshot& snapshot) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&hash](std::uint64_t value) noexcept {
+        for (std::size_t index = 0; index < sizeof value; ++index) {
+            hash ^= static_cast<std::uint8_t>(value >> (index * 8U));
+            hash *= 1099511628211ULL;
+        }
+    };
+    mix(snapshot.controller);
+    mix(static_cast<std::uint32_t>(snapshot.requestedState));
+    mix(static_cast<std::uint32_t>(snapshot.storedAfter));
+    mix(static_cast<std::uint32_t>(snapshot.transitionMode));
+    mix(snapshot.transitionFlags);
+    mix(static_cast<std::uint32_t>(snapshot.targetRegion));
+    mix(static_cast<std::uint32_t>(snapshot.regionA));
+    mix(static_cast<std::uint32_t>(snapshot.regionB));
+    mix(static_cast<std::uint32_t>(snapshot.authoredRegion));
+    mix(static_cast<std::uint32_t>(snapshot.entryIndex));
+    mix(static_cast<std::uint32_t>(snapshot.axis));
+    mix(snapshot.positionReference);
+    mix(snapshot.positionValid ? 1U : 0U);
+    return hash == 0 ? 1 : hash;
+}
+
+/** Publishes every fresh observation and claims only bounded changes or heartbeats for logging. */
+[[nodiscard]] bool publish_z_leg(const ZLegDebugSnapshot& snapshot,
+                                 std::uint32_t& occurrence) noexcept {
+    occurrence = 0;
+    if (!TryAcquireSRWLockExclusive(&g_zLegLock)) {
+        return false;
+    }
+    const std::uint64_t signature = z_leg_signature(snapshot);
+    const bool due = signature != g_zLegReportSignature || g_zLegReportedAt == 0
+                     || snapshot.observedAt - g_zLegReportedAt >= kZLegHeartbeatMilliseconds;
+    g_zLegDebug = snapshot;
+    if (due) {
+        g_zLegReportSignature = signature;
+        g_zLegReportedAt = snapshot.observedAt;
+    }
+    ReleaseSRWLockExclusive(&g_zLegLock);
+    if (!due || g_zLegReports.load(std::memory_order_relaxed) >= kZLegReportLimit) {
+        return false;
+    }
+    occurrence = g_zLegReports.fetch_add(1, std::memory_order_relaxed) + 1;
+    return occurrence <= kZLegReportLimit;
+}
+
+/** Reports the exact native positional band that blocks PUBLIC TARGET promotion. */
+void report_z_leg(const ZLegDebugSnapshot& snapshot, std::uint32_t occurrence) noexcept {
+    std::array<char, 512> line{};
+    const int written = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=gameplay stage=z-leg-state occurrence=%u controller=%p requested=%d "
+        "stored=%d->%d mode=%d flags=0x%02X target=%d region_fields=%d/%d authored=%d "
+        "entry=%d axis=%d coordinates=%.5g/%.5g/%.5g position_valid=%u ref=0x%08X",
+        occurrence,
+        reinterpret_cast<void*>(snapshot.controller),
+        snapshot.requestedState,
+        snapshot.storedBefore,
+        snapshot.storedAfter,
+        snapshot.transitionMode,
+        snapshot.transitionFlags,
+        snapshot.targetRegion,
+        snapshot.regionA,
+        snapshot.regionB,
+        snapshot.authoredRegion,
+        snapshot.entryIndex,
+        snapshot.axis,
+        static_cast<double>(snapshot.previousCoordinate),
+        static_cast<double>(snapshot.targetCoordinate),
+        static_cast<double>(snapshot.currentCoordinate),
+        snapshot.positionValid ? 1U : 0U,
+        snapshot.positionReference);
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 /** Publishes one coherent current-region manager observation for the overlay and send gate. */
 void publish_active_manager(const ActiveManagerDebugSnapshot& snapshot) noexcept {
     AcquireSRWLockExclusive(&g_activeManagerLock);
@@ -1315,6 +1467,35 @@ citizen_join_status_body(std::int32_t kind, std::uint64_t handle) noexcept {
     return state;
 }
 
+/** Preserves native z-leg state publication and passively records its positional classifier. */
+__declspec(noinline) void __fastcall z_leg_state_body(std::byte* controller,
+                                                      std::int32_t requestedState) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(lease, HookSlot::zLegState, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<ZLegState>(lease.original);
+    __try {
+        ZLegDebugSnapshot before{};
+        if (lease.accepting) {
+            (void)inspect_z_leg(controller, before);
+        }
+        if (call != nullptr) {
+            call(controller, requestedState);
+        }
+        ZLegDebugSnapshot after{};
+        std::uint32_t occurrence = 0;
+        if (lease.accepting && inspect_z_leg(controller, after)) {
+            after.observedAt = GetTickCount64();
+            after.requestedState = requestedState;
+            after.storedBefore = before.readable ? before.storedAfter : -1;
+            if (publish_z_leg(after, occurrence)) {
+                report_z_leg(after, occurrence);
+            }
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+}
+
 } // namespace
 
 void* apply_entry_point() noexcept {
@@ -1355,6 +1536,10 @@ void* citizen_session_ready_entry_point() noexcept {
 
 void* citizen_join_status_entry_point() noexcept {
     return reinterpret_cast<void*>(&citizen_join_status_body);
+}
+
+void* z_leg_state_entry_point() noexcept {
+    return reinterpret_cast<void*>(&z_leg_state_body);
 }
 
 void service_current_region_manager() noexcept {
@@ -1408,6 +1593,25 @@ bool active_manager_debug_snapshot(ActiveManagerDebugSnapshot& output) noexcept 
     return output.observedAt != 0;
 }
 
+bool z_leg_debug_snapshot(ZLegDebugSnapshot& output) noexcept {
+    output = {};
+    output.requestedState = -1;
+    output.storedBefore = -1;
+    output.storedAfter = -1;
+    output.transitionMode = -1;
+    output.targetRegion = -1;
+    output.regionA = -1;
+    output.regionB = -1;
+    output.authoredRegion = -1;
+    output.entryIndex = -1;
+    output.axis = -1;
+    AcquireSRWLockShared(&g_zLegLock);
+    output = g_zLegDebug;
+    ReleaseSRWLockShared(&g_zLegLock);
+    return output.readable && output.observedAt != 0
+           && GetTickCount64() - output.observedAt < kZLegFreshMilliseconds;
+}
+
 void reset() noexcept {
     g_applyReports.store(0, std::memory_order_relaxed);
     g_kind0Reports.store(0, std::memory_order_relaxed);
@@ -1418,6 +1622,7 @@ void reset() noexcept {
     g_activeManagerSelectionReports.store(0, std::memory_order_relaxed);
     g_citizenSessionReports.store(0, std::memory_order_relaxed);
     g_citizenJoinReports.store(0, std::memory_order_relaxed);
+    g_zLegReports.store(0, std::memory_order_relaxed);
     g_lastActiveManagerSelection.store(0, std::memory_order_relaxed);
     g_runtime.store(0, std::memory_order_release);
     AcquireSRWLockExclusive(&g_activeManagerLock);
@@ -1429,6 +1634,11 @@ void reset() noexcept {
     AcquireSRWLockExclusive(&g_citizenJoinLock);
     g_citizenJoins = {};
     ReleaseSRWLockExclusive(&g_citizenJoinLock);
+    AcquireSRWLockExclusive(&g_zLegLock);
+    g_zLegDebug = {};
+    g_zLegReportedAt = 0;
+    g_zLegReportSignature = 0;
+    ReleaseSRWLockExclusive(&g_zLegLock);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_apply_probe

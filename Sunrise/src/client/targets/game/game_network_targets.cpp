@@ -149,6 +149,7 @@ bool derive(std::span<const patterns::ImageRange> image,
         matches[index(patterns::game::Id::activeManagerRefresh)].address;
     resolved.citizenSessionReady = matches[index(patterns::game::Id::citizenSessionReady)].address;
     resolved.citizenJoinStatus = matches[index(patterns::game::Id::citizenJoinStatus)].address;
+    resolved.zLegState = matches[index(patterns::game::Id::zLegState)].address;
     std::byte* const contentIdTokenLoad =
         matches[index(patterns::game::Id::contentIdTokenLoad)].address;
     if (!relative::resolve(contentIdTokenLoad,

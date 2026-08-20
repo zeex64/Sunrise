@@ -67,6 +67,7 @@ struct Targets {
     std::byte* activeManagerRefresh{};
     std::byte* citizenSessionReady{};
     std::byte* citizenJoinStatus{};
+    std::byte* zLegState{};
     std::byte* contentIdToken{};
 };
 

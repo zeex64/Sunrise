@@ -450,6 +450,15 @@ constexpr std::string_view kCitizenJoinStatusText =
 constexpr auto kCitizenJoinStatus =
     signature<signature_length(kCitizenJoinStatusText)>(kCitizenJoinStatusText);
 
+// Matches the native normal-z-leg state publisher called by the positional transition tick.
+// This position-independent prologue is unique in the current image; the function stores the
+// requested classifier band at controller+0x352 after performing its native side effects.
+constexpr std::string_view kZLegStateText =
+    "48 89 5C 24 18 48 89 74 24 20 55 57 41 54 41 55 41 56 48 8D AC 24 90 FD FF FF 48 81 EC "
+    "70 03 00 00";
+/** Compiled pattern bytes of the normal-z-leg state publisher signature above. */
+constexpr auto kZLegState = signature<signature_length(kZLegStateText)>(kZLegStateText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -544,6 +553,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"active_manager_refresh", kActiveManagerRefresh},
     patterns::Pattern{"citizen_session_ready", kCitizenSessionReady},
     patterns::Pattern{"citizen_join_status", kCitizenJoinStatus},
+    patterns::Pattern{"z_leg_state", kZLegState},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},

@@ -64,6 +64,9 @@ void draw() noexcept {
     client::hooks::network::sobject_apply_probe::ActiveManagerDebugSnapshot manager{};
     const bool managerPresent =
         client::hooks::network::sobject_apply_probe::active_manager_debug_snapshot(manager);
+    client::hooks::network::sobject_apply_probe::ZLegDebugSnapshot zLeg{};
+    const bool zLegPresent =
+        client::hooks::network::sobject_apply_probe::z_leg_debug_snapshot(zLeg);
     probe::EntityDebugSnapshot entity{};
     if (!probe::debug_snapshot(entity)) {
         ImGui::TextDisabled("no synthetic entity sent");
@@ -74,6 +77,17 @@ void draw() noexcept {
                         manager.activeAfter,
                         manager.requestedNamespace,
                         manager.ready ? "  ready" : "  waiting");
+        }
+        if (zLegPresent) {
+            ImGui::TextColored(ImVec4{1.0F, 0.55F, 0.25F, 1.0F},
+                               "z-leg mode %d  state %d  target %d  axis %d  pos %.1f/%.1f/%.1f",
+                               zLeg.transitionMode,
+                               zLeg.requestedState,
+                               zLeg.targetRegion,
+                               zLeg.axis,
+                               static_cast<double>(zLeg.previousCoordinate),
+                               static_cast<double>(zLeg.targetCoordinate),
+                               static_cast<double>(zLeg.currentCoordinate));
         }
         return;
     }
@@ -144,6 +158,21 @@ void draw() noexcept {
                     manager.activeAfter,
                     manager.region,
                     manager.nativeSlice);
+    }
+
+    begin_row("Transition");
+    if (!zLegPresent) {
+        ImGui::TextDisabled("no active z-leg classification");
+    } else {
+        ImGui::TextColored(ImVec4{1.0F, 0.55F, 0.25F, 1.0F},
+                           "mode %d state %d target %d axis %d pos %.1f/%.1f/%.1f",
+                           zLeg.transitionMode,
+                           zLeg.requestedState,
+                           zLeg.targetRegion,
+                           zLeg.axis,
+                           static_cast<double>(zLeg.previousCoordinate),
+                           static_cast<double>(zLeg.targetCoordinate),
+                           static_cast<double>(zLeg.currentCoordinate));
     }
 
     begin_row("Native");

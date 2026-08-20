@@ -657,6 +657,28 @@ Once the director evaluates an encounter and creates native squad/member objects
   `d4df9a600a01285196f727615d5e5295206dec50e5befe69e1db2fa4da63f176`. Post-handoff validation
   now permits only the runtime-proven two-view/275-bit shape. Every 203-bit and every three-view
   layout stays scheduler-free until its exact native handler boundaries are captured.
+- The stationary `d4df9a...` run is network-clean and rules out the rejected scheduler frame as the
+  handoff blocker. Region 24 completed its async citizen join, selected-peer state 10,
+  activity-host join, bound view, descriptor retirement, and server settlement
+  (`published=24`, `settled=24`, `ready=1`). No post-handoff scheduler body or entity record was
+  sent. Despite that, namespace 1 / region 408 remained native `PUBLIC CURRENT` and namespace 2 /
+  region 24 remained `PUBLIC TARGET` until shutdown.
+- Ghidra now identifies the remaining native gate exactly. `FUN_140E24C80` is the normal-z-leg
+  positional tick. It classifies the player's coordinate into states 1, 2, 3, or the special state
+  4 and publishes that nonzero band through `FUN_140E12910`. Only state 0 calls
+  `FUN_140E2B660(..., "completed")`; that routine performs the coordinated PUBLIC TARGET/CURRENT
+  swap and ultimately refreshes `runtime+0x560E0`. The traversal run that promoted both regions
+  involved player movement; the stationary run remained inside the overlap band. The two session
+  rows are therefore expected overlap state, not duplicate players or stale overlay entries.
+- Do not force `FUN_140E2B660`, write the active namespace, or publish region 24 as the initial
+  arrival. Those shortcuts bypass coordinated connection/spatial side effects; the direct-Basin
+  build already proved the latter can omit the authored player baseline and black-screen.
+- The passive z-leg diagnostic Release build has SHA-256
+  `0e0cfc8c4f4173e0247bf99e3367d9edbc083ec9df8cb2409582d32a8d888d3f`. Its unique hook at
+  `FUN_140E12910` logs `z-leg-state` changes/heartbeats and exposes the fresh state in the Entity
+  Debug overlay. It records transition mode, requested/stored band, target and controller region
+  fields, authored z-leg entry/axis, interpolated coordinate triplet, and position-reference state.
+  It is observation-only and leaves native transition behavior unchanged.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

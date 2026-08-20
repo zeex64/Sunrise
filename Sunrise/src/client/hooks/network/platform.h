@@ -63,6 +63,7 @@ enum class HookSlot : std::size_t {
     activeManagerRefresh,
     citizenSessionReady,
     citizenJoinStatus,
+    zLegState,
     count,
 };
 

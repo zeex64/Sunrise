@@ -2861,6 +2861,55 @@ bits, the only multi-view grammar already accepted end-to-end. Two-/three-view 2
 three-view 275-bit layouts now fail closed and emit no scheduler body. Release SHA-256:
 `d4df9a600a01285196f727615d5e5295206dec50e5befe69e1db2fa4da63f176`.
 
+### Stationary overlap: native normal-z-leg completion gate
+
+The stationary `d4df9a...` run removes the malformed post-handoff scheduler packet from the
+timeline. The Basin target still passed every server and client session prerequisite: async join
+`1 -> 2 -> 3 -> 0`, initialized session, selected-peer state 10, activity-host join, view bound,
+visit-safe descriptor retirement, and root settlement at `published=24 settled=24 ready=1`. No
+scheduler body or entity record left after the handoff began, and transport stayed at zero loss and
+corruption. Namespace 1/region 408 nevertheless remained native current while namespace 2/region
+24 remained target. This excludes entity framing, scheduler replay, citizen readiness, descriptor
+retirement, and server settlement as the reason the native role did not swap.
+
+`FUN_140E24C80(controller)` is the remaining normal-z-leg tick. It reads the active player's
+authored z-leg entry and axis, maintains controller fields `+0x4EC..+0x514`, interpolates a scalar
+coordinate, and compares it against three configuration thresholds. Its result is:
+
+- `3` below the first threshold;
+- `2` between the first and second thresholds;
+- `1` between the second and completion threshold;
+- `4` for the special authored two-entry case;
+- `0` only after the coordinate leaves every transition band.
+
+While transition mode `controller+0x209` is 3, every nonzero result calls
+`FUN_140E12910(controller, state, "Z-leg transition update")`. That function preserves native side
+effects and stores the band byte at `controller+0x352`. Result zero takes a separate branch and
+calls `FUN_140E2B660(controller, "completed")`. The completion routine performs the coordinated
+public-role/session swap whose downstream refresh is the only legitimate writer of the active
+simulation-manager identity at `runtime+0x560E0`. It must not be called or emulated by Sunrise.
+
+This explains the two session rows. Region 408 is the old/current overlap world; region 24 is the
+joined target for the physical Basin side. They are not two players and are not stale overlay rows.
+The target becomes current only after native position classification reaches zero. The earlier
+visit-aware traversal run promoted region 24 and then region 408 while the player was moving; the
+latest stationary run never left the overlap band. Directly starting on Basin is still unsafe
+because the rejected build lacked the authored initial baseline and black-screened.
+
+The observation-only diagnostic hooks `FUN_140E12910` with the unique 33-byte entry signature:
+
+```text
+48 89 5C 24 18 48 89 74 24 20 55 57 41 54 41 55 41 56
+48 8D AC 24 90 FD FF FF 48 81 EC 70 03 00 00
+```
+
+Ghidra finds exactly one match at `0x140E12910`. Bounded `z-leg-state` reports include requested
+and stored band, mode/flags, target region, raw `+0x2B0/+0x2B4` region fields, authored region,
+entry index, axis, previous/target/current scalar coordinates, and position-reference state. The
+Entity Debug overlay shows the same fresh classification even before a synthetic entity is sent.
+No controller field is written by the hook. Release SHA-256:
+`0e0cfc8c4f4173e0247bf99e3367d9edbc083ec9df8cb2409582d32a8d888d3f`.
+
 After manual deployment, inspect:
 
 ```text
@@ -2905,4 +2954,5 @@ scheduler-handler-trace
 activity-host-decode
 citizen-acceptance
 citizen-join-status
+z-leg-state
 ```
