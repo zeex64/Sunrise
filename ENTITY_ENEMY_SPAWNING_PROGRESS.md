@@ -600,6 +600,19 @@ Once the director evaluates an encounter and creates native squad/member objects
 - The sessions overlay now labels the player-reported destination `target` until its captured
   namespace is the native active manager. `current` therefore means native current, while
   `overlap` names another still-live session; a merely reported region is no longer mislabeled.
+- The deployed `af9fd044...` run proved the initial EDZ session did become native `PUBLIC CURRENT`
+  at `t=60714`; the overlay still called it `target` only because its passive observer waited for
+  the later server view-bound marker. The same run proved later citizen joins establish their group
+  and activity-host links but can remain `PUBLIC TARGET` until preempted, producing real
+  `absent/unjoined` rows and stuck loading zones. Keeping the citizen descriptor alive did not
+  complete that handoff.
+- The next passive transition diagnostic has SHA-256
+  `120c0594ee2ab23d237c18f8e2f13e0fe1bd994fd3dd97678dc81154dd853d26`. It reads the native active
+  namespace before requiring a bound semantic view, correcting the initial role label. A unique
+  hook at `FUN_141788810` logs `citizen-acceptance` only when the target session's initialization
+  count, selected peer, selected peer state, or lifecycle changes. Ghidra proves the world
+  controller requires a nonzero count and selected-peer state `10` immediately before it logs
+  `Citizen join ... almost complete, accepting join`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

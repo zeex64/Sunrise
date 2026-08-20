@@ -31,6 +31,8 @@ constexpr std::uint32_t kDirtyServiceReportLimit = 8;
 constexpr std::uint32_t kDirtyRowReportLimit = 8;
 constexpr std::uint32_t kType2JobReportLimit = 16;
 constexpr std::uint32_t kActiveManagerSelectionReportLimit = 8;
+constexpr std::uint32_t kCitizenSessionReportLimit = 64;
+constexpr std::size_t kCitizenSessionCapacity = 8;
 constexpr std::size_t kManagerSlotMapOffset = 0x114;
 constexpr std::size_t kManagerSlotMapStride = 6;
 constexpr std::size_t kManagerOccupiedBitsetOffset = 0xC520;
@@ -48,6 +50,15 @@ constexpr std::size_t kContainerObjectManagerOffset = 0x270;
 /** Active-manager observations expire before they may authorize an entity send. */
 constexpr std::uint64_t kActiveManagerFreshMilliseconds = 500;
 constexpr std::int32_t kSimulationManagerCount = 3;
+/** Fields read by FUN_141788810 and the world-controller acceptance check that calls it. */
+constexpr std::size_t kCitizenRoleOffset = 0x854;
+constexpr std::size_t kCitizenReadyCountOffset = 0x86C;
+constexpr std::size_t kCitizenSequenceOffset = 0x87C;
+constexpr std::size_t kCitizenSelectedPeerOffset = 0xE93C;
+constexpr std::size_t kCitizenLifecycleOffset = 0x1AEF8;
+constexpr std::size_t kCitizenPeerRowsOffset = 0x1FB8;
+constexpr std::size_t kCitizenPeerRowStride = 0x120;
+constexpr std::int32_t kCitizenPeerCapacity = 32;
 
 using ApplyJob = void(__fastcall*)(std::byte*);
 using Kind0Constructor = bool(__fastcall*)(void*, const std::uint32_t*, std::uint32_t, int);
@@ -66,6 +77,7 @@ using DirtyRow = std::uint8_t(__fastcall*)(std::byte*,
                                            std::uint8_t);
 using Type2Job = int(__fastcall*)(std::byte*, const void*, void**);
 using ActiveManagerRefresh = void(__fastcall*)(std::byte*);
+using CitizenSessionReady = bool(__fastcall*)(const std::byte*);
 
 std::atomic_uint32_t g_applyReports{};
 std::atomic_uint32_t g_kind0Reports{};
@@ -74,10 +86,31 @@ std::atomic_uint32_t g_dirtyServiceReports{};
 std::atomic_uint32_t g_dirtyRowReports{};
 std::atomic_uint32_t g_type2JobReports{};
 std::atomic_uint32_t g_activeManagerSelectionReports{};
+std::atomic_uint32_t g_citizenSessionReports{};
 std::atomic_uint64_t g_lastActiveManagerSelection{};
 std::atomic_uintptr_t g_runtime{};
 SRWLOCK g_activeManagerLock{SRWLOCK_INIT};
 ActiveManagerDebugSnapshot g_activeManagerDebug{};
+SRWLOCK g_citizenSessionLock{SRWLOCK_INIT};
+
+struct CitizenSessionObservation {
+    const std::byte* session{};
+    std::uint64_t signature{};
+};
+
+std::array<CitizenSessionObservation, kCitizenSessionCapacity> g_citizenSessions{};
+
+struct CitizenSessionSnapshot {
+    const std::byte* session{};
+    std::int32_t role{-1};
+    std::int32_t readyCount{-1};
+    std::int32_t sequence{-1};
+    std::int32_t selectedPeer{-1};
+    std::int32_t selectedState{-1};
+    std::int32_t lifecycle{-1};
+    bool result{};
+    bool readable{};
+};
 
 struct JobSnapshot {
     std::uint8_t type{};
@@ -565,6 +598,127 @@ void report_type2_job(const char* phase,
     }
 }
 
+/** Reads only the public-session fields used by the citizen-join acceptance path. */
+[[nodiscard]] bool inspect_citizen_session(const std::byte* session,
+                                           bool result,
+                                           CitizenSessionSnapshot& output) noexcept {
+    output = {};
+    output.session = session;
+    output.role = -1;
+    output.readyCount = -1;
+    output.sequence = -1;
+    output.selectedPeer = -1;
+    output.selectedState = -1;
+    output.lifecycle = -1;
+    output.result = result;
+    if (session == nullptr) {
+        return false;
+    }
+    __try {
+        std::memcpy(&output.role, session + kCitizenRoleOffset, sizeof output.role);
+        std::memcpy(
+            &output.readyCount, session + kCitizenReadyCountOffset, sizeof output.readyCount);
+        std::memcpy(&output.sequence, session + kCitizenSequenceOffset, sizeof output.sequence);
+        std::memcpy(
+            &output.selectedPeer, session + kCitizenSelectedPeerOffset, sizeof output.selectedPeer);
+        std::memcpy(&output.lifecycle, session + kCitizenLifecycleOffset, sizeof output.lifecycle);
+        if (output.selectedPeer >= 0 && output.selectedPeer < kCitizenPeerCapacity) {
+            const std::size_t peerOffset =
+                kCitizenPeerRowsOffset
+                + static_cast<std::size_t>(output.selectedPeer) * kCitizenPeerRowStride;
+            std::memcpy(&output.selectedState, session + peerOffset, sizeof output.selectedState);
+        }
+        output.readable = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        output.readable = false;
+    }
+    return output.readable;
+}
+
+/** @return Stable key for one acceptance-relevant public-session state. */
+[[nodiscard]] std::uint64_t
+citizen_session_signature(const CitizenSessionSnapshot& snapshot) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&hash](std::uint64_t value) noexcept {
+        for (std::size_t index = 0; index < sizeof value; ++index) {
+            hash ^= static_cast<std::uint8_t>(value >> (index * 8U));
+            hash *= 1099511628211ULL;
+        }
+    };
+    mix(static_cast<std::uint32_t>(snapshot.role));
+    mix(static_cast<std::uint32_t>(snapshot.readyCount));
+    mix(static_cast<std::uint32_t>(snapshot.sequence));
+    mix(static_cast<std::uint32_t>(snapshot.selectedPeer));
+    mix(static_cast<std::uint32_t>(snapshot.selectedState));
+    mix(static_cast<std::uint32_t>(snapshot.lifecycle));
+    mix(snapshot.result ? 1U : 0U);
+    return hash == 0 ? 1 : hash;
+}
+
+/** Claims one bounded report when a session's acceptance-relevant state changes. */
+[[nodiscard]] bool claim_citizen_session_report(const CitizenSessionSnapshot& snapshot,
+                                                std::uint32_t& occurrence) noexcept {
+    occurrence = 0;
+    if (g_citizenSessionReports.load(std::memory_order_relaxed) >= kCitizenSessionReportLimit
+        || !TryAcquireSRWLockExclusive(&g_citizenSessionLock)) {
+        return false;
+    }
+    const std::uint64_t signature = citizen_session_signature(snapshot);
+    CitizenSessionObservation* selected = nullptr;
+    CitizenSessionObservation* empty = nullptr;
+    for (CitizenSessionObservation& entry : g_citizenSessions) {
+        if (entry.session == snapshot.session) {
+            selected = &entry;
+            break;
+        }
+        if (entry.session == nullptr && empty == nullptr) {
+            empty = &entry;
+        }
+    }
+    if (selected == nullptr) {
+        selected = empty;
+    }
+    const bool changed = selected != nullptr && selected->signature != signature;
+    if (changed) {
+        selected->session = snapshot.session;
+        selected->signature = signature;
+    }
+    ReleaseSRWLockExclusive(&g_citizenSessionLock);
+    if (!changed) {
+        return false;
+    }
+    occurrence = g_citizenSessionReports.fetch_add(1, std::memory_order_relaxed) + 1;
+    return occurrence <= kCitizenSessionReportLimit;
+}
+
+/** Reports the exact two gates immediately before a citizen join may be accepted. */
+void report_citizen_session(const CitizenSessionSnapshot& snapshot,
+                            std::uint32_t occurrence) noexcept {
+    std::array<char, 384> line{};
+    const int written =
+        std::snprintf(line.data(),
+                      line.size(),
+                      "ev=gameplay stage=citizen-acceptance occurrence=%u session=%p "
+                      "role_field=%d ready_count=%d sequence=%d selected=%d "
+                      "selected_state=%d lifecycle=%d initialized=%u peer_ready=%u result=%u",
+                      occurrence,
+                      static_cast<const void*>(snapshot.session),
+                      snapshot.role,
+                      snapshot.readyCount,
+                      snapshot.sequence,
+                      snapshot.selectedPeer,
+                      snapshot.selectedState,
+                      snapshot.lifecycle,
+                      snapshot.readyCount != 0 ? 1U : 0U,
+                      snapshot.selectedState == 10 ? 1U : 0U,
+                      snapshot.result ? 1U : 0U);
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
 /** Publishes one coherent current-region manager observation for the overlay and send gate. */
 void publish_active_manager(const ActiveManagerDebugSnapshot& snapshot) noexcept {
     AcquireSRWLockExclusive(&g_activeManagerLock);
@@ -637,6 +791,22 @@ void observe_current_region_manager(std::byte* runtime) noexcept {
     // is precisely the stuck PUBLIC CURRENT overlap this reconciliation repairs. Keep the slice
     // as a diagnostic, but use in_world to distinguish it from unsafe initial loading.
     (void)bootflow::current_slice_set(snapshot.nativeSlice);
+    // Native PUBLIC CURRENT exists before the initial gameplay view reaches the server's later
+    // bound marker. Read the native identity first so the session overlay can name that row
+    // correctly even while the semantic current-region capture is still incomplete.
+    __try {
+        std::memcpy(&snapshot.activeBefore,
+                    runtime + kRuntimeActiveManagerOffset,
+                    sizeof snapshot.activeBefore);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        publish_active_manager(snapshot);
+        return;
+    }
+    if (snapshot.activeBefore < 0 || snapshot.activeBefore >= kSimulationManagerCount) {
+        publish_active_manager(snapshot);
+        return;
+    }
+    snapshot.activeAfter = snapshot.activeBefore;
 
     state::activity::membership::WorldSnapshot world{};
     if (!state::activity::membership::primary_world(world)
@@ -676,22 +846,17 @@ void observe_current_region_manager(std::byte* runtime) noexcept {
     std::int32_t managerIdentity = -1;
     __try {
         std::memcpy(&managerIdentity, container + 8, sizeof managerIdentity);
-        std::memcpy(&snapshot.activeBefore,
-                    runtime + kRuntimeActiveManagerOffset,
-                    sizeof snapshot.activeBefore);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         publish_active_manager(snapshot);
         return;
     }
     snapshot.managerMatched =
-        capture.manager == expectedManager && managerIdentity == capture.namespaceId
-        && snapshot.activeBefore >= 0 && snapshot.activeBefore < kSimulationManagerCount;
+        capture.manager == expectedManager && managerIdentity == capture.namespaceId;
     if (!snapshot.managerMatched) {
         publish_active_manager(snapshot);
         return;
     }
 
-    snapshot.activeAfter = snapshot.activeBefore;
     snapshot.ready = snapshot.activeAfter == capture.namespaceId;
     publish_active_manager(snapshot);
     if (snapshot.ready) {
@@ -1027,6 +1192,29 @@ __declspec(noinline) void __fastcall active_manager_refresh_body(std::byte* runt
     }
 }
 
+/** Preserves the public-session predicate and passively exposes both citizen acceptance gates. */
+__declspec(noinline) bool __fastcall citizen_session_ready_body(const std::byte* session) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(
+        lease, HookSlot::citizenSessionReady, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<CitizenSessionReady>(lease.original);
+    bool result = false;
+    __try {
+        if (call != nullptr) {
+            result = call(session);
+        }
+        CitizenSessionSnapshot snapshot{};
+        std::uint32_t occurrence = 0;
+        if (lease.accepting && inspect_citizen_session(session, result, snapshot)
+            && claim_citizen_session_report(snapshot, occurrence)) {
+            report_citizen_session(snapshot, occurrence);
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+    return result;
+}
+
 } // namespace
 
 void* apply_entry_point() noexcept {
@@ -1059,6 +1247,10 @@ void* type2_job_entry_point() noexcept {
 
 void* active_manager_refresh_entry_point() noexcept {
     return reinterpret_cast<void*>(&active_manager_refresh_body);
+}
+
+void* citizen_session_ready_entry_point() noexcept {
+    return reinterpret_cast<void*>(&citizen_session_ready_body);
 }
 
 void service_current_region_manager() noexcept {
@@ -1120,11 +1312,15 @@ void reset() noexcept {
     g_dirtyRowReports.store(0, std::memory_order_relaxed);
     g_type2JobReports.store(0, std::memory_order_relaxed);
     g_activeManagerSelectionReports.store(0, std::memory_order_relaxed);
+    g_citizenSessionReports.store(0, std::memory_order_relaxed);
     g_lastActiveManagerSelection.store(0, std::memory_order_relaxed);
     g_runtime.store(0, std::memory_order_release);
     AcquireSRWLockExclusive(&g_activeManagerLock);
     g_activeManagerDebug = {};
     ReleaseSRWLockExclusive(&g_activeManagerLock);
+    AcquireSRWLockExclusive(&g_citizenSessionLock);
+    g_citizenSessions = {};
+    ReleaseSRWLockExclusive(&g_citizenSessionLock);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_apply_probe

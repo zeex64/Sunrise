@@ -2757,6 +2757,9 @@ Current-region simulation-manager promotion Release candidate SHA-256:
 Transition-safe passive-manager Release candidate SHA-256:
 `af9fd044c9d4aada42844c89ea065bdb567a8909e51395a00bcee35c8bd3e487`.
 
+Citizen-acceptance passive diagnostic Release candidate SHA-256:
+`120c0594ee2ab23d237c18f8e2f13e0fe1bd994fd3dd97678dc81154dd853d26`.
+
 The `54c55d9b...` run separated replication ownership from native world residency. Namespace 2,
 view 1, region 24, bubble 3, and cell 11 all matched; the record decoded, promoted, and was serviced
 by manager 2. Nevertheless `FUN_14170B660` returned every frame without adding a batch or calling
@@ -2767,6 +2770,18 @@ world. The replacement now observes `FUN_1416EC250` passively. The server retain
 descriptor and suppresses entity output until native selection reaches the exact current token.
 The sessions overlay applies the same distinction: a player-reported row is `target` until its
 captured namespace equals the native active manager, then and only then becomes `current`.
+
+The `af9fd044...` run showed that the initial EDZ session reaches native `PUBLIC CURRENT` before its
+server view ever reaches the later bound marker. The observer now publishes the guarded
+`runtime+0x560E0` identity first, so `native_manager_active()` can correctly label that initial row
+without weakening the entity/citizen-retirement gate. Later z-leg target sessions still establish
+their group and activity host but never emit the world-controller `almost complete, accepting join`
+line. Ghidra resolves its immediate tests to `FUN_141788810(session)`, which returns whether
+`session+0x86C` is nonzero, followed by selected index `session+0xE93C` and a 0x120-stride peer row
+whose state at `session+0x1FB8+index*0x120` must equal `10`. The new passive hook reports those
+values on change as `citizen-acceptance`; it does not write session, slice, or manager state. The
+roster still reports region 24 with destination-arrival spawn override slice 408, which remains a
+candidate only until this probe identifies which native acceptance gate is actually false.
 
 After manual deployment, inspect:
 
@@ -2809,4 +2824,5 @@ scheduler-native-signature
 scheduler-two-view-probe
 scheduler-handler-trace
 activity-host-decode
+citizen-acceptance
 ```
