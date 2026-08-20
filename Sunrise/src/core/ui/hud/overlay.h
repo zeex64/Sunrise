@@ -12,12 +12,15 @@ enum class Overlay : std::uint8_t {
     currentStatus,
     /** The instances of the session the player is in. */
     session,
+    /** The server-authored test entity and every observed client lifecycle stage. */
+    entity,
     count,
 };
 
 /** Every line of the current-status overlay, each with its own switch. */
 enum class StatusLine : std::uint8_t {
     activity,
+    region,
     bubble,
     sliceSet,
     closestSpawn,

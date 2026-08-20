@@ -11,15 +11,39 @@ The distinction matters: the hand-built entity is currently a wire-protocol prob
 should originate from the authored activity/director layer, which evaluates triggers, spawn rules,
 squads, and encounters before publishing native objects through the replication path.
 
+The latest broad-spawn control restored the configuration that reliably constructs an audible
+Vandal. The new in-game entity overlay proves why it is not visible: the bound entity belongs to
+Town replication namespace 1 at region 408 / bubble 51 / cell 145, while the player and renderer
+are currently in Basin at region 24 / bubble 3. This is an explicit owner mismatch, not a failed
+RSAT load, type-2 job, kind-0 construction, or native glue bind.
+
 ## Progress by layer
 
 | Layer | Progress |
 | --- | --- |
 | Gameplay session and views | Working and substantially stabilized |
-| Replication scheduler | One-view 203-bit framing is validated; the final corrected two-view entity body is 501 bits and awaits runtime validation |
-| Native entity creation | Shared Vandal RSAT `0x815B204B` is proven on both the staged control and an atomic create/update; slots 13 and 14 allocate |
-| Entity placement and updates | Cell `0x91`, nearby transform, native construction, and positional audio work; render/current-view ownership does not |
+| Replication scheduler | One-view 203-bit and two-view 501-bit framing are runtime validated |
+| Native entity creation | Shared Vandal RSAT `0x815B204B` reaches type-2, kind-0, native registration, and a completed glue bind |
+| Entity placement and updates | Nearby transform and positional audio work; the current probe is bound to Town while the player is in Basin |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
+
+## Current debug overlays
+
+- `Entity Debug` is enabled by default and keeps the synthetic entity's server plan and observed
+  client lifecycle in one snapshot. It shows identity/RSAT, namespace/view/token, region/bubble/
+  cell, wire decode, promotion/type-2/apply state, and native construction/binding.
+- The latest screenshot shows `State bound`, RSAT `0x815B204B`, namespace 1/view 0, spatial owner
+  408/51/145, and `Current world region 24 OWNER MISMATCH`. That is the present visual blocker.
+- The player status overlay now separates the client-reported Region from Slice set. Bubble is
+  derived from the scenario layout and the reported region; Slice set comes from the native world
+  manager when the client-authored teleport field is absent. Closest-spawn caching is also keyed
+  by destination so a previous map cannot linger for 250 ms.
+- The session overlay no longer presents dormant host-session cache entries as active instances.
+  Rows now survive only while current, admitted, or carried by a live link, and are labeled
+  `current` or `overlap`. In the latest screenshot both 408 and 24 are genuinely connected/ready;
+  408 is therefore an outgoing overlap, not merely a stale UI row.
+- Current overlay/debug Release SHA-256:
+  `5ac62efcbd6f0db1c880a32d6783355a17ac62fa478544b822b2d3115d0bf670`.
 
 ## Confirmed progress
 

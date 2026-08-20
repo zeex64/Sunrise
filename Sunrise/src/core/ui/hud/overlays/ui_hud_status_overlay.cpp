@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdio>
+#include <cstring>
 #include <imgui.h>
 #include <string_view>
 
@@ -49,6 +50,7 @@ using Value = std::array<char, kValueCapacity>;
 /** Everything the overlay draws, read in one pass so the lines cannot disagree. */
 struct Status {
     Value activity{};
+    Value region{};
     Value bubble{};
     Value sliceSet{};
     Value spawn{};
@@ -58,7 +60,9 @@ struct Status {
 /** The last point search. It is kept between frames because the bank is large. */
 struct SpawnResult {
     Value text{};
+    std::array<char, layouts::kSpawnStemCapacity> stem{};
     std::uint64_t searchedTick{};
+    std::uint8_t stemLength{};
     bool valid{};
 };
 
@@ -118,15 +122,57 @@ void build_bubble(const layouts::Definition& layout, std::int32_t region, Value&
                         named.data());
 }
 
-/** Fills the slice-set line, which is the region index and the state inside its bubble. */
-void build_slice_set(std::int32_t region, Value& output) noexcept {
+/** Fills the client-reported region line without conflating it with the teleport slice set. */
+void build_region(std::int32_t region, std::uint32_t hash, Value& output) noexcept {
     if (region < 0) {
         assign(kUnknown, output);
         return;
     }
-    const auto index = static_cast<std::uint32_t>(region);
-    (void)std::snprintf(
-        output.data(), output.size(), "%u  state %u", index, index % tables::kSliceSetIndexFactor);
+    state::build_data::hash_names::Name storage{};
+    const std::string_view named = resolve_name(hash, storage);
+    (void)std::snprintf(output.data(),
+                        output.size(),
+                        "%d  0x%08X%s%.*s",
+                        region,
+                        hash,
+                        named.empty() ? "" : "  ",
+                        static_cast<int>(named.size()),
+                        named.data());
+}
+
+/** Fills the actual client-authored or native current slice-set snapshot. */
+void build_slice_set(const activity::membership::TeleportState& teleport,
+                     const layouts::Definition& layout,
+                     Value& output) noexcept {
+    if (teleport.sliceSetIndex >= 0) {
+        (void)std::snprintf(output.data(),
+                            output.size(),
+                            "%d  state %d  0x%08X",
+                            teleport.sliceSetIndex,
+                            static_cast<int>(teleport.state),
+                            teleport.sliceSetHash);
+        return;
+    }
+    std::int32_t native = -1;
+    if (!client::hooks::bootflow::current_slice_set(native)) {
+        assign(kUnknown, output);
+        return;
+    }
+    const auto bubble = static_cast<std::size_t>(native) / tables::kSliceSetIndexFactor;
+    if (bubble >= layout.bubbleCount) {
+        (void)std::snprintf(output.data(), output.size(), "%d  native", native);
+        return;
+    }
+    state::build_data::hash_names::Name storage{};
+    const std::string_view named = resolve_name(layout.bubbleHashes[bubble], storage);
+    (void)std::snprintf(output.data(),
+                        output.size(),
+                        "%d  0x%08X%s%.*s  native",
+                        native,
+                        layout.bubbleHashes[bubble],
+                        named.empty() ? "" : "  ",
+                        static_cast<int>(named.size()),
+                        named.data());
 }
 
 /**
@@ -141,7 +187,9 @@ void build_spawn(std::string_view stem, Value& output) noexcept {
         assign(kNoPosition, output);
         return;
     }
-    if (g_spawn.valid && now - g_spawn.searchedTick < kSpawnSearchIntervalMs) {
+    const bool sameStem = g_spawn.stemLength == stem.size()
+                          && std::string_view(g_spawn.stem.data(), g_spawn.stemLength) == stem;
+    if (g_spawn.valid && sameStem && now - g_spawn.searchedTick < kSpawnSearchIntervalMs) {
         output = g_spawn.text;
         return;
     }
@@ -149,6 +197,8 @@ void build_spawn(std::string_view stem, Value& output) noexcept {
     float distance = 0.0F;
     g_spawn = {};
     g_spawn.searchedTick = now;
+    g_spawn.stemLength = static_cast<std::uint8_t>(stem.size());
+    std::memcpy(g_spawn.stem.data(), stem.data(), stem.size());
     if (!state::build_data::find_nearest_spawn_point(stem, player.position, point, distance)) {
         assign(kUnknown, output);
         return;
@@ -183,16 +233,17 @@ void build_spawn(std::string_view stem, Value& output) noexcept {
     }
     const std::string_view name = name_of(world.destination);
     assign(name.empty() ? std::string_view(kUnknown) : name, status.activity);
+    build_region(world.region, world.regionHash, status.region);
 
     layouts::Definition layout{};
     if (!state::build_data::find_scenario_layout(name, layout)) {
         assign(kUnknown, status.bubble);
+        assign(kUnknown, status.sliceSet);
         assign(kUnknown, status.spawn);
-        build_slice_set(world.region, status.sliceSet);
         return status;
     }
     build_bubble(layout, world.region, status.bubble);
-    build_slice_set(world.region, status.sliceSet);
+    build_slice_set(world.teleport, layout, status.sliceSet);
     build_spawn({layout.spawnStem.data(), layout.spawnStemLength}, status.spawn);
     return status;
 }
@@ -211,8 +262,9 @@ void draw_line(StatusLine line, const Value& value, float valueColumn) noexcept 
 
 /** Draws the current-status lines inside the overlay window the stack has already started. */
 void draw() noexcept {
-    if (!enabled(StatusLine::activity) && !enabled(StatusLine::bubble)
-        && !enabled(StatusLine::sliceSet) && !enabled(StatusLine::closestSpawn)) {
+    if (!enabled(StatusLine::activity) && !enabled(StatusLine::region)
+        && !enabled(StatusLine::bubble) && !enabled(StatusLine::sliceSet)
+        && !enabled(StatusLine::closestSpawn)) {
         // With every line off the overlay would draw an empty box and say nothing.
         ImGui::TextDisabled("%s", kNoLines);
         return;
@@ -226,6 +278,7 @@ void draw() noexcept {
     const float valueColumn =
         ImGui::CalcTextSize(kWidestLabel).x + (ImGui::GetStyle().ItemSpacing.x * 2.0F);
     draw_line(StatusLine::activity, status.activity, valueColumn);
+    draw_line(StatusLine::region, status.region, valueColumn);
     draw_line(StatusLine::bubble, status.bubble, valueColumn);
     draw_line(StatusLine::sliceSet, status.sliceSet, valueColumn);
     draw_line(StatusLine::closestSpawn, status.spawn, valueColumn);

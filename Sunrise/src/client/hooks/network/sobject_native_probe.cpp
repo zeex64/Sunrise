@@ -12,6 +12,7 @@
 #include "../../../state/gameplay/definition.h"
 #include "coordinator/network_call_coordinator.h"
 #include "platform.h"
+#include "sobject_bind_probe.h"
 
 namespace sunrise::client::hooks::network::sobject_native_probe {
 namespace {
@@ -69,6 +70,9 @@ registration_body(std::uint32_t objectId, std::uint32_t rsat, std::uint8_t unbou
             call(objectId, rsat, unbound);
         }
         const bool firstEntity = rsat == state::gameplay::kFirstEntityRsat;
+        if (lease.accepting && firstEntity) {
+            sobject_bind_probe::record_native(rsat, objectId);
+        }
         std::uint32_t occurrence = 0;
         bool report = false;
         if (lease.accepting) {

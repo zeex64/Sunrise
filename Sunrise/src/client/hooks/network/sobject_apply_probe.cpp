@@ -556,6 +556,9 @@ __declspec(noinline) void __fastcall apply_body(std::byte* job) noexcept {
         if (call != nullptr) {
             call(job);
         }
+        if (watched) {
+            sobject_bind_probe::record_apply(before.entity);
+        }
         if (occurrence != 0 && occurrence <= kApplyReportLimit) {
             JobSnapshot after{};
             (void)inspect_job(job, after);
@@ -588,6 +591,9 @@ kind0_body(void* codec, const std::uint32_t* creation, std::uint32_t entity, int
         }
         if (call != nullptr) {
             result = call(codec, creation, entity, parent);
+        }
+        if (watched) {
+            sobject_bind_probe::record_kind0(entity, result);
         }
         const std::uint32_t occurrence =
             watched ? g_kind0Reports.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
@@ -637,6 +643,8 @@ __declspec(noinline) void __fastcall promotion_body(std::byte* manager,
         if (occurrence != 0 && occurrence <= kPromotionReportLimit) {
             PromotionSnapshot after{};
             const bool afterReadable = inspect_promotion(manager, record, after);
+            sobject_bind_probe::record_promoted(
+                before.namespaceId, before.entity, afterReadable && after.occupied);
             std::array<char, 384> line{};
             const int written =
                 std::snprintf(line.data(),
@@ -698,6 +706,7 @@ __declspec(noinline) void __fastcall dirty_service_body(std::byte* manager) noex
         if (occurrence != 0 && occurrence <= kDirtyServiceReportLimit) {
             DirtyServiceSnapshot after{};
             (void)inspect_dirty_service(manager, namespaceId, entity, after);
+            sobject_bind_probe::record_dirty_service(namespaceId, entity);
             report_dirty_service("return", occurrence, before, after, busy);
         }
     } __finally {
@@ -827,6 +836,8 @@ type2_job_body(std::byte* object, const void* masks, void** jobOut) noexcept {
         if (occurrence != 0 && occurrence <= kType2JobReportLimit) {
             void* returnedJob = nullptr;
             const bool jobOutReadable = inspect_job_pointer(jobOut, returnedJob);
+            sobject_bind_probe::record_type2(
+                snapshot.entity, result, jobOutReadable && returnedJob != nullptr);
             report_type2_job("return",
                              occurrence,
                              snapshot,

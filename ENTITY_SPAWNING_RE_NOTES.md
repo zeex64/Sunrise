@@ -11,6 +11,31 @@ The immediate milestone is completing message 40's five-stage view handshake. Na
 creation and token lookup are now proven; the next layer is the replication scheduler and its
 entity-create lane.
 
+## Latest ownership proof and UI diagnostics
+
+The restored broad EDZ arrival produces the audible construction control again. The client-side
+overlay snapshot captures the successful object as bound RSAT `0x815B204B` in namespace 1/view 0,
+region 408/bubble 51/cell 145, while `primary_world()` reports the player in region 24/bubble 3.
+The resulting `OWNER MISMATCH` is the narrowest current explanation for positional audio with no
+rendered Vandal. Do not change the proven create/update/RSAT payload until the entity is created in
+the renderer's actual current owner or the authored parent/stream-source path is captured.
+
+The location overlay was audited at the same checkpoint:
+
+- Activity and region come from the signed-in player's original joined membership record.
+- Bubble is `region / 8`, validated against that destination's scenario layout and bubble hash.
+- The former Slice-set line was wrong: it duplicated Region and displayed `region % 8` as state.
+  It now uses the actual client-authored teleport fields when present and otherwise a fresh native
+  world-manager slice-set observation published on the game thread.
+- Closest spawn uses the live player physics position and the destination's spawn bank; its short
+  cache now includes the destination stem.
+- Session rows formerly came directly from the durable host-session reconnect cache, so departed
+  rows could appear to be active. The overlay now filters cache-only rows and labels the remaining
+  rows `current` or `overlap`; channel and join still come from the live peer/admitted tables.
+
+Overlay/debug Release SHA-256:
+`5ac62efcbd6f0db1c880a32d6783355a17ac62fa478544b822b2d3115d0bf670`.
+
 ## Environment
 
 - Repository: `/home/zeex64/Documents/Sunrise`

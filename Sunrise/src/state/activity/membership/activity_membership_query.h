@@ -10,7 +10,9 @@ namespace sunrise::state::activity::membership {
 /** One coherent view of the signed-in player's current world. */
 struct WorldSnapshot final {
     destination::DestinationSelection destination{};
+    TeleportState teleport{};
     std::uint64_t sessionId{};
+    std::uint32_t regionHash{};
     std::int32_t region{kAbsentRegionIndex};
 };
 

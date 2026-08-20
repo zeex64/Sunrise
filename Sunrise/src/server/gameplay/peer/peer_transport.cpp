@@ -12,6 +12,7 @@
 #include "../../../client/hooks/network/entity_slot_probe.h"
 #include "../../../client/hooks/network/scheduler_handler_probe.h"
 #include "../../../client/hooks/network/scheduler_signature_probe.h"
+#include "../../../client/hooks/network/sobject_bind_probe.h"
 #include "../../../client/hooks/network/sobject_rsat_probe.h"
 #include "../../../client/hooks/network/sobject_update_probe.h"
 #include "../../../middleware/content/packages/tables/region_reader.h"
@@ -2479,6 +2480,19 @@ void consume_established(const state::gameplay::Endpoint& from,
     if (traceTwoView) {
         client::hooks::network::scheduler_handler_probe::arm(kTwoViewProbeViewCount);
     }
+    // Publish the plan before loopback transport can synchronously enter the client decoder.
+    if (entityCreate.present && !entityCreate.updateOnly) {
+        client::hooks::network::sobject_bind_probe::record_plan(entityCreate.token,
+                                                                entityCreate.namespaceId,
+                                                                entityCreate.viewIndex,
+                                                                entityCreate.slot,
+                                                                entityCreate.rsat,
+                                                                entityCreate.spatialRegion,
+                                                                entityCreate.spatialBubble,
+                                                                entityCreate.spatialCell,
+                                                                peer.entityCreateAttempts,
+                                                                false);
+    }
     const bool sent = send_transport(peer.endpoint, {buffer.data(), size});
     if (traceTwoView && !sent) {
         client::hooks::network::scheduler_handler_probe::cancel();
@@ -3025,6 +3039,19 @@ void service(std::uint64_t now) noexcept {
             }
         }
         if (entityCreates[index].present) {
+            if (!entityCreates[index].updateOnly) {
+                client::hooks::network::sobject_bind_probe::record_plan(
+                    entityCreates[index].token,
+                    entityCreates[index].namespaceId,
+                    entityCreates[index].viewIndex,
+                    entityCreates[index].slot,
+                    entityCreates[index].rsat,
+                    entityCreates[index].spatialRegion,
+                    entityCreates[index].spatialBubble,
+                    entityCreates[index].spatialCell,
+                    owed[index].entityCreateAttempts,
+                    sent);
+            }
             if (entityCreates[index].updateOnly) {
                 report(sent ? core::log::Level::info : core::log::Level::warn,
                        "ev=gameplay stage=entity-update-out result=%s token=0x%016llX "

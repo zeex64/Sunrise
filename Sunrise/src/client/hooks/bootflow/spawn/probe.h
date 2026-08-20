@@ -78,6 +78,14 @@ void forget() noexcept;
 [[nodiscard]] Reading examine(std::int32_t datum) noexcept;
 
 /**
+ * Reads the native world manager's current addressable slice set.
+ * Call only from the game-thread frame poll; UI readers consume its published copy instead.
+ * @param index Receives the current slice-set index on success.
+ * @return True when the world, manager, and current slice set are all valid.
+ */
+[[nodiscard]] bool current_slice_set(std::int32_t& index) noexcept;
+
+/**
  * Formats one reading as log fields.
  * @param reading Result of a probe pass.
  * @param output Caller-owned character storage.

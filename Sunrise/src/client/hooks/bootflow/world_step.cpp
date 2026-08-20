@@ -8,6 +8,7 @@
 #include "../../../state/activity/runtime.h"
 #include "bootflow_hook_lifecycle.h"
 #include "internal.h"
+#include "spawn/probe.h"
 
 namespace sunrise::client::hooks::bootflow {
 namespace {
@@ -39,6 +40,8 @@ std::atomic<GetStep> g_step{nullptr};
 std::atomic_int32_t g_publishedStep{kNoStep};
 /** Tick that step was read on. A stale value reads as out of world. */
 std::atomic_uint64_t g_publishedTick{0};
+/** Native slice set observed beside the step, or -1 when the manager has none. */
+std::atomic_int32_t g_publishedSliceSet{kNoStep};
 
 /** @return The current step, or the absent one when the accessor is missing. */
 [[nodiscard]] std::int32_t read_step() noexcept {
@@ -50,6 +53,9 @@ std::atomic_uint64_t g_publishedTick{0};
 
 /** Publishes the client's own boot-flow step. */
 void poll_world_step() noexcept {
+    std::int32_t sliceSet = kNoStep;
+    static_cast<void>(spawn::current_slice_set(sliceSet));
+    g_publishedSliceSet.store(sliceSet, std::memory_order_relaxed);
     g_publishedStep.store(read_step(), std::memory_order_relaxed);
     g_publishedTick.store(GetTickCount64(), std::memory_order_release);
 }
@@ -61,6 +67,17 @@ bool in_world() noexcept {
     }
     const std::uint64_t published = g_publishedTick.load(std::memory_order_acquire);
     return published != 0 && GetTickCount64() - published < kStepStaleMs;
+}
+
+/** Reports the native world manager's current slice set. */
+bool current_slice_set(std::int32_t& index) noexcept {
+    index = kNoStep;
+    const std::uint64_t published = g_publishedTick.load(std::memory_order_acquire);
+    if (published == 0 || GetTickCount64() - published >= kStepStaleMs) {
+        return false;
+    }
+    index = g_publishedSliceSet.load(std::memory_order_relaxed);
+    return index >= 0;
 }
 
 /** Maps the client's own boot-flow step onto the world phase. */
@@ -101,6 +118,9 @@ bool install_world_step() noexcept {
 /** Clears the boot-flow step accessor it found. */
 void uninstall_world_step() noexcept {
     g_step.store(nullptr, std::memory_order_release);
+    g_publishedSliceSet.store(kNoStep, std::memory_order_relaxed);
+    g_publishedStep.store(kNoStep, std::memory_order_relaxed);
+    g_publishedTick.store(0, std::memory_order_release);
 }
 
 } // namespace sunrise::client::hooks::bootflow

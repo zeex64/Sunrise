@@ -36,6 +36,9 @@ struct WatchEntry {
 };
 
 std::array<WatchEntry, kWatchCapacity> g_watches{};
+/** Serialises the small HUD snapshot across gameplay hooks and the render thread. */
+SRWLOCK g_debugLock{SRWLOCK_INIT};
+EntityDebugSnapshot g_debug{};
 
 using Binder = void(__fastcall*)(std::uint32_t, std::uint32_t);
 
@@ -153,6 +156,7 @@ __declspec(noinline) void __fastcall binder_body(std::uint32_t entityId,
         if (occurrence != 0 && occurrence <= kDispatchReportLimit) {
             const std::uint32_t slot = entityId & kEntitySlotMask;
             const bool bound = after.readable && after.nativeObjectIndex == nativeObjectIndex;
+            record_binding(entityId, nativeObjectIndex, bound);
             std::array<char, 256> line{};
             const int written = std::snprintf(line.data(),
                                               line.size(),
@@ -210,6 +214,130 @@ void watch(std::int32_t namespaceId, std::uint32_t entityId) noexcept {
     }
 }
 
+void record_plan(std::uint64_t token,
+                 std::int32_t namespaceId,
+                 std::uint8_t view,
+                 std::uint16_t slot,
+                 std::uint32_t rsat,
+                 std::int32_t region,
+                 std::uint8_t bubble,
+                 std::uint8_t cell,
+                 std::uint8_t attempts,
+                 bool sent) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (!g_debug.present || g_debug.token != token || g_debug.namespaceId != namespaceId
+        || g_debug.slot != slot) {
+        g_debug = {};
+        g_debug.namespaceId = -1;
+        g_debug.region = -1;
+        g_debug.type2Result = -1;
+        g_debug.nativeObjectIndex = 0xFFFFFFFF;
+    }
+    g_debug.token = token;
+    g_debug.namespaceId = namespaceId;
+    g_debug.view = view;
+    g_debug.slot = slot;
+    g_debug.rsat = rsat;
+    g_debug.region = region;
+    g_debug.bubble = bubble;
+    g_debug.cell = cell;
+    g_debug.attempts = attempts;
+    g_debug.sent = g_debug.sent || sent;
+    g_debug.present = true;
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+void record_decoded(std::int32_t namespaceId,
+                    std::uint32_t entityId,
+                    std::uint16_t cell,
+                    std::uint16_t wireFlags) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.present && g_debug.namespaceId == namespaceId
+        && g_debug.slot == (entityId & kEntitySlotMask)) {
+        g_debug.entityId = entityId;
+        g_debug.cell = cell;
+        g_debug.wireFlags = wireFlags;
+        g_debug.decoded = true;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+void record_promoted(std::int32_t namespaceId, std::uint32_t entityId, bool occupied) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.decoded && occupied && g_debug.namespaceId == namespaceId
+        && g_debug.slot == (entityId & kEntitySlotMask)) {
+        g_debug.runtimeEntityId = entityId;
+        g_debug.promoted = true;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+void record_dirty_service(std::int32_t namespaceId, std::uint32_t entityId) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.decoded && g_debug.namespaceId == namespaceId
+        && g_debug.slot == (entityId & kEntitySlotMask)) {
+        g_debug.dirtyServiced = true;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+void record_type2(std::uint32_t entityId, int result, bool jobReturned) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.decoded && g_debug.slot == (entityId & kEntitySlotMask)) {
+        g_debug.runtimeEntityId = entityId;
+        g_debug.type2Result = result;
+        g_debug.type2JobReturned = jobReturned;
+        g_debug.type2Seen = true;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+void record_apply(std::uint32_t entityId) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.decoded && g_debug.slot == (entityId & kEntitySlotMask)) {
+        g_debug.runtimeEntityId = entityId;
+        g_debug.applied = true;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+void record_kind0(std::uint32_t entityId, bool result) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.decoded && g_debug.slot == (entityId & kEntitySlotMask)) {
+        g_debug.runtimeEntityId = entityId;
+        g_debug.kind0Seen = true;
+        g_debug.kind0Result = result;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+void record_native(std::uint32_t rsat, std::uint32_t objectId) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.decoded && g_debug.rsat == rsat) {
+        g_debug.nativeObjectId = objectId;
+        g_debug.nativeSeen = true;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+void record_binding(std::uint32_t entityId, std::uint32_t nativeObjectIndex, bool bound) noexcept {
+    AcquireSRWLockExclusive(&g_debugLock);
+    if (g_debug.decoded && g_debug.slot == (entityId & kEntitySlotMask)) {
+        g_debug.runtimeEntityId = entityId;
+        g_debug.nativeObjectIndex = nativeObjectIndex;
+        g_debug.bindSeen = true;
+        g_debug.bound = g_debug.bound || bound;
+    }
+    ReleaseSRWLockExclusive(&g_debugLock);
+}
+
+bool debug_snapshot(EntityDebugSnapshot& output) noexcept {
+    AcquireSRWLockShared(&g_debugLock);
+    output = g_debug;
+    ReleaseSRWLockShared(&g_debugLock);
+    return output.present;
+}
+
 bool watched(std::int32_t namespaceId, std::uint32_t entityId) noexcept {
     return find_watch(namespaceId, entityId) != nullptr;
 }
@@ -245,6 +373,13 @@ void reset() noexcept {
         entry.entityId.store(0, std::memory_order_relaxed);
         entry.contextKey.store(0, std::memory_order_relaxed);
     }
+    AcquireSRWLockExclusive(&g_debugLock);
+    g_debug = {};
+    g_debug.namespaceId = -1;
+    g_debug.region = -1;
+    g_debug.type2Result = -1;
+    g_debug.nativeObjectIndex = 0xFFFFFFFF;
+    ReleaseSRWLockExclusive(&g_debugLock);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_bind_probe

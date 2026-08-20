@@ -14,6 +14,7 @@
 #include "../../../../server/gameplay/group/group_host.h"
 #include "../../../../server/gameplay/group/group_host_sessions.h"
 #include "../../../../server/gameplay/peer/peer_transport.h"
+#include "../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../state/gameplay/definition.h"
 
 namespace sunrise::core::ui::hud::overlays::session {
@@ -28,15 +29,22 @@ constexpr std::size_t kRowCapacity = 8;
 /** Admitted peers one snapshot reads. */
 constexpr std::size_t kAdmittedCapacity = 8;
 /** Columns of the instance table, in draw order. */
-constexpr int kColumnCount = 6;
-/** Shown while this host serves no instance. */
-constexpr char kNoInstance[] = "no session instances";
+constexpr int kColumnCount = 7;
+/** Shown while this host serves no live or current instance. */
+constexpr char kNoInstance[] = "no active session instances";
 /** Shown for a row no advertisement gave a region. */
 constexpr char kNoBubble[] = "-";
 
 /** Channel stage names, in PeerStage order. */
 constexpr std::array<const char*, 6> kChannelStages{
     "absent", "allocated", "teardown", "connecting", "establishing", "connected"};
+
+/** One host row after durable cache-only entries have been removed. */
+struct DisplayRow {
+    group::HostSessionRow host{};
+    state::gameplay::PeerStage stage{state::gameplay::PeerStage::absent};
+    bool current{};
+};
 
 /** @param stage Link stage. @return Its name, or the absent one for a value out of range. */
 [[nodiscard]] const char* channel_name(state::gameplay::PeerStage stage) noexcept {
@@ -60,6 +68,18 @@ join_name(const std::array<group::AdmittedRow, kAdmittedCapacity>& admitted,
         return row.activityHostPublished ? "ready" : "joined";
     }
     return "unjoined";
+}
+
+/** @return True while a live join record still names this group session. */
+[[nodiscard]] bool is_admitted(const std::array<group::AdmittedRow, kAdmittedCapacity>& admitted,
+                               std::size_t count,
+                               std::uint64_t sessionId) noexcept {
+    for (std::size_t index = 0; index < count; ++index) {
+        if (admitted[index].sessionId == sessionId) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /** Draws one cell of hexadecimal identity. @param value Session id, or zero when there is none. */
@@ -88,27 +108,44 @@ void draw_region_cells(std::int32_t region) noexcept {
 
 /** Draws the session instance table inside the overlay window the stack has already started. */
 void draw() noexcept {
-    std::array<group::HostSessionRow, kRowCapacity> rows{};
-    std::size_t rowCount = 0;
-    group::snapshot_host_sessions(rows, rowCount);
-    if (rowCount == 0) {
-        ImGui::TextDisabled("%s", kNoInstance);
-        return;
-    }
-    // A claimed host row exists before its peer link and deliberately survives a disconnect.
-    // Keep it visible and let the channel column say `absent`; filtering it made a real instance
-    // look as if it had never been created, precisely when this diagnostic is most useful.
-    std::array<state::gameplay::PeerStage, kRowCapacity> stages{};
-    for (std::size_t index = 0; index < rowCount; ++index) {
-        static_cast<void>(peer::link_stage(rows[index].groupSessionId, stages[index]));
-    }
     std::array<group::AdmittedRow, kAdmittedCapacity> admitted{};
     std::size_t admittedCount = 0;
     group::snapshot_admitted(admitted, admittedCount);
 
+    std::array<group::HostSessionRow, kRowCapacity> cached{};
+    std::size_t cachedCount = 0;
+    group::snapshot_host_sessions(cached, cachedCount);
+
+    state::activity::membership::WorldSnapshot world{};
+    const std::uint64_t currentGroup = state::activity::membership::primary_world(world)
+                                           ? group::advertised_group_session(world.region)
+                                           : 0;
+
+    std::array<DisplayRow, kRowCapacity> rows{};
+    std::size_t rowCount = 0;
+    for (std::size_t index = 0; index < cachedCount; ++index) {
+        state::gameplay::PeerStage stage = state::gameplay::PeerStage::absent;
+        const bool channelPresent = peer::link_stage(cached[index].groupSessionId, stage);
+        const bool admittedPresent =
+            is_admitted(admitted, admittedCount, cached[index].groupSessionId);
+        const bool current = currentGroup != 0 && cached[index].groupSessionId == currentGroup;
+        // Host-session rows are a durable reconnect cache. Once a non-current row has neither a
+        // channel nor a join record, it is no longer a session instance and must not linger here.
+        if (!current && !channelPresent && !admittedPresent) {
+            continue;
+        }
+        rows[rowCount] = {cached[index], stage, current};
+        ++rowCount;
+    }
+    if (rowCount == 0) {
+        ImGui::TextDisabled("%s", kNoInstance);
+        return;
+    }
+
     if (!ImGui::BeginTable("##sunrise_hud_session_table", kColumnCount)) {
         return;
     }
+    ImGui::TableSetupColumn("role");
     ImGui::TableSetupColumn("region");
     ImGui::TableSetupColumn("bubble");
     ImGui::TableSetupColumn("group session");
@@ -117,18 +154,20 @@ void draw() noexcept {
     ImGui::TableSetupColumn("join");
     ImGui::TableHeadersRow();
     for (std::size_t index = 0; index < rowCount; ++index) {
-        const group::HostSessionRow& row = rows[index];
+        const DisplayRow& row = rows[index];
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        draw_region_cells(row.regionIndex);
+        ImGui::TextUnformatted(row.current ? "current" : "overlap");
         ImGui::TableNextColumn();
-        draw_session_cell(row.groupSessionId);
+        draw_region_cells(row.host.regionIndex);
         ImGui::TableNextColumn();
-        draw_session_cell(row.hostSessionId);
+        draw_session_cell(row.host.groupSessionId);
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(channel_name(stages[index]));
+        draw_session_cell(row.host.hostSessionId);
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(join_name(admitted, admittedCount, row.groupSessionId));
+        ImGui::TextUnformatted(channel_name(row.stage));
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(join_name(admitted, admittedCount, row.host.groupSessionId));
     }
     ImGui::EndTable();
 }

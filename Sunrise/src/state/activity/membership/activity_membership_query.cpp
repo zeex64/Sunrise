@@ -106,7 +106,9 @@ bool primary_world(WorldSnapshot& output) noexcept {
             continue;
         }
         output.destination = record.destination;
+        output.teleport = record.membership.teleport;
         output.sessionId = record.sessionId;
+        output.regionHash = record.membership.region.hash;
         output.region = record.membership.region.index;
         oldest = record.sessionId;
     }

@@ -158,6 +158,7 @@ void report_decoded_record(const void* recordsAddress,
     // Application rewrites the handle generation, but preserves its slot through the later glue
     // call. Arm that dynamic slot before the staged network job runs.
     sobject_bind_probe::watch(namespaceId, snapshot.entity);
+    sobject_bind_probe::record_decoded(namespaceId, snapshot.entity, snapshot.cell, snapshot.flags);
     std::array<char, kDecodedRecordMaskBytes * 2 + 1> maskHex{};
     std::array<char, kDecodedRecordCreateBytes * 2 + 1> createHex{};
     std::array<char, kDecodedRecordUpdateBytes * 2 + 1> updateHex{};

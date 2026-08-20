@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 namespace sunrise::client::hooks::bootflow {
 
 /**
@@ -25,5 +27,12 @@ void poll_world_step() noexcept;
  * @return True while the published step is `activity:in_world` and fresh.
  */
 [[nodiscard]] bool in_world() noexcept;
+
+/**
+ * Reports the native world manager's current slice set as published by the game-thread poll.
+ * @param index Receives the slice-set index when the observation is fresh.
+ * @return True when a current addressable slice set was observed recently.
+ */
+[[nodiscard]] bool current_slice_set(std::int32_t& index) noexcept;
 
 } // namespace sunrise::client::hooks::bootflow

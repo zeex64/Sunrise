@@ -149,6 +149,7 @@
     <ClCompile Include="src\core\ui\busy\ui_busy_state.cpp" />
     <ClCompile Include="src\core\ui\notice\ui_notice_overlay.cpp" />
     <ClCompile Include="src\core\ui\hud\ui_hud_overlay_stack.cpp" />
+    <ClCompile Include="src\core\ui\hud\overlays\ui_hud_entity_overlay.cpp" />
     <ClCompile Include="src\core\ui\hud\overlays\ui_hud_logo_overlay.cpp" />
     <ClCompile Include="src\core\ui\hud\overlays\ui_hud_session_overlay.cpp" />
     <ClCompile Include="src\core\ui\hud\overlays\ui_hud_status_overlay.cpp" />
@@ -758,6 +759,7 @@
     <ClInclude Include="src\core\ui\notice\ui_notice_overlay.h" />
     <ClInclude Include="src\core\ui\hud\overlay.h" />
     <ClInclude Include="src\core\ui\hud\overlays\ui_hud_logo_overlay.h" />
+    <ClInclude Include="src\core\ui\hud\overlays\ui_hud_entity_overlay.h" />
     <ClInclude Include="src\core\ui\hud\overlays\ui_hud_session_overlay.h" />
     <ClInclude Include="src\core\ui\hud\overlays\ui_hud_status_overlay.h" />
     <ClInclude Include="src\core\ui\hud\store\hud_settings_store.h" />

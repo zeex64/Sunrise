@@ -132,6 +132,24 @@ Reading examine(std::int32_t datum) noexcept {
     return reading;
 }
 
+/** Reads the native world manager's current addressable slice set. */
+bool current_slice_set(std::int32_t& index) noexcept {
+    index = -1;
+    if (!g_ready.load(std::memory_order_acquire)) {
+        return false;
+    }
+    void* const manager = g_calls.sliceSetManager();
+    if (manager == nullptr || !g_calls.worldPresent(manager)) {
+        return false;
+    }
+    void* const current = g_calls.currentSliceSet(manager, &index);
+    if (!g_calls.sliceSetAddressable(current)) {
+        index = -1;
+        return false;
+    }
+    return true;
+}
+
 /** Formats one reading as log fields. */
 std::size_t describe(const Reading& reading, std::span<char> output) noexcept {
     if (output.empty()) {
