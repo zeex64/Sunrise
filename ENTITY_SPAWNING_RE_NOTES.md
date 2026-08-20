@@ -2760,6 +2760,9 @@ Transition-safe passive-manager Release candidate SHA-256:
 Citizen-acceptance passive diagnostic Release candidate SHA-256:
 `120c0594ee2ab23d237c18f8e2f13e0fe1bd994fd3dd97678dc81154dd853d26`.
 
+Visit-aware transaction-retirement Release candidate SHA-256:
+`b2202d68ebdb850298fb4f734bf7edfda19aa60a6bcfcaa14dbd81a55679cc04`.
+
 The `54c55d9b...` run separated replication ownership from native world residency. Namespace 2,
 view 1, region 24, bubble 3, and cell 11 all matched; the record decoded, promoted, and was serviced
 by manager 2. Nevertheless `FUN_14170B660` returned every frame without adding a batch or calling
@@ -2782,6 +2785,17 @@ whose state at `session+0x1FB8+index*0x120` must equal `10`. The new passive hoo
 values on change as `citizen-acceptance`; it does not write session, slice, or manager state. The
 roster still reports region 24 with destination-arrival spawn override slice 408, which remains a
 candidate only until this probe identifies which native acceptance gate is actually false.
+
+The `120c0594...` zone-swap run completed native selection for region 24 at `t=96891`, then exposed
+an inconsistent descriptor-retirement path while returning to region 408. At `t=101941`, the root
+keepalive still carried the region-408 citizen descriptor with `published=408`, `settled=24`, and
+`ready=0`. Before the real region-408 transition began, an activity transaction retired that reused
+group using only historical view-accepted and activity-host-published state. Later keepalives showed
+`published=408 settled=408 group_published=1 group_settled=1 ready=0`; `PUB408` started at
+`t=104969` and again at `t=105230`, but no citizen join followed. The transaction publication logic
+now treats settled-group history as visit-specific through `activitySettledRegion` and requires the
+same exact native-current activity-host predicate as the keepalive before emitting a
+descriptor-free revision.
 
 After manual deployment, inspect:
 

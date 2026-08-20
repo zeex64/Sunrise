@@ -613,6 +613,15 @@ Once the director evaluates an encounter and creates native squad/member objects
   count, selected peer, selected peer state, or lifecycle changes. Ghidra proves the world
   controller requires a nonzero count and selected-peer state `10` immediately before it logs
   `Citizen join ... almost complete, accepting join`.
+- The `120c0594...` zone-swap run proved region 24 can reach native `PUBLIC CURRENT`, but a rapid
+  return to region 408 exposed a second descriptor-retirement path. The transaction path marked
+  reused group `0x8C0ACD3899A0C132` settled while the keepalive still reported `ready=0`. The client
+  then started `PUB408` twice without issuing a citizen join and remained in normal-z-leg loading.
+  Packet loss and corruption stayed zero.
+- The visit-aware transaction-retirement candidate has SHA-256
+  `b2202d68ebdb850298fb4f734bf7edfda19aa60a6bcfcaa14dbd81a55679cc04`. A historical settled-group
+  entry now counts only when the scalar settled region matches this visit, and transaction refreshes
+  retain the citizen descriptor until the exact activity-host token is native `PUBLIC CURRENT`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

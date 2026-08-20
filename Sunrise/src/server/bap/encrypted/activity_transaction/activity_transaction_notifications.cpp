@@ -1,5 +1,6 @@
 #include "activity_transaction_notifications.h"
 
+#include "../../../../client/hooks/network/sobject_apply_probe.h"
 #include "../../../../core/logging/log.h"
 #include "../../../gameplay/gameplay_advertisement.h"
 #include "../../../gameplay/group/group_host.h"
@@ -60,21 +61,34 @@ membership_publication(const Session& session,
     }
     publication.groupSession =
         server::gameplay::group::advertised_group_session(publication.region);
-    if (push::activity::group_settled(session, publication.groupSession)) {
+    // Settled-group history outlives one visit. A patrol may return to a previously settled
+    // region, so only the scalar region marker proves that this visit has already retired its
+    // descriptor.
+    if (publication.groupSession != 0
+        && push::activity::group_settled(session, publication.groupSession)
+        && session.activitySettledRegion == publication.region) {
         return publication;
     }
+    const std::uint64_t hostSession =
+        server::gameplay::group::held_host_session(publication.groupSession);
+    // View bind and activity-host publication can both be historical for a reused group. Keep the
+    // citizen descriptor until the client has actually promoted this host to native PUBLIC
+    // CURRENT; otherwise a transaction refresh can retire the descriptor before the matching
+    // region transition starts and strand that transition without a citizen join.
     publication.settlesCitizenAdvertisement =
-        server::gameplay::group::view_accepted(publication.groupSession)
-        && server::gameplay::group::activity_host_published(publication.groupSession);
+        publication.groupSession != 0 && hostSession != 0
+        && server::gameplay::group::view_accepted(publication.groupSession)
+        && server::gameplay::group::activity_host_published(publication.groupSession)
+        && client::hooks::network::sobject_apply_probe::current_region_manager_active(hostSession);
     publication.includesCitizenAdvertisement = !publication.settlesCitizenAdvertisement;
     return publication;
 }
 
 /**
  * Appends one membership body. The citizen descriptor remains in every revision until the native
- * gameplay view is bound and join-complete has queued its activity-host update. The first
- * descriptor-free revision then retires the group after the enclosing transaction and caller copy
- * both succeed.
+ * gameplay view is bound, join-complete has queued its activity-host update, and native PUBLIC
+ * CURRENT has selected that host. The first descriptor-free revision then retires the group after
+ * the enclosing transaction and caller copy both succeed.
  */
 [[nodiscard]] bool stage_membership(Session& session,
                                     Scratch& scratch,
