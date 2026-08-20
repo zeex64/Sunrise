@@ -18,6 +18,8 @@ namespace message = middleware::bap::activity_message::replicate_membership;
 
 /** The one published member always occupies slot zero of both top-level masks. */
 constexpr std::uint8_t kLocalMemberSlot = 0;
+/** Delay before retrying a citizen descriptor that produced no gameplay join. */
+constexpr std::uint64_t kCitizenRetryDelayMs = 500;
 
 /** Tests one connection's two public-session lifecycle slots. */
 [[nodiscard]] bool contains_group(const std::array<std::uint64_t, 2>& groups,
@@ -182,12 +184,14 @@ bool group_settled(const Session& session, std::uint64_t groupSession) noexcept 
 /** Records the region and group named by a transaction-staged citizen descriptor. */
 void stage_published_region(Session& session,
                             std::int32_t region,
-                            std::uint64_t groupSession) noexcept {
+                            std::uint64_t groupSession,
+                            std::uint8_t transitionToken) noexcept {
     if (region < 0) {
         return;
     }
     session.activityPublishedRegionStaged = region;
     session.activityPublishedGroupSessionStaged = groupSession;
+    session.activityPublishedTransitionTokenStaged = transitionToken;
     session.activityPublishedRegionStagedPresent = true;
 }
 
@@ -197,10 +201,22 @@ void commit_staged_published_region(Session& session) noexcept {
         return;
     }
     session.activityPublishedRegion = session.activityPublishedRegionStaged;
+    const bool sameVisit =
+        session.activityCitizenRetryGroupSession == session.activityPublishedGroupSessionStaged
+        && session.activityPublishedTransitionToken
+               == session.activityPublishedTransitionTokenStaged;
+    session.activityPublishedTransitionToken = session.activityPublishedTransitionTokenStaged;
     remember_group(session.activityPublishedGroupSessions,
                    session.activityPublishedGroupSessionStaged);
+    session.activityCitizenRetryGroupSession = session.activityPublishedGroupSessionStaged;
+    session.activityCitizenPublishAttempts =
+        sameVisit && session.activityCitizenPublishAttempts < UINT8_MAX
+            ? static_cast<std::uint8_t>(session.activityCitizenPublishAttempts + 1U)
+            : 1U;
+    session.activityCitizenRetryDueTick = GetTickCount64() + kCitizenRetryDelayMs;
     session.activityPublishedRegionStaged = 0;
     session.activityPublishedGroupSessionStaged = 0;
+    session.activityPublishedTransitionTokenStaged = 0;
     session.activityPublishedRegionStagedPresent = false;
 }
 
@@ -208,18 +224,21 @@ void commit_staged_published_region(Session& session) noexcept {
 void discard_staged_published_region(Session& session) noexcept {
     session.activityPublishedRegionStaged = 0;
     session.activityPublishedGroupSessionStaged = 0;
+    session.activityPublishedTransitionTokenStaged = 0;
     session.activityPublishedRegionStagedPresent = false;
 }
 
 /** Records a region and group retired by a transaction-staged membership body. */
 void stage_settled_region(Session& session,
                           std::int32_t region,
-                          std::uint64_t groupSession) noexcept {
+                          std::uint64_t groupSession,
+                          std::uint8_t transitionToken) noexcept {
     if (region < 0) {
         return;
     }
     session.activitySettledRegionStaged = region;
     session.activitySettledGroupSessionStaged = groupSession;
+    session.activitySettledTransitionTokenStaged = transitionToken;
     session.activitySettledRegionStagedPresent = true;
 }
 
@@ -229,9 +248,18 @@ void commit_staged_settled_region(Session& session) noexcept {
         return;
     }
     session.activitySettledRegion = session.activitySettledRegionStaged;
+    session.activitySettledTransitionToken = session.activitySettledTransitionTokenStaged;
     remember_group(session.activitySettledGroupSessions, session.activitySettledGroupSessionStaged);
+    if (session.activityCitizenRetryGroupSession == session.activitySettledGroupSessionStaged
+        && session.activityPublishedTransitionToken
+               == session.activitySettledTransitionTokenStaged) {
+        session.activityCitizenRetryGroupSession = 0;
+        session.activityCitizenRetryDueTick = 0;
+        session.activityCitizenPublishAttempts = 0;
+    }
     session.activitySettledRegionStaged = 0;
     session.activitySettledGroupSessionStaged = 0;
+    session.activitySettledTransitionTokenStaged = 0;
     session.activitySettledRegionStagedPresent = false;
 }
 
@@ -239,6 +267,7 @@ void commit_staged_settled_region(Session& session) noexcept {
 void discard_staged_settled_region(Session& session) noexcept {
     session.activitySettledRegionStaged = 0;
     session.activitySettledGroupSessionStaged = 0;
+    session.activitySettledTransitionTokenStaged = 0;
     session.activitySettledRegionStagedPresent = false;
 }
 

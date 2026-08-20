@@ -8,7 +8,7 @@ namespace sunrise::core::ui::hud {
 enum class Overlay : std::uint8_t {
     /** The Sunrise name, version and animated logo. */
     logoCard,
-    /** Where the player is: activity, bubble, slice set and closest spawn. */
+    /** Where the player is: activity, bubble, teleport slice and closest spawn. */
     currentStatus,
     /** The instances of the session the player is in. */
     session,

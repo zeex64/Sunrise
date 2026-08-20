@@ -39,6 +39,7 @@ namespace {
 struct MembershipPublication final {
     std::uint64_t groupSession{};
     std::int32_t region{-1};
+    std::uint8_t transitionToken{};
     bool root{};
     bool includesCitizenAdvertisement{};
     bool settlesCitizenAdvertisement{};
@@ -55,6 +56,7 @@ membership_publication(const Session& session,
     }
     publication.region =
         push::activity::planned_region(activity.membershipMutation, activity.sessionId).index;
+    publication.transitionToken = activity.membershipMutation.snapshot.transitionToken;
     if (publication.region < 0) {
         return publication;
     }
@@ -65,7 +67,8 @@ membership_publication(const Session& session,
     // descriptor.
     if (publication.groupSession != 0
         && push::activity::group_settled(session, publication.groupSession)
-        && session.activitySettledRegion == publication.region) {
+        && session.activitySettledRegion == publication.region
+        && session.activitySettledTransitionToken == publication.transitionToken) {
         return publication;
     }
     const std::uint64_t hostSession =
@@ -76,7 +79,8 @@ membership_publication(const Session& session,
     // is retired.
     const bool descriptorPublishedThisVisit =
         push::activity::group_published(session, publication.groupSession)
-        && session.activityPublishedRegion == publication.region;
+        && session.activityPublishedRegion == publication.region
+        && session.activityPublishedTransitionToken == publication.transitionToken;
     publication.settlesCitizenAdvertisement =
         publication.groupSession != 0 && hostSession != 0 && descriptorPublishedThisVisit
         && server::gameplay::group::view_accepted(publication.groupSession)
@@ -119,9 +123,10 @@ membership_publication(const Session& session,
                                                        written);
     if (staged && publication.includesCitizenAdvertisement) {
         push::activity::stage_published_region(
-            session, publication.region, publication.groupSession);
+            session, publication.region, publication.groupSession, publication.transitionToken);
     } else if (staged && publication.settlesCitizenAdvertisement) {
-        push::activity::stage_settled_region(session, publication.region, publication.groupSession);
+        push::activity::stage_settled_region(
+            session, publication.region, publication.groupSession, publication.transitionToken);
     }
     return staged;
 }

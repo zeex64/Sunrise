@@ -36,6 +36,8 @@ constexpr std::uint64_t kRosterBurstIntervalMs = 1'000;
 constexpr std::int32_t kNoBubble = -1;
 /** A refresh re-send carries the current revision instead of asking for an older one. */
 constexpr std::uint32_t kCurrentRevision = 0;
+/** A malformed or preempted target must not advance membership revisions without bound. */
+constexpr std::uint8_t kCitizenRetryLimit = 4;
 
 /**
  * Copies one staged frame to the caller and publishes its nonce.
@@ -94,18 +96,23 @@ bool consume_activity_keepalive(Session& session,
             : state::activity::membership::reported_region(session.activitySessionId);
     const std::int32_t effectiveRegion =
         session.activitySessionId == 0 ? -1 : effective_region(session.activitySessionId).index;
+    const std::uint8_t visitToken =
+        session.activitySessionId == 0
+            ? 0
+            : state::activity::membership::reported_transition_token(session.activitySessionId);
     const std::uint64_t advertisedGroup =
         session.activityJoinedForeignSession
             ? 0
             : server::gameplay::group::advertised_group_session(effectiveRegion);
     // Published/settled group arrays are durable history, while a patrol can return to the same
-    // region and reuse that region's group. The scalar region markers supply the visit generation:
-    // a group settled on an older visit must be advertised once again after another region has
-    // occupied those markers.
+    // region and reuse that region's group. The transition token is the visit generation: scalar
+    // region equality alone made A -> B -> A reuse A's older retirement and omit its descriptor.
     const bool advertisedGroupPublished = group_published(session, advertisedGroup)
-                                          && session.activityPublishedRegion == effectiveRegion;
-    const bool advertisedGroupSettled =
-        group_settled(session, advertisedGroup) && session.activitySettledRegion == effectiveRegion;
+                                          && session.activityPublishedRegion == effectiveRegion
+                                          && session.activityPublishedTransitionToken == visitToken;
+    const bool advertisedGroupSettled = group_settled(session, advertisedGroup)
+                                        && session.activitySettledRegion == effectiveRegion
+                                        && session.activitySettledTransitionToken == visitToken;
     const std::uint64_t advertisedHost =
         server::gameplay::group::held_host_session(advertisedGroup);
     // The descriptor must be retired before the client can promote PUBLIC TARGET to CURRENT. The
@@ -115,11 +122,24 @@ bool consume_activity_keepalive(Session& session,
         advertisedGroup != 0 && advertisedHost != 0
         && server::gameplay::group::view_accepted(advertisedGroup)
         && server::gameplay::group::activity_host_published(advertisedGroup);
+    // A descriptor can race a preempted PUBLIC TARGET's final leave on another transport. The
+    // client then applies the membership revision but cannot claim the new target. Retry at a new
+    // revision only when no gameplay join followed the exact descriptor publication.
+    const bool citizenRetryDue = advertisedGroupPublished && !advertisedGroupSettled
+                                 && advertisedGroup != 0
+                                 && session.activityCitizenRetryGroupSession == advertisedGroup
+                                 && session.activityCitizenPublishAttempts < kCitizenRetryLimit
+                                 && now >= session.activityCitizenRetryDueTick
+                                 && !server::gameplay::group::session_admitted(advertisedGroup);
     const bool regionPublicationDue =
         !session.activityJoinedForeignSession && reportedRegion >= 0
-        && (advertisedGroup != 0 ? !advertisedGroupPublished && !advertisedGroupSettled
-                                 : reportedRegion != session.activityPublishedRegion
-                                       && reportedRegion != session.activitySettledRegion);
+        && (citizenRetryDue
+            || (advertisedGroup != 0
+                    ? !advertisedGroupPublished && !advertisedGroupSettled
+                    : !(session.activityPublishedRegion == effectiveRegion
+                        && session.activityPublishedTransitionToken == visitToken)
+                          && !(session.activitySettledRegion == effectiveRegion
+                               && session.activitySettledTransitionToken == visitToken)));
     // A reused group retains its old ready state. Do not let that historical state retire the new
     // visit before its descriptor-bearing membership has actually reached the client.
     const bool citizenRetirementDue = !session.activityJoinedForeignSession && effectiveRegion >= 0
@@ -160,16 +180,20 @@ bool consume_activity_keepalive(Session& session,
     // The client applies one membership update per revision and drops repeats. Either a new region
     // or a newly admitted gameplay host therefore needs a fresh root-membership revision.
     const bool regionRepublishReady = regionPublicationDue
-                                      && server::gameplay::advertisement_state(reportedRegion)
+                                      && server::gameplay::advertisement_state(effectiveRegion)
                                              == server::gameplay::AdvertisementState::ready;
-    if ((regionRepublishReady || groupReflectionChanged)
+    const bool membershipRepublished =
+        (regionRepublishReady || groupReflectionChanged)
         && state::activity::membership::acknowledged(session.activitySessionId)
-        && state::activity::membership::republish(session.activitySessionId)) {
+        && state::activity::membership::republish(session.activitySessionId);
+    if (membershipRepublished) {
         core::log::write(
             core::log::Channel::server,
             core::log::Level::info,
             groupReflectionChanged
                 ? "ev=gameplay stage=membership result=republished reason=gameplay-host"
+            : citizenRetryDue
+                ? "ev=gameplay stage=membership result=republished reason=citizen-retry"
                 : "ev=gameplay stage=membership result=republished reason=region");
     }
     // Membership only becomes publishable after the client sends its identity, so it joins the
@@ -206,8 +230,10 @@ bool consume_activity_keepalive(Session& session,
         citizenAdvertisementUnsettled && !settleCitizenAdvertisement;
     const bool publishesMembership =
         hasMembership
-        && (regionPublicationDue || settleCitizenAdvertisement || groupReflectionChanged
-            || !state::activity::membership::acknowledged(session.activitySessionId));
+        && ((regionPublicationDue && (!citizenRetryDue || membershipRepublished))
+            || settleCitizenAdvertisement || groupReflectionChanged
+            || (!citizenRetryDue
+                && !state::activity::membership::acknowledged(session.activitySessionId)));
     // Resolved the way the body resolves it, not from the reported field. Before the first report
     // the arrival slice set stands in, and that first push carries a descriptor too.
     const server::gameplay::AdvertisementState advertisement =
@@ -236,10 +262,10 @@ bool consume_activity_keepalive(Session& session,
         // Publishing the descriptor disarms only the urgent group trigger. It remains in later
         // refreshes until view bind and activity-host promotion permit a descriptor-free body.
         if (sent && includeCitizenAdvertisement) {
-            stage_published_region(session, effectiveRegion, advertisedGroup);
+            stage_published_region(session, effectiveRegion, advertisedGroup, visitToken);
         }
         if (sent && settleCitizenAdvertisement) {
-            stage_settled_region(session, effectiveRegion, advertisedGroup);
+            stage_settled_region(session, effectiveRegion, advertisedGroup, visitToken);
         }
         if (sent && reflectedGroup != 0) {
             stagedReflectedGroupSession = reflectedGroup;
@@ -291,8 +317,8 @@ bool consume_activity_keepalive(Session& session,
                       line.size(),
                       "ev=activity stage=keepalive result=%s bytes=%zu membership=%u key=0x%llX "
                       "spawn_state=%d teleport_state=%d teleport_slice=%d token=%u revision=%u "
-                      "advert=%u citizen=%u settle=%u published=%d settled=%d group=0x%llX "
-                      "group_published=%u group_settled=%u ready=%u",
+                      "advert=%u citizen=%u settle=%u visit=%u published=%d/%u settled=%d/%u "
+                      "group=0x%llX group_published=%u group_settled=%u ready=%u retry=%u/%u",
                       published ? "ok" : "fail",
                       framedSize,
                       hasMembership ? 1U : 0U,
@@ -305,12 +331,17 @@ bool consume_activity_keepalive(Session& session,
                       static_cast<unsigned>(advertisement),
                       static_cast<unsigned>(includeCitizenAdvertisement),
                       static_cast<unsigned>(settleCitizenAdvertisement),
+                      static_cast<unsigned>(visitToken),
                       session.activityPublishedRegion,
+                      static_cast<unsigned>(session.activityPublishedTransitionToken),
                       session.activitySettledRegion,
+                      static_cast<unsigned>(session.activitySettledTransitionToken),
                       static_cast<unsigned long long>(advertisedGroup),
                       static_cast<unsigned>(advertisedGroupPublished),
                       static_cast<unsigned>(advertisedGroupSettled),
-                      static_cast<unsigned>(retirementReady));
+                      static_cast<unsigned>(retirementReady),
+                      static_cast<unsigned>(citizenRetryDue),
+                      static_cast<unsigned>(session.activityCitizenPublishAttempts));
     if (count > 0) {
         core::log::write(core::log::Channel::server,
                          core::log::Level::debug,

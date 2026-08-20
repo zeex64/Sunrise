@@ -115,6 +115,15 @@ struct PendingMutation final {
 [[nodiscard]] std::int32_t reported_region(std::uint64_t sessionId) noexcept;
 
 /**
+ * Reads the transition token that identifies the client's current region visit.
+ * The same region can be visited repeatedly, so region alone cannot retire or suppress a citizen
+ * descriptor from a later traversal.
+ * @param sessionId Joined activity session.
+ * @return Explicit client token, or the protocol's initial token before one is reported.
+ */
+[[nodiscard]] std::uint8_t reported_transition_token(std::uint64_t sessionId) noexcept;
+
+/**
  * Reads the newest session the client has reported a region on.
  * A link that joined a session it did not allocate never reports one. Session ids rise, so the
  * newest is the live one.

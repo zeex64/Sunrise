@@ -676,9 +676,35 @@ Once the director evaluates an encounter and creates native squad/member objects
 - The passive z-leg diagnostic Release build has SHA-256
   `0e0cfc8c4f4173e0247bf99e3367d9edbc083ec9df8cb2409582d32a8d888d3f`. Its unique hook at
   `FUN_140E12910` logs `z-leg-state` changes/heartbeats and exposes the fresh state in the Entity
-  Debug overlay. It records transition mode, requested/stored band, target and controller region
-  fields, authored z-leg entry/axis, interpolated coordinate triplet, and position-reference state.
+  Debug overlay. It records transition mode, requested/stored band, native anchor and destination
+  region fields, authored z-leg entry/axis, interpolated coordinate triplet, and position-reference
+  state.
   It is observation-only and leaves native transition behavior unchanged.
+- The ordered `0e0cfc8...` traversal screenshots and log isolate two server visit-lifecycle bugs.
+  Region 416's host was allocated and its descriptor was sent at `t=102638`, but the old region-24
+  PUBLIC TARGET did not finish clearing until `t=102686`. The client applied revision 7 while it
+  still owned that target slot, ignored the new descriptor, and therefore never opened the region
+  416 gameplay join. Sunrise nevertheless remembered region 416 as published and never issued a
+  fresh membership revision. On the return to region 24, token 4 was also suppressed by region
+  24's historical token-2 settled marker because the server tracked only group/region history.
+- The stuck load is native, not an overlay artifact or packet outage. Region 24's z-leg remained
+  anchored on native-current region 408. At `t=134015` it began alternating every 6 ms between
+  state 4 / authored entry 421 and state 3 / entry 427, both at zero coordinates, and never reached
+  state 0/completed. The missing region-24/416 target joins explain why the native role swap could
+  not recover. The sessions overlay correctly showed absent/unjoined rows; the row cache was not
+  stale.
+- The current visit-lifecycle candidate has SHA-256
+  `8136bd6c5f33aa926bdd608b6673b180f98e3c8e127923759cd09cccb192cfbd`. Published and settled
+  descriptors are keyed by the client transition token as well as region/group. A descriptor that
+  produces no gameplay admission is republished after 500 ms at a fresh acknowledged membership
+  revision, at most three retries after the initial publication. This handles the cross-transport
+  PUBLIC TARGET leave race and makes A -> B -> A visits publish independently without writing any
+  native role, manager, or transition field.
+- The z-leg overlay now labels `+0x210` as the native anchor and `+0x2B0/+0x2B4` as the actual
+  destination region/hash (`408 -> 24`, for example). Rapid state-3/state-4 oscillation is
+  rate-limited for logging while every observation still updates the overlay. The misleading
+  `Slice set` status label is now `Teleport slice`: Region and Bubble remain the authoritative
+  player-reported location, while an unknown teleport slice does not mean the region is unknown.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

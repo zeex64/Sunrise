@@ -27,9 +27,12 @@ struct ZLegDebugSnapshot {
     std::int32_t storedAfter{-1};
     std::int32_t transitionMode{-1};
     std::uint32_t transitionFlags{};
-    std::int32_t targetRegion{-1};
-    std::int32_t regionA{-1};
-    std::int32_t regionB{-1};
+    /** Native PUBLIC CURRENT/source region kept at controller +0x210. */
+    std::int32_t anchorRegion{-1};
+    /** Destination region the in-flight z-leg is trying to enter. */
+    std::int32_t destinationRegion{-1};
+    /** Destination region hash paired with destinationRegion. */
+    std::uint32_t destinationHash{};
     std::int32_t authoredRegion{-1};
     std::int32_t entryIndex{-1};
     std::int32_t axis{-1};

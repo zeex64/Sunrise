@@ -41,6 +41,24 @@ std::int32_t reported_region(std::uint64_t sessionId) noexcept {
     return region;
 }
 
+/** Reads the transition token that identifies the client's current region visit. */
+std::uint8_t reported_transition_token(std::uint64_t sessionId) noexcept {
+    if (sessionId == kAbsentSessionId) {
+        return kInitialTransitionToken;
+    }
+    std::uint8_t token = kInitialTransitionToken;
+    AcquireSRWLockShared(&runtime::storage::g_stateLock);
+    const ActivityState& state = runtime::storage::g_state.activity;
+    const std::size_t target = activity::transactions::find_session(state, sessionId);
+    if (target != kInvalidSessionSlot) {
+        const MembershipState& membership = state.sessions[target].membership;
+        token =
+            membership.hasTransitionToken ? membership.transitionToken : kInitialTransitionToken;
+    }
+    ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+    return token;
+}
+
 /** Reads the newest session the client has reported a region on. */
 std::uint64_t live_region_session(std::uint64_t fallback) noexcept {
     std::uint64_t newest = kAbsentSessionId;

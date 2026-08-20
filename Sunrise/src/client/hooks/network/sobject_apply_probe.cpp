@@ -38,6 +38,8 @@ constexpr std::size_t kCitizenSessionCapacity = 8;
 constexpr std::size_t kCitizenJoinCapacity = 4;
 constexpr std::uint64_t kCitizenJoinHeartbeatMilliseconds = 5000;
 constexpr std::uint64_t kZLegHeartbeatMilliseconds = 5000;
+/** Prevent a broken 3/4 boundary oscillation from exhausting the bounded report budget. */
+constexpr std::uint64_t kZLegOscillationReportMilliseconds = 250;
 constexpr std::uint64_t kZLegFreshMilliseconds = 1500;
 constexpr std::size_t kManagerSlotMapOffset = 0x114;
 constexpr std::size_t kManagerSlotMapStride = 6;
@@ -815,9 +817,8 @@ void report_citizen_join(std::uint64_t handle,
     output.storedBefore = -1;
     output.storedAfter = -1;
     output.transitionMode = -1;
-    output.targetRegion = -1;
-    output.regionA = -1;
-    output.regionB = -1;
+    output.anchorRegion = -1;
+    output.destinationRegion = -1;
     output.authoredRegion = -1;
     output.entryIndex = -1;
     output.axis = -1;
@@ -832,9 +833,9 @@ void report_citizen_join(std::uint64_t handle,
         std::uint8_t positionValid = 0;
         std::memcpy(&transitionMode, controller + 0x209, sizeof transitionMode);
         std::memcpy(&transitionFlags, controller + 0x20A, sizeof transitionFlags);
-        std::memcpy(&output.targetRegion, controller + 0x210, sizeof output.targetRegion);
-        std::memcpy(&output.regionA, controller + 0x2B0, sizeof output.regionA);
-        std::memcpy(&output.regionB, controller + 0x2B4, sizeof output.regionB);
+        std::memcpy(&output.anchorRegion, controller + 0x210, sizeof output.anchorRegion);
+        std::memcpy(&output.destinationRegion, controller + 0x2B0, sizeof output.destinationRegion);
+        std::memcpy(&output.destinationHash, controller + 0x2B4, sizeof output.destinationHash);
         std::memcpy(&storedState, controller + 0x352, sizeof storedState);
         std::memcpy(&authoredRegion, controller + 0x4EC, sizeof authoredRegion);
         std::memcpy(
@@ -858,9 +859,8 @@ void report_citizen_join(std::uint64_t handle,
         output.storedBefore = -1;
         output.storedAfter = -1;
         output.transitionMode = -1;
-        output.targetRegion = -1;
-        output.regionA = -1;
-        output.regionB = -1;
+        output.anchorRegion = -1;
+        output.destinationRegion = -1;
         output.authoredRegion = -1;
         output.entryIndex = -1;
         output.axis = -1;
@@ -882,9 +882,9 @@ void report_citizen_join(std::uint64_t handle,
     mix(static_cast<std::uint32_t>(snapshot.storedAfter));
     mix(static_cast<std::uint32_t>(snapshot.transitionMode));
     mix(snapshot.transitionFlags);
-    mix(static_cast<std::uint32_t>(snapshot.targetRegion));
-    mix(static_cast<std::uint32_t>(snapshot.regionA));
-    mix(static_cast<std::uint32_t>(snapshot.regionB));
+    mix(static_cast<std::uint32_t>(snapshot.anchorRegion));
+    mix(static_cast<std::uint32_t>(snapshot.destinationRegion));
+    mix(snapshot.destinationHash);
     mix(static_cast<std::uint32_t>(snapshot.authoredRegion));
     mix(static_cast<std::uint32_t>(snapshot.entryIndex));
     mix(static_cast<std::uint32_t>(snapshot.axis));
@@ -901,8 +901,15 @@ void report_citizen_join(std::uint64_t handle,
         return false;
     }
     const std::uint64_t signature = z_leg_signature(snapshot);
-    const bool due = signature != g_zLegReportSignature || g_zLegReportedAt == 0
-                     || snapshot.observedAt - g_zLegReportedAt >= kZLegHeartbeatMilliseconds;
+    const bool oldBoundaryState =
+        g_zLegDebug.requestedState == 3 || g_zLegDebug.requestedState == 4;
+    const bool newBoundaryState = snapshot.requestedState == 3 || snapshot.requestedState == 4;
+    const bool rapidBoundaryOscillation =
+        oldBoundaryState && newBoundaryState && g_zLegReportedAt != 0
+        && snapshot.observedAt - g_zLegReportedAt < kZLegOscillationReportMilliseconds;
+    const bool heartbeat = g_zLegReportedAt == 0
+                           || snapshot.observedAt - g_zLegReportedAt >= kZLegHeartbeatMilliseconds;
+    const bool due = heartbeat || (signature != g_zLegReportSignature && !rapidBoundaryOscillation);
     g_zLegDebug = snapshot;
     if (due) {
         g_zLegReportSignature = signature;
@@ -923,7 +930,7 @@ void report_z_leg(const ZLegDebugSnapshot& snapshot, std::uint32_t occurrence) n
         line.data(),
         line.size(),
         "ev=gameplay stage=z-leg-state occurrence=%u controller=%p requested=%d "
-        "stored=%d->%d mode=%d flags=0x%02X target=%d region_fields=%d/%d authored=%d "
+        "stored=%d->%d mode=%d flags=0x%02X anchor=%d destination=%d/0x%08X authored=%d "
         "entry=%d axis=%d coordinates=%.5g/%.5g/%.5g position_valid=%u ref=0x%08X",
         occurrence,
         reinterpret_cast<void*>(snapshot.controller),
@@ -932,9 +939,9 @@ void report_z_leg(const ZLegDebugSnapshot& snapshot, std::uint32_t occurrence) n
         snapshot.storedAfter,
         snapshot.transitionMode,
         snapshot.transitionFlags,
-        snapshot.targetRegion,
-        snapshot.regionA,
-        snapshot.regionB,
+        snapshot.anchorRegion,
+        snapshot.destinationRegion,
+        snapshot.destinationHash,
         snapshot.authoredRegion,
         snapshot.entryIndex,
         snapshot.axis,
@@ -1599,9 +1606,8 @@ bool z_leg_debug_snapshot(ZLegDebugSnapshot& output) noexcept {
     output.storedBefore = -1;
     output.storedAfter = -1;
     output.transitionMode = -1;
-    output.targetRegion = -1;
-    output.regionA = -1;
-    output.regionB = -1;
+    output.anchorRegion = -1;
+    output.destinationRegion = -1;
     output.authoredRegion = -1;
     output.entryIndex = -1;
     output.axis = -1;

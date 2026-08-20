@@ -80,10 +80,11 @@ void draw() noexcept {
         }
         if (zLegPresent) {
             ImGui::TextColored(ImVec4{1.0F, 0.55F, 0.25F, 1.0F},
-                               "z-leg mode %d  state %d  target %d  axis %d  pos %.1f/%.1f/%.1f",
+                               "z-leg mode %d  state %d  %d -> %d  axis %d  pos %.1f/%.1f/%.1f",
                                zLeg.transitionMode,
                                zLeg.requestedState,
-                               zLeg.targetRegion,
+                               zLeg.anchorRegion,
+                               zLeg.destinationRegion,
                                zLeg.axis,
                                static_cast<double>(zLeg.previousCoordinate),
                                static_cast<double>(zLeg.targetCoordinate),
@@ -165,10 +166,11 @@ void draw() noexcept {
         ImGui::TextDisabled("no active z-leg classification");
     } else {
         ImGui::TextColored(ImVec4{1.0F, 0.55F, 0.25F, 1.0F},
-                           "mode %d state %d target %d axis %d pos %.1f/%.1f/%.1f",
+                           "mode %d state %d  %d -> %d  axis %d pos %.1f/%.1f/%.1f",
                            zLeg.transitionMode,
                            zLeg.requestedState,
-                           zLeg.targetRegion,
+                           zLeg.anchorRegion,
+                           zLeg.destinationRegion,
                            zLeg.axis,
                            static_cast<double>(zLeg.previousCoordinate),
                            static_cast<double>(zLeg.targetCoordinate),

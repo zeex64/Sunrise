@@ -95,10 +95,14 @@ struct Session {
      * publications whose advertisement has not produced a group session yet.
      */
     std::int32_t activityPublishedRegion{-1};
+    /** Transition token of the visit named by activityPublishedRegion. */
+    std::uint8_t activityPublishedTransitionToken{};
     /** Two public gameplay groups whose citizen descriptors reached the client. */
     std::array<std::uint64_t, 2> activityPublishedGroupSessions{};
     /** Region named by a transaction-staged descriptor, committed after caller delivery. */
     std::int32_t activityPublishedRegionStaged{};
+    /** Transition token named by the transaction-staged descriptor. */
+    std::uint8_t activityPublishedTransitionTokenStaged{};
     /** Gameplay group named by the transaction-staged descriptor. */
     std::uint64_t activityPublishedGroupSessionStaged{};
     /** True while a transaction owns a published-region update to commit. */
@@ -109,14 +113,24 @@ struct Session {
      * from making this diagnostic scalar reopen a newer group.
      */
     std::int32_t activitySettledRegion{-1};
+    /** Transition token of the visit named by activitySettledRegion. */
+    std::uint8_t activitySettledTransitionToken{};
     /** Two public gameplay groups whose joins completed and descriptors were retired. */
     std::array<std::uint64_t, 2> activitySettledGroupSessions{};
     /** Region retired by a transaction-staged membership, committed after caller delivery. */
     std::int32_t activitySettledRegionStaged{};
+    /** Transition token named by the transaction-staged retirement. */
+    std::uint8_t activitySettledTransitionTokenStaged{};
     /** Gameplay group retired by the transaction-staged membership. */
     std::uint64_t activitySettledGroupSessionStaged{};
     /** True while a transaction owns a settled-region publication to commit. */
     bool activitySettledRegionStagedPresent{};
+    /** Group whose last citizen descriptor is awaiting a gameplay join. */
+    std::uint64_t activityCitizenRetryGroupSession{};
+    /** Earliest tick at which an ignored citizen descriptor may be republished. */
+    std::uint64_t activityCitizenRetryDueTick{};
+    /** Bounded number of descriptor publications made for the current visit. */
+    std::uint8_t activityCitizenPublishAttempts{};
     /** Gameplay group already mirrored into the root membership's remote slot. */
     std::uint64_t activityReflectedGroupSession{};
     /**

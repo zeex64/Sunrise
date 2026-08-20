@@ -67,7 +67,7 @@ constexpr std::array<LineEntry, kStatusLineCount> kStatusLines{
     LineEntry{"Activity", "status_activity", true},
     LineEntry{"Region", "status_region", true},
     LineEntry{"Bubble", "status_bubble", true},
-    LineEntry{"Slice set", "status_slice_set", true},
+    LineEntry{"Teleport slice", "status_slice_set", true},
     LineEntry{"Closest spawn", "status_closest_spawn", true},
 };
 

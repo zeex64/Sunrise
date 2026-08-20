@@ -2910,6 +2910,51 @@ Entity Debug overlay shows the same fresh classification even before a synthetic
 No controller field is written by the hook. Release SHA-256:
 `0e0cfc8c4f4173e0247bf99e3367d9edbc083ec9df8cb2409582d32a8d888d3f`.
 
+### Preempted target and revisited-region publication failure
+
+The ordered spawn / walk-forward / walk-back run identifies the first deterministic server fault
+in this traversal. Native PUBLIC CURRENT remained region 408. The first region-24 target was fully
+joined, but its normal z-leg had not completed when the client crossed into region 416. At
+`t=102570` the client preempted the region-24 transition and began leaving that PUBLIC TARGET. The
+root authoritative transaction reported region 416/token 3 at `t=102591`; Sunrise claimed and
+allocated host `0x9EAA300100200004`, then sent the region-416 citizen descriptor in membership
+revision 7 at `t=102638`. The old target slot was not actually cleared client-side until
+`t=102686`. No region-416 citizen join followed.
+
+This is a cross-transport ordering race. The gameplay leave acknowledgement and the root BAP
+membership do not share one ordered stream. The client can apply the new root revision while the
+single PUBLIC TARGET slot is still occupied. Before this fix, Sunrise treated successful frame
+delivery as proof that the descriptor had been claimed. Later keepalives retained
+`published=416`, `group_published=1`, `ready=0`, but did not advance the membership revision, so the
+client never saw a claimable replacement.
+
+Walking back exposed the independent A -> B -> A bug. Region 24 was now token 4, but its reused
+group still existed in durable published/settled history and `activitySettledRegion` was still 24
+from token 2. Because region 416 never settled, no scalar marker displaced that value. The old
+predicate therefore concluded token-4 region 24 was already settled and sent `citizen=0` forever.
+The target row's absent/unjoined state is real; the sessions overlay filters disconnected cache-only
+rows but intentionally retains the player-reported current destination even when its join is
+missing.
+
+Published/settled markers now carry the exact client transition token. All current-visit tests in
+both transaction and keepalive paths require group, region, and token. A published descriptor also
+arms a bounded admission check. If no matching gameplay session is admitted after 500 ms, Sunrise
+waits for acknowledgement, advances the membership revision, and republishes the descriptor. The
+initial publication plus at most three retries prevents an unbounded revision loop. Admission or
+settlement disarms the retry. No native controller, role, or active-manager field is modified.
+
+The same run clarifies the native diagnostic fields. Controller `+0x210` stays 408 through
+destinations 24 and 416, so it is the native-current anchor/source, not the requested target.
+`+0x2B0` is the actual destination region and `+0x2B4` its hash. The stuck load eventually
+oscillated between state 4 / entry 421 / valid special position and state 3 / entry 427 / invalid
+position every roughly 6 ms, never producing state 0. The hook now reports `anchor -> destination`
+and rate-limits only rapid 3/4 log changes; its fresh overlay sample still updates on every call.
+The status overlay label `Teleport slice` now states what that optional value actually is. Region
+and Bubble continue to come from the coherent client-reported world snapshot.
+
+Release SHA-256 for the pending traversal test:
+`8136bd6c5f33aa926bdd608b6673b180f98e3c8e127923759cd09cccb192cfbd`.
+
 After manual deployment, inspect:
 
 ```text
