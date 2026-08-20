@@ -116,7 +116,10 @@ constexpr std::int32_t kTwoViewProbeEntityNamespace = 1;
 constexpr std::int32_t kTwoViewProbeRegion = 24;
 constexpr std::uint8_t kTwoViewProbeBubble = 3;
 constexpr std::uint8_t kTwoViewProbeCell = 11;
-/** Signature, target view's 220-bit entity body, and the current view's complete empty tail. */
+/**
+ * Stored 275-bit signature, target view's 220-bit body, and current view's six-bit empty tail.
+ * The native schema consumes 274 signature bits; stored bit 274 supplies view 0's event lane.
+ */
 constexpr std::uint16_t kTwoViewProbeBodyBits = 501;
 /** Fail before the native four-second corrupt-packet timeout can close the channel. */
 constexpr std::uint64_t kTwoViewProbeTimeout = 3000;
@@ -511,9 +514,11 @@ write_scheduler_signature(bits::Writer& writer,
 
 /** Writes the complete six-bit empty body proven by the per-handler two-view trace. */
 [[nodiscard]] bool write_complete_empty_scheduler_view(bits::Writer& writer) noexcept {
-    // The older five-bit form relies on the following field's first zero. That works for a single
-    // view but shifts every later view. Give each view its own final fixed-handler absence bit.
-    return write_empty_scheduler_view(writer) && writer.write(0, 1);
+    // Each view owns event and mask absence bits, then two separate empty entity-prelude bits
+    // (index count and spatial-cell presence), the empty entity-list terminator, and fixed absence.
+    // The earlier 000100 order made the predecoder read a present cell from the final view.
+    return writer.write(0, 1) && writer.write(0, 1) && writer.write(0, 1) && writer.write(0, 1)
+           && writer.write(1, 1) && writer.write(0, 1);
 }
 
 /** Writes a captured MSB-first native body whose final byte is left-aligned. */
@@ -612,12 +617,20 @@ write_scheduler_signature(bits::Writer& writer,
     }
     for (std::size_t index = 0; index < signature.viewCount; ++index) {
         if (plan.present && index == plan.viewIndex) {
-            if (!write_entity_create_view(writer, plan)) {
+            // The stored signature's final bit supplies view 0's event lane. Every later view
+            // must publish that event-absence bit before the common post-event entity body.
+            if ((twoView && index != 0 && !writer.write(0, 1))
+                || !write_entity_create_view(writer, plan)) {
                 return false;
             }
-        } else if (twoView ? !write_complete_empty_scheduler_view(writer)
-                           : !write_empty_scheduler_view(writer)) {
-            return false;
+        } else {
+            // View 0 likewise needs only its five-bit post-event remainder; subsequent empty
+            // views own all six handler bits.
+            const bool written = twoView && index != 0 ? write_complete_empty_scheduler_view(writer)
+                                                       : write_empty_scheduler_view(writer);
+            if (!written) {
+                return false;
+            }
         }
     }
     return true;

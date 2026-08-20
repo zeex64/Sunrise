@@ -16,7 +16,7 @@ squads, and encounters before publishing native objects through the replication 
 | Layer | Progress |
 | --- | --- |
 | Gameplay session and views | Working and substantially stabilized |
-| Replication scheduler | One-view layout understood; the 203-bit framing correction is validated |
+| Replication scheduler | One-view 203-bit framing is validated; the final corrected two-view entity body is 501 bits and awaits runtime validation |
 | Native entity creation | Shared Vandal RSAT `0x815B204B` is proven on both the staged control and an atomic create/update; slots 13 and 14 allocate |
 | Entity placement and updates | Cell `0x91`, nearby transform, native construction, and positional audio work; render/current-view ownership does not |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
@@ -349,11 +349,34 @@ The slot-14 atomic run then completed the current wire milestone:
 - The correction treats a unique server view-token row as sufficient target presence while keeping
   the target fail-closed on a non-null client manager, namespace 1, exact scheduler entry and local
   layout, occupancy exactly 13, slot exactly 13, zero generations, and the proven 130-bit update.
-  The current `...0003` authority still must be bound and owned by the advertised Basin group. The
-  writer emits the view-0 entity body followed by view 1's complete empty tail, retaining
-  `body_bits=501`, one-shot/no-retry behavior, and direct ACK tracking. This corrected build is not
-  yet deployed; its Release SHA is
-  `f664c98f1a22f338eb41bc3ec62e3bc2b4d11a7e1220779ebe0af94d9894a330`.
+  The current `...0003` authority still must be bound and owned by the advertised Basin group.
+- The `f664c98f...` run sent packet 135 with `body_bits=501` and decoded the exact namespace-1
+  Vandal record at slot 13/cell 11, but its old empty-tail order `000100` made view 1's prelude
+  consume 10 bits and its entity lane fail. The earlier conclusion that view 0 stole a tail bit was
+  wrong.
+- The bit boundary is now exact. Sunrise stores and replays 275 signature bits, while the native
+  signature decoder consumes 274. Stored signature bit 274 is therefore view 0's event bit. The
+  existing 220-bit target body already supplies view 0's mask, two-bit entity prelude, 216-bit
+  entity list, and fixed bit. Appending another target zero shifts the following view.
+- The deployed `5262387a...` run proved that model. Packet 132 left at `t=68651` with
+  `body_bits=502`; view 0 completed all five handlers and decoded entity `0x0010000D`, flags
+  `0x0003`, RSAT `0x815B204B`, and the nearby transform. The extra appended zero then became view
+  1's event bit. View 1 consumed event/mask/prelude as `1/1/2`, decoded an unintended entity count
+  of 1, returned result 2 after 45 entity-list bits, and never reached fixed. The transaction rolled
+  back: no promotion, type-2 job, apply, kind-0 construction, native registration, or bind occurred,
+  and slot 13 remained `internal=-1 mapped=0 dirty=0`. No Vandal audio or model was expected.
+- Network health remained clean for more than five minutes. One aggregate corrupt read appeared at
+  120 seconds, later intervals returned zero, outgoing loss stayed zero, and there was no assert hit
+  or network hitch. The final disconnect lines were a graceful user shutdown with
+  `shutdown result=ok`.
+- Ghidra `FUN_141718D90` and the handler traces support the final correction: keep the aligned
+  empty view tail `000010`, remove the extra target zero, and return to `body_bits=501`. The final
+  Release SHA is `28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`;
+  the repo and game-directory DLLs now match, but this build has not yet been run.
+- The generic two-view writer is now index-aware as well: view 0 consumes the stored signature's
+  carried event bit and writes only its five-bit remainder, while later views publish their own
+  event bit. This does not alter the special view-0 Vandal packet, but prevents a later view-1
+  create from reintroducing the same one-bit shift.
 - The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
   remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
   when that view leaves. This candidate is Basin-only (region 24, bubble 3, cell 11), so stay in
@@ -361,11 +384,16 @@ The slot-14 atomic run then completed the current wire milestone:
 
 ## Immediate plan
 
-### 1. Test the active namespace-1 manager
+### 1. Validate the final corrected 501-bit active-manager packet
 
-- Deploy SHA `f664c98f...`, repeat the Town-to-Basin transition once, and remain in Basin bubble 3.
+- Restart with installed SHA `28b14320...`, repeat the Town-to-Basin transition once, and remain in
+  Basin bubble 3.
   Require the log to distinguish authority `...0003/1` from entity target `...0002/0`, retain
   `body_bits=501`, decode the record in namespace 1 at slot 13, and directly ACK that packet.
+- Require all ten handler lanes to remain in view-major order. View 0 must consume 221 bits through
+  its fixed lane; view 1 must consume the aligned six-bit empty body `000010`, return zero from its
+  entity lane, and complete its fixed lane. Do not interpret the ACK as success without those
+  decoder postconditions.
 - `sobject-promote` must show internal create/update flags, object generation 2, and namespace-1
   occupancy changing from clear to set. `sobject-dirty-service` then reports whether the runtime's
   active manager is this exact namespace-1 manager and whether its root dirty bit is drained.
@@ -451,6 +479,15 @@ Once the director evaluates an encounter and creates native squad/member objects
   `body_bits=501`.
 - The current promotion/service diagnostic Release candidate has SHA-256
   `f0467bca1b03b7023767a68f3225b9208ee4a0982a849058a0f2e18a4ebdc7c1`.
+- The deployed active-manager proof is commit
+  `ec3c4471 test: route Basin Vandal through active manager`, SHA-256
+  `f664c98f1a22f338eb41bc3ec62e3bc2b4d11a7e1220779ebe0af94d9894a330`. Its 501-bit body used the
+  wrong `000100` empty-tail order, so the transaction rolled back.
+- The currently deployed 502-bit correction has SHA-256
+  `5262387a228cf793c17aed6b1d2c54b4d3dcd618636bb02bad5db27ca9163d5b`. Its extra target zero
+  shifted view 1 and again rolled back the transaction.
+- The installed, runtime-untested final 501-bit Release candidate has SHA-256
+  `28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

@@ -32,6 +32,12 @@ The uncommitted passive registration/glue-dispatch diagnostic was manually deplo
 dispatcher entry but not its table-write postcondition. Current unbuilt working-tree work adds the
 postcondition check; neither candidate is an eventual commit identifier.
 
+The prior 502-bit active-manager test DLL, SHA-256
+`5262387a228cf793c17aed6b1d2c54b4d3dcd618636bb02bad5db27ca9163d5b`, exposed the extra appended
+target bit described below. The repo and game directory now both contain the runtime-untested final
+501-bit Release DLL, SHA-256
+`28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`.
+
 ## Confirmed high-level path
 
 1. The client joins Sunrise's gameplay group through the advertised method-0 UDP descriptor.
@@ -2265,12 +2271,16 @@ then consumed `1,1,10,19`, returned result 2 in the entity lane, and never calle
 The later packet-loss summary reported one corrupt read. This is the exact historical reason the
 entity remained suppressed; the build intentionally carried no Vandal.
 
-The corrected probe writes an independent six-bit `000100` body for each view, for 287 scheduler
-bits total (275 + 6 + 6), while leaving the proven one-view helper unchanged. Its next run passed:
-both views consumed `1,1,2,1,1`, every handler returned zero, ordinal 9/fixed reported complete, and
-packet 135 was directly acknowledged after 66 ms. The selected view was current Basin token
-`...0003`, namespace 2, region 24, bubble 3, map-global cell 11. The later aggregate reported 536
-delivered, zero lost, and one corrupt read without a timeout or disconnect.
+The historical correction appended two six-bit `000100` chunks, for 287 stored scheduler bits
+total (275 + 6 + 6), while leaving the proven one-view helper unchanged. Its next run passed: both
+views consumed `1,1,2,1,1`, every handler returned zero, ordinal 9/fixed reported complete, and
+packet 135 was directly acknowledged after 66 ms. Later traces clarified that those chunks were
+not independent view bodies: signature bit 274 supplied view 0's event, the first chunk's final
+zero supplied view 1's event, and each view consumed a five-bit `00010` remainder. A target entity
+body consumes its own fixed bit, so the following empty view instead needs the full `000010` body
+used by the final writer. The selected view was current Basin token `...0003`, namespace 2, region
+24, bubble 3, map-global cell 11. The later aggregate reported 536 delivered, zero lost, and one
+corrupt read without a timeout or disconnect.
 
 The first bounded Basin-create run proved that the cached remote list is not sufficient once the
 local list changes. The empty probe completed all ten handler calls at `t=71208` and was directly
@@ -2403,11 +2413,55 @@ mistake target stage-5 binding for client-manager liveness. The target remains s
 by a non-null client manager, namespace 1, exact scheduler key/tag and two-view local layout,
 occupancy exactly 13, next slot exactly 13, zero handle/reserved/object generations, loaded Vandal
 RSAT, and the exact 130-bit nearby update. The authority remains separately required to be the
-bound current Basin group at scheduler view 1. The writer places the full entity handler in view 0,
-then emits view 1's complete six-bit empty tail, so total body width remains 501 bits. It remains a
-one-shot combined create with no retry and direct ACK tracking. This corrected Release build has
-not yet been deployed; its SHA-256 is
-`f664c98f1a22f338eb41bc3ec62e3bc2b4d11a7e1220779ebe0af94d9894a330`.
+bound current Basin group at scheduler view 1.
+
+The deployed `f664c98f...` run passed those gates and sent packet 135 at `t=81002`. It carried
+authority `...0003/1`, entity target `...0002/0`, namespace 1, slot 13, region 24, bubble 3, cell
+11, and `body_bits=501`. View 0's entity-list decoder consumed the exact 216-bit atomic list and
+emitted entity `0x0010000D`, flags `0x0003`, create
+`4B205B8101000000AC2200005C000000`, and the intended nearby-player transform. That log line proves
+the record payload itself decoded, but not that the enclosing scheduler transaction committed.
+
+The earlier explanation for that failure was wrong. A nonempty target view does consume 221
+handler bits (event 1, mask 1, entity prelude 2, entity list 216, fixed 1), but the replayed
+signature and target body overlap that boundary intentionally. Sunrise stores 275 signature bits,
+while `scheduler-native-signature` proves schema `0x80806AEA` consumes 274. Stored signature bit 274
+therefore supplies view 0's event bit. The unappended 220-bit target body already supplies its mask,
+two-bit entity prelude, 216-bit entity list, and fixed bit. The `f664c98f...` failure came from the
+old empty-tail order `000100`, not from view 0 borrowing view 1's first bit.
+
+The next correction changed the empty tail to `000010` but also appended an unnecessary zero after
+the target, producing Release SHA
+`5262387a228cf793c17aed6b1d2c54b4d3dcd618636bb02bad5db27ca9163d5b` and `body_bits=502`. The
+deployed run sent packet 132 at `t=68651`. View 0 completed all five handlers: its total was 221
+bits, its entity-list lane consumed exactly 216, and it emitted the correct namespace-1 record for
+entity `0x0010000D`, Basin cell 11, flags `0x0003`, shared Vandal RSAT, and nearby transform.
+
+The appended zero then became view 1's event bit and shifted the intended empty tail. View 1's
+event, mask, and prelude consumed `1/1/2`; its entity-list decoder saw count 1, returned result 2
+after 45 bits, and never reached the fixed handler. The enclosing transaction rolled back. There
+was no `sobject-promote`, slot 13 stayed absent, dirty service remained
+`internal=-1 mapped=0 dirty=0`, and no type-2 job, apply, kind-0 construction, native registration,
+or bind followed. Packet 132's ACK after 133 ms again proved transport delivery only. No audio or
+visible Vandal was expected.
+
+The 502-bit run remained healthy for more than five minutes. The 120-second aggregate reported one
+corrupt incoming read; later 180-, 240-, and 300-second reports each returned zero. Outgoing loss,
+assert hits, and network hitches remained zero. At `t=308528` the client gracefully left its
+sessions, stopped the transition, and completed `shutdown result=ok`; those disconnect lines were
+normal shutdown, not a gameplay failure.
+
+The final correction keeps the aligned six-bit empty body `000010`, removes the extra appended
+target zero, and restores `body_bits=501`. This follows the 274/275 signature boundary and leaves
+view 1 at its exact start. The installed Release DLL SHA-256 is
+`28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`; it is installed in the game
+directory but has not yet been run.
+
+The generic two-view writer now applies the same boundary by index. View 0 uses the signature's
+carried event and writes only the five-bit `00010` remainder; a later empty view writes all six
+`000010` bits, while a later entity view writes an explicit event zero before the common 220-bit
+post-event body. Both two-view target positions therefore remain 501 bits. The special Basin test
+still targets view 0, so this safety correction does not change its packet.
 
 This synthetic entity is scoped to the selected replication view and map cell. Sunrise does not
 migrate it to a successor view or publish its removal yet, so an overlapping bubble may retain it
@@ -2465,11 +2519,15 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Deploy the corrected active-manager proof (`f664c98f...`), repeat the Town-to-Basin transition,
-   and remain in Basin bubble 3. Require authority `...0003/1`, entity target `...0002/0`, the same
+1. Restart with the installed final corrected active-manager proof (`28b14320...`), repeat the
+   Town-to-Basin transition, and remain in Basin bubble 3. Require authority `...0003/1`, entity
+   target `...0002/0`, the
    501-bit total body, a 216-bit namespace-1 atomic record at slot 13/cell 11, and direct ACK.
-2. Classify the first missing post-decode boundary using `sobject-promote`,
-   `sobject-dirty-service`, and `sobject-type2-job`. No service on the namespace-1 manager would
+   More importantly, require view 0 to consume 221 bits through fixed and view 1 to consume the
+   aligned six-bit empty body `000010` through its own fixed handler. The ACK alone is insufficient.
+2. Only after all ten handler lanes complete, classify the first missing post-decode boundary
+   using `sobject-promote`, `sobject-dirty-service`, and `sobject-type2-job`. No service on the
+   namespace-1 manager would
    disprove the current active-manager hypothesis; retained dirty state with no job indicates
    service suppression; cleared dirty state with no job indicates a row prerequisite such as
    active-cell membership; builder result 4 indicates serialization failure; results 1/2/3
@@ -2528,8 +2586,14 @@ Current promotion/service diagnostic Release candidate SHA-256:
 Deployed target-bound active-manager proof SHA-256 (no packet sent):
 `13d441ff2878130ddd6e6c50a40b3a88a1a2df3ffa3512b76ccbe0e8d3c5b060`.
 
-Pending corrected active-manager proof SHA-256 (not yet deployed):
+Deployed 501-bit active-manager proof SHA-256 (old `000100` tail; transaction rolled back):
 `f664c98f1a22f338eb41bc3ec62e3bc2b4d11a7e1220779ebe0af94d9894a330`.
+
+Previously deployed 502-bit active-manager proof SHA-256 (extra target zero; rolled back):
+`5262387a228cf793c17aed6b1d2c54b4d3dcd618636bb02bad5db27ca9163d5b`.
+
+Installed final 501-bit active-manager proof SHA-256 (runtime test pending):
+`28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`.
 
 After manual deployment, inspect:
 
