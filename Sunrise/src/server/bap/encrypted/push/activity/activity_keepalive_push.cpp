@@ -5,7 +5,6 @@
 #include <array>
 #include <cstdio>
 
-#include "../../../../../client/hooks/network/sobject_apply_probe.h"
 #include "../../../../../core/logging/log.h"
 #include "../../../../../state/activity/definition.h"
 #include "../../../../../state/activity/membership/activity_membership_query.h"
@@ -109,16 +108,13 @@ bool consume_activity_keepalive(Session& session,
         group_settled(session, advertisedGroup) && session.activitySettledRegion == effectiveRegion;
     const std::uint64_t advertisedHost =
         server::gameplay::group::held_host_session(advertisedGroup);
-    // View bind only proves replication connectivity. The client has not finished the citizen
-    // handoff until native PUBLIC CURRENT selects the new simulation manager. Retiring the
-    // descriptor before then strands the target role, leaves later sessions absent, and prevents
-    // the new region's spatial cells from becoming active.
+    // The descriptor must be retired before the client can promote PUBLIC TARGET to CURRENT. The
+    // callers below separately require advertisedGroupPublished for this exact visit, preventing a
+    // reused group's historical view/host readiness from retiring a descriptor before publication.
     const bool retirementReady =
         advertisedGroup != 0 && advertisedHost != 0
         && server::gameplay::group::view_accepted(advertisedGroup)
-        && server::gameplay::group::activity_host_published(advertisedGroup)
-        && client::hooks::network::sobject_apply_probe::current_region_manager_active(
-            advertisedHost);
+        && server::gameplay::group::activity_host_published(advertisedGroup);
     const bool regionPublicationDue =
         !session.activityJoinedForeignSession && reportedRegion >= 0
         && (advertisedGroup != 0 ? !advertisedGroupPublished && !advertisedGroupSettled

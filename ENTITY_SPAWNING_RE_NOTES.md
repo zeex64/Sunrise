@@ -2767,6 +2767,12 @@ Visit-aware transaction-retirement Release candidate SHA-256:
 Post-handoff scheduler-validation Release candidate SHA-256:
 `dabac3c2de0de14f7174c3beb32789ef822342f79f29316ce8c5f90f3b3332e8`.
 
+Citizen-join-status diagnostic Release SHA-256:
+`ad324006a54b2f2732e07e44db3819afeb8b27e102bfcc226daf703d59498215`.
+
+Visit-safe descriptor-retirement Release candidate SHA-256:
+`a59f8c047eda82adaab6f7e82a95c3ecd533cdeb424ee013d302a94592b1acc0`.
+
 The `54c55d9b...` run separated replication ownership from native world residency. Namespace 2,
 view 1, region 24, bubble 3, and cell 11 all matched; the record decoded, promoted, and was serviced
 by manager 2. Nevertheless `FUN_14170B660` returned every frame without adding a batch or calling
@@ -2819,6 +2825,25 @@ stored separately. The next atomic create is permitted only while token, current
 signature, logical key/tag order, selected view, and client capture remain identical. The same
 failed layout is never retried; layout changes consume a bounded new validation attempt.
 
+Ghidra resolves the asynchronous citizen-join query to `FUN_1417593A0(kind, handle)`. It has one
+code caller, `FUN_140E1E040`, and the world controller advances only through its returned state.
+The deployed diagnostic showed the successful initial region-408 join and the stuck region-24 join
+both move through `1 -> 2 -> 3 -> 0`. Region 24 then had session lifecycle 4, nonzero readiness,
+selected peer 1, and selected peer state 10. `FUN_14177A240(session)` is simply `session + 0x860`,
+confirming the existing selected-peer offsets are coherent. The missing promotion was therefore not
+an async join or peer-readiness failure.
+
+At the stuck point, the root keepalive reported region 24 published for the current visit with the
+matching group admitted, activity host published, and replication view bound. Both server
+retirement paths nevertheless required that host to already be native `PUBLIC CURRENT`. This is a
+cycle on non-initial handoffs: the client keeps the joined region as `PUBLIC TARGET` until the
+citizen descriptor is retired, while Sunrise waits for `PUBLIC CURRENT` before retiring it. The
+replacement gate retains the visit-generation protection from `154439a9`: descriptor-free
+membership now requires `activityPublishedRegion == region`, the matching group in the published
+history, an accepted view, and a published activity host. It no longer requires native current.
+Thus a reused group's historical view/host state cannot retire before this visit publishes its
+descriptor, but a fully prepared target can proceed to native promotion.
+
 After manual deployment, inspect:
 
 ```text
@@ -2862,4 +2887,5 @@ scheduler-post-handoff-probe
 scheduler-handler-trace
 activity-host-decode
 citizen-acceptance
+citizen-join-status
 ```

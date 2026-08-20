@@ -633,6 +633,19 @@ Once the director evaluates an encounter and creates native squad/member objects
   view, and requires a direct ACK. Only the identical still-current layout may then carry one
   atomic create. A failed decoder, changed token/signature, or missing ACK cannot emit an entity or
   repeat the same malformed layout.
+- The deployed citizen-join-status diagnostic has SHA-256
+  `ad324006a54b2f2732e07e44db3819afeb8b27e102bfcc226daf703d59498215`. Ghidra proves its hooked
+  async query has one code caller: the world-controller citizen-join state machine. Both the
+  successful initial region-408 join and the stuck region-24 handoff followed the normal
+  `1 -> 2 -> 3 -> 0` status sequence. Region 24 also reached lifecycle 4, ready count 10, selected
+  peer 1, and peer state 10, clearing the native join gates themselves.
+- The log then exposed a server-side cycle: the region-24 descriptor was published for this visit,
+  its group joined, its activity host was published, and its view bound, but descriptor retirement
+  waited for native `PUBLIC CURRENT`. The client kept the region as `PUBLIC TARGET` while that
+  descriptor remained. The visit-safe retirement candidate has SHA-256
+  `a59f8c047eda82adaab6f7e82a95c3ecd533cdeb424ee013d302a94592b1acc0`. It retires only after this
+  visit's descriptor publication plus accepted view and published activity host; historical
+  readiness from a reused group cannot satisfy the visit marker.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`
