@@ -64,6 +64,8 @@ enum class HookSlot : std::size_t {
     citizenSessionReady,
     citizenJoinStatus,
     zLegState,
+    schedulerZeroFinalizer,
+    schedulerEntityFinalizer,
     count,
 };
 

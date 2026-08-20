@@ -11,6 +11,7 @@
 #include "../../../core/logging/log.h"
 #include "coordinator/network_call_coordinator.h"
 #include "platform.h"
+#include "scheduler_output_probe.h"
 
 namespace sunrise::client::hooks::network::scheduler_signature_probe {
 namespace {
@@ -87,6 +88,8 @@ __declspec(noinline) std::uint8_t __fastcall encode(std::uint32_t schema,
             capture.value = value;
             capture.bitCount = static_cast<std::uint16_t>(delta);
             capture.present = true;
+
+            scheduler_output_probe::commit_signature(capture.bitCount, capture.value);
 
             AcquireSRWLockExclusive(&g_captureLock);
             const bool changed = g_capture.value != capture.value

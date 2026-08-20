@@ -759,6 +759,21 @@ Once the director evaluates an encounter and creates native squad/member objects
   Vandal definition `0x80C187BD` appears as a literal in any bundled binary body. The captures are
   useful timing/lifecycle evidence, but cannot by themselves supply a spawn record; the actionable
   plaintext boundary remains the in-process scheduler/entity hooks.
+- Ghidra now provides the missing outbound scheduler split without instrumenting the arbitrary
+  priority-ordered candidate writers. `FUN_14171F020` is the shared event/mask/fixed finalizer and
+  appends a literal zero; `FUN_14171EFE0` is the entity finalizer and appends a literal one. The
+  native scheduler calls them deterministically as event -> mask -> entity -> fixed for each view,
+  then encodes signature schema `0x80806AEA` on the same thread. The new passive probe snapshots
+  each finalized writer, commits only when a 202/274/346-bit signature proves one/two/three complete
+  views, and emits one deduplicated `scheduler-outbound-shape` summary. It changes no packet,
+  scheduler, view, entity, or transition state and is capped at 32 unique shapes per process.
+- Release SHA-256 for the outbound lane-split test is
+  `4dd1685f070b1d46d15b41b37b72fd05a92f1e44734a87b028c286e342349870`. On the next traversal,
+  `predicted_bits` must equal the corresponding server `scheduler-body bits`; the per-view
+  `entity=` width will then prove whether the 1114/1124/1178-bit retail-like bodies contain entity
+  lane data or only event/mask/fixed topology. A nonzero entity lane alone is not yet an enemy:
+  genuine kind-0 creation still requires a matching native `sobject-create`/`sobject-update` or
+  decoded entity record.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

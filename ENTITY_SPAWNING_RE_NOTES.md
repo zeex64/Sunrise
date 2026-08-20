@@ -3072,6 +3072,35 @@ ephemeral UDP cipher state, these captures cannot yield an exact enemy wire reco
 in-process plaintext scheduler and entity-codec boundaries; use the retail captures for connection
 lifetimes, traffic timing, and later ciphertext validation.
 
+### Outbound scheduler finalizer boundary
+
+The four candidate encoders at `0x14171F650`, `0x14171F050`, `0x14171F200`, and `0x14171F7F0`
+are not reliable lane boundaries. `FUN_1417B0D70` invokes them through vtable `+0x18` from one
+globally prioritized candidate list, so their call order can repeat lanes and interleave views.
+They are useful later for individual record semantics, but a strict four-call epoch around them
+would reject normal traffic.
+
+The deterministic boundary is the later vtable `+0x48` finalizer loop:
+
+- `0x14171F020`: shared event/mask/fixed finalizer, ABI
+  `void __fastcall(void* lane, int schedulerArgument, NativeWriter* writer)`, appends literal zero;
+- `0x14171EFE0`: entity finalizer with the same ABI, appends literal one;
+- order is view-major `event, mask, entity, fixed`, with writer objects separated by `0xD8`;
+- the signature encoder runs afterward on the same thread, before those writers are copied into the
+  outer packet writer.
+
+The passive probe snapshots `NativeWriter.totalBits` before and after each finalizer, requires the
+terminal-bit delta to equal one, and retains only copied scalar fields. It never dereferences the
+scheduler-stack writer after the detour returns. Schema widths derive registered views exactly as
+`(signatureBits - 130) / 72`, accepting 202, 274, and 346 bits for one through three views. A commit
+requires exactly `views * 4` ordered finalizers and a same-thread signature within 500 ms. The
+reported total is `1 update gate + signature bits + sum(finalized lane bits)`, which should equal
+the server's captured `scheduler-body bits` at the matching timestamp.
+
+Logging is one compact, deduplicated `scheduler-outbound-shape` line per unique signature/width
+shape, hard-capped at 32 per process. No hot candidate call logs are emitted. Release SHA-256:
+`4dd1685f070b1d46d15b41b37b72fd05a92f1e44734a87b028c286e342349870`.
+
 After manual deployment, inspect:
 
 ```text
@@ -3110,6 +3139,7 @@ entity-view
 scheduler-body
 scheduler-signature
 scheduler-native-signature
+scheduler-outbound-shape
 scheduler-two-view-probe
 scheduler-post-handoff-probe
 scheduler-handler-trace

@@ -24,6 +24,8 @@ struct Targets {
     std::byte* viewReadinessScan{};
     std::byte* viewSlotPump{};
     std::byte* schedulerSignatureEncoder{};
+    std::byte* schedulerZeroFinalizer{};
+    std::byte* schedulerEntityFinalizer{};
     std::byte* sobjectCreateEncoder{};
     std::byte* sobjectUpdateEncoder{};
     std::byte* sobjectNativeRegistration{};

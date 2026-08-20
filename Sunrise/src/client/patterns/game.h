@@ -64,6 +64,8 @@ enum class Id : std::size_t {
     citizenSessionReady,
     citizenJoinStatus,
     zLegState,
+    schedulerZeroFinalizer,
+    schedulerEntityFinalizer,
     contentIdTokenLoad,
     queuezObjectResolver,
     queuezFamily5Subscribe,

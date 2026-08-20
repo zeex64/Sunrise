@@ -60,6 +60,8 @@ inline constexpr std::array kGameSlots{
     HookSlot::citizenSessionReady,
     HookSlot::citizenJoinStatus,
     HookSlot::zLegState,
+    HookSlot::schedulerZeroFinalizer,
+    HookSlot::schedulerEntityFinalizer,
 };
 
 /** Steam networking hooks, found after SteamAPI_Init. */

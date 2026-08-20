@@ -459,6 +459,24 @@ constexpr std::string_view kZLegStateText =
 /** Compiled pattern bytes of the normal-z-leg state publisher signature above. */
 constexpr auto kZLegState = signature<signature_length(kZLegStateText)>(kZLegStateText);
 
+// Matches the shared scheduler finalizer used by event, mask and fixed lanes. It appends their
+// literal zero terminal bit to the writer received in R8.
+constexpr std::string_view kSchedulerZeroFinalizerText =
+    "41 8B 40 30 4D 8B C8 83 F8 40 73 0F 41 FF 40 24 FF C0 49 D1 60 28 "
+    "41 89 40 30 C3";
+/** Compiled pattern bytes of the zero-bit scheduler finalizer signature above. */
+constexpr auto kSchedulerZeroFinalizer =
+    signature<signature_length(kSchedulerZeroFinalizerText)>(kSchedulerZeroFinalizerText);
+
+// Matches the entity scheduler finalizer. Its direct and slow paths append the entity lane's
+// literal one terminal bit to the writer received in R8.
+constexpr std::string_view kSchedulerEntityFinalizerText =
+    "41 8B 40 30 4D 8B C8 83 F8 40 73 1A 41 FF 40 24 FF C0 41 89 40 30 "
+    "49 8B 40 28 48 03 C0 48 83 C8 01 49 89 40 28 C3";
+/** Compiled pattern bytes of the entity scheduler finalizer signature above. */
+constexpr auto kSchedulerEntityFinalizer =
+    signature<signature_length(kSchedulerEntityFinalizerText)>(kSchedulerEntityFinalizerText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -554,6 +572,8 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"citizen_session_ready", kCitizenSessionReady},
     patterns::Pattern{"citizen_join_status", kCitizenJoinStatus},
     patterns::Pattern{"z_leg_state", kZLegState},
+    patterns::Pattern{"scheduler_zero_finalizer", kSchedulerZeroFinalizer},
+    patterns::Pattern{"scheduler_entity_finalizer", kSchedulerEntityFinalizer},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},
