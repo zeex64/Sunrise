@@ -410,6 +410,14 @@ constexpr std::string_view kSobjectBackendBusyText = "83 B9 E4 60 05 00 00 0F 9F
 constexpr auto kSobjectBackendBusy =
     signature<signature_length(kSobjectBackendBusyText)>(kSobjectBackendBusyText);
 
+// Matches the per-row dirty processor called only by the non-busy dirty-service branch. Its fixed
+// save set and 0x170-byte frame are unique before any position-dependent object-table load.
+constexpr std::string_view kSobjectDirtyRowText =
+    "4C 8B DC 55 41 56 41 57 48 8D 6C 24 90 48 81 EC 70 01 00 00";
+/** Compiled pattern bytes of the per-row dirty-processor signature above. */
+constexpr auto kSobjectDirtyRow =
+    signature<signature_length(kSobjectDirtyRowText)>(kSobjectDirtyRowText);
+
 // Matches the type-2 replicated-object job builder. The distinct 0x4050-byte frame makes this
 // position-independent entry prefix unique in the current image.
 constexpr std::string_view kSobjectType2JobText = "48 89 5C 24 20 57 B8 50 40 00 00";
@@ -506,6 +514,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"sobject_record_promotion", kSobjectRecordPromotion},
     patterns::Pattern{"sobject_dirty_service", kSobjectDirtyService},
     patterns::Pattern{"sobject_backend_busy", kSobjectBackendBusy},
+    patterns::Pattern{"sobject_dirty_row", kSobjectDirtyRow},
     patterns::Pattern{"sobject_type2_job", kSobjectType2Job},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},

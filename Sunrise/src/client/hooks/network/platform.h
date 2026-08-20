@@ -58,6 +58,7 @@ enum class HookSlot : std::size_t {
     sobjectRecordPromotion,
     sobjectDirtyService,
     sobjectBackendBusy,
+    sobjectDirtyRow,
     sobjectType2Job,
     count,
 };

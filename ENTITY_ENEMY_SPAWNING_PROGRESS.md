@@ -394,11 +394,17 @@ The slot-14 atomic run then completed the current wire milestone:
 - The run was network-clean: the 120-second summary reported 19 valid reads, 785 expected discards,
   and zero corrupt reads. There was no assert hit or hitch; the terminal connection-suicide lines
   belong to the graceful shutdown that ended with `shutdown result=ok`.
-- A passive predicate probe now records the exact `+0x560E4` count and boolean only while this
-  watched dirty-service call is active. It does not write the counter, force a manager, or bypass
-  the suppression branch. The pending Release SHA is
-  `c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`; the game directory still
-  contains `28b14320...`.
+- The deployed passive predicate probe proved every watched namespace-1 service pass used
+  `backend_count=0` and `backend_busy=0`. The exact 501-bit transaction completed, the slot-13
+  record promoted with internal flags `0x0023`, and its dirty bit remained set through eight
+  service passes, but `FUN_1417084B0` was never called. This rules out the unfinished public-target
+  transition as the immediate construction blocker and moves the missing boundary inside
+  `FUN_14170B660`, the per-row processor.
+- A new passive row probe records that processor's object flags, cell, defer/retry state, batch
+  changes, caller outputs, and return value for only the watched namespace-1 slot. It does not
+  alter the validated packet or call any game routine. The pending Release SHA is
+  `39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`; the game directory contains
+  the preceding row-probe build `dd9d1150...`.
 - The synthetic entity is scoped to its replication view and map cell; Sunrise does not migrate or
   remove it yet. During an overlapping-bubble transition it may remain briefly and then be culled
   when that view leaves. This candidate is Basin-only (region 24, bubble 3, cell 11), so stay in
@@ -406,16 +412,15 @@ The slot-14 atomic run then completed the current wire milestone:
 
 ## Immediate plan
 
-### 1. Measure the active manager's suppression predicate
+### 1. Classify the retained dirty row
 
-- Deploy SHA `c7eac837...`, repeat the same Town-to-Basin transition, and remain in Basin bubble 3.
-  Require the already-proven 501-bit handler completion and namespace-1 promotion, then inspect the
-  dirty-service return for `backend_seen=1`, the exact `backend_count`, and `backend_busy`.
-- `backend_busy=1` with a positive count proves the unfinished transition is suppressing native
-  construction before row or cell eligibility. Do not bypass it; the next task is completing the
-  normal z-leg/public-target lifecycle so the game legitimately drains the row.
-- `backend_busy=0` would instead require a passive hook at `FUN_14170B660` to classify its row and
-  active-cell predicates. Do not change the Vandal payload, RSAT, scheduler framing, or cell.
+- Deploy SHA `39f8cba8...`, repeat the same Town-to-Basin transition, and remain in Basin bubble 3.
+  Require the already-proven 501-bit handler completion, namespace-1 promotion, and
+  `backend_busy=0`, then inspect `stage=sobject-dirty-row`.
+- The row result now exposes whether cell 11 is rejected, the create bit is deferred, a retry timer
+  is active, create serialization is suppressed by an argument, or the caller is asked to retain
+  the dirty bit for another frame. Do not change the Vandal payload, RSAT, scheduler framing, or
+  cell until this output identifies the failing predicate.
 - A type-2 job result of 4 means serialization failed; 1, 2, or 3 is an allocator/queue refusal;
   result 0 with a non-null job means dispatch should reach `sobject-apply`.
 - Only after `sobject-apply`, `sobject-kind0 result=1`, target native registration, and
@@ -504,8 +509,11 @@ Once the director evaluates an encounter and creates native squad/member objects
   shifted view 1 and again rolled back the transaction.
 - The runtime-proven final 501-bit Release candidate has SHA-256
   `28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`.
-- The pending passive backend-predicate Release candidate has SHA-256
-  `c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae` and is not deployed.
+- The deployed passive backend-predicate Release candidate has SHA-256
+  `c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`. It proved
+  `backend_count=0`, `backend_busy=0`, and a retained dirty row with no type-2 job.
+- The pending passive dirty-row Release candidate has SHA-256
+  `39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140` and is not deployed.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

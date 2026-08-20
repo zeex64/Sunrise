@@ -61,6 +61,8 @@ struct Targets {
     std::byte* sobjectRecordPromotion{};
     std::byte* sobjectDirtyService{};
     std::byte* sobjectBackendBusy{};
+    std::byte* sobjectDirtyRow{};
+    std::byte* sobjectObjectTable{};
     std::byte* sobjectType2Job{};
     std::byte* contentIdToken{};
 };

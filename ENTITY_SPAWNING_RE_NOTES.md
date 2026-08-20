@@ -2489,12 +2489,21 @@ reported `completed` or promoted that target to `PUBLIC CURRENT`; shutdown final
 the 120-second packet summary reported 19 valid reads, 785 expected discards, and zero corrupt
 reads. Terminal connection-suicide lines were teardown, followed by `shutdown result=ok`.
 
-The next diagnostic adds a unique passive hook at `FUN_1416EC0F0` and arms it only inside the
-watched namespace-1 dirty-service wrapper. The dirty-service return now reports the exact context,
-signed `+0x560E4` count, and native boolean. It never mutates the counter or bypasses the branch.
-The pending Release SHA-256 is
-`c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`; the installed game DLL
-remains `28b14320...`.
+The deployed predicate hook at `FUN_1416EC0F0` conclusively returned `backend_count=0` and
+`backend_busy=0` on all eight watched namespace-1 dirty-service calls. The 501-bit transaction
+completed, promotion mapped slot 13 to internal row 13 with flags `0x0023`, and the dirty bit stayed
+set, but `FUN_1417084B0` was never entered. The unfinished z-leg transition therefore is not the
+immediate suppression condition; the row is retained inside `FUN_14170B660` before type-2 job
+construction.
+
+The next diagnostic passively wraps unique entry `0x14170B660`. It derives the global 0x70-byte
+object table from the function's first RIP-relative table load and reports only the exact watched
+namespace/slot mapping. The return log includes object kind/state/cell/handle/entity/parent,
+control and dirty flags, creation pointer, defer timestamp, retry state, batch count, both caller
+outputs, arguments 4/5/9/10, and the native return byte. It does not modify the row, force cell
+residency, or call a game routine. Pending Release SHA-256:
+`39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`; the installed DLL is the
+preceding row-probe build `dd9d1150...`.
 
 This synthetic entity is scoped to the selected replication view and map cell. Sunrise does not
 migrate it to a successor view or publish its removal yet, so an overlapping bubble may retain it
@@ -2552,16 +2561,14 @@ The current checkpoint includes work in:
 
 ## Next investigation
 
-1. Deploy the passive backend-predicate build (`c7eac837...`), repeat the Town-to-Basin transition,
-   and remain in Basin bubble 3. Reconfirm the already-proven ten handler calls and namespace-1
-   promotion, then require dirty-service return fields `backend_seen=1`, `backend_count`, and
-   `backend_busy`.
-2. If the count is positive and busy is true, stop changing replication data. Trace why the normal
-   z-leg/public-target lifecycle never reaches completion and let that lifecycle bring the counter
-   to zero legitimately. Do not force the counter or active manager.
-3. If busy is false, hook `FUN_14170B660` passively and classify the object flags, active-cell bit,
-   retry timestamp, and builder result. A type-2 result 4 indicates serialization failure; 1/2/3
-   indicate queue refusal.
+1. Deploy the passive dirty-row build (`39f8cba8...`), repeat the Town-to-Basin transition, and
+   remain in Basin bubble 3. Reconfirm the proven 501-bit handler completion, namespace-1
+   promotion, and `backend_busy=0`, then require `stage=sobject-dirty-row`.
+2. Use the row's before/after flags, cell, defer/retry state, batch delta, caller output bytes, and
+   return byte to identify the exact predicate retaining it before `FUN_1417084B0`. Do not alter the
+   RSAT, transform, scheduler framing, or cell until this boundary is classified.
+3. If the row reaches the type-2 builder, result 4 indicates serialization failure; 1/2/3 indicate
+   queue refusal; result 0 with a non-null job should proceed to `sobject-apply`.
 4. Require `sobject-kind0 result=1`, target native registration, and
    `sobject-bind-dispatch status=bound` before treating the remaining failure as rendering.
 4. If a correctly owned and bound object remains audible but invisible, capture a real authored
@@ -2625,8 +2632,11 @@ Previously deployed 502-bit active-manager proof SHA-256 (extra target zero; rol
 Runtime-proven final 501-bit active-manager proof SHA-256:
 `28b14320728d4d2cabd0d0ba8384a4847449ea8f50b37b08e2112573b141bf03`.
 
-Pending passive backend-predicate probe SHA-256 (not yet deployed):
+Deployed passive backend-predicate probe SHA-256:
 `c7eac83722020049a6dd9559241127efdc9c99a63d823a4d06ab6c7e7b040dae`.
+
+Pending passive dirty-row probe SHA-256 (not yet deployed):
+`39f8cba810a0f2272c527e44589e0aee9657c753b5e66301dd8b3e6deefbb140`.
 
 After manual deployment, inspect:
 
@@ -2656,6 +2666,7 @@ sobject-update
 sobject-native
 sobject-promote
 sobject-dirty-service
+sobject-dirty-row
 sobject-type2-job
 sobject-bind-dispatch
 entity-create

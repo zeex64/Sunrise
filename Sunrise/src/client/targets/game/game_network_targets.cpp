@@ -28,6 +28,10 @@ constexpr std::size_t kSobjectGlueStrideInstructionEndOffset = 0x6D;
 constexpr std::size_t kSobjectGlueTableBaseDisplacementOffset = 0x72;
 /** The glue dispatcher's table-base load instruction ends here. */
 constexpr std::size_t kSobjectGlueTableBaseInstructionEndOffset = 0x76;
+/** The dirty row processor's first table lea reads the global object-table address here. */
+constexpr std::size_t kSobjectObjectTableDisplacementOffset = 0x5B;
+/** The dirty row processor's first table lea ends after this signed rel32. */
+constexpr std::size_t kSobjectObjectTableInstructionEndOffset = 0x5F;
 
 } // namespace
 
@@ -133,6 +137,13 @@ bool derive(std::span<const patterns::ImageRange> image,
         matches[index(patterns::game::Id::sobjectRecordPromotion)].address;
     resolved.sobjectDirtyService = matches[index(patterns::game::Id::sobjectDirtyService)].address;
     resolved.sobjectBackendBusy = matches[index(patterns::game::Id::sobjectBackendBusy)].address;
+    resolved.sobjectDirtyRow = matches[index(patterns::game::Id::sobjectDirtyRow)].address;
+    if (!relative::resolve(resolved.sobjectDirtyRow,
+                           kSobjectObjectTableDisplacementOffset,
+                           kSobjectObjectTableInstructionEndOffset,
+                           resolved.sobjectObjectTable)) {
+        return false;
+    }
     resolved.sobjectType2Job = matches[index(patterns::game::Id::sobjectType2Job)].address;
     std::byte* const contentIdTokenLoad =
         matches[index(patterns::game::Id::contentIdTokenLoad)].address;

@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "../../../core/logging/log.h"
+#include "../../targets/game.h"
 #include "coordinator/network_call_coordinator.h"
 #include "platform.h"
 #include "sobject_bind_probe.h"
@@ -22,24 +23,37 @@ constexpr std::uint32_t kApplyReportLimit = 32;
 constexpr std::uint32_t kKind0ReportLimit = 16;
 constexpr std::uint32_t kPromotionReportLimit = 16;
 constexpr std::uint32_t kDirtyServiceReportLimit = 8;
+constexpr std::uint32_t kDirtyRowReportLimit = 8;
 constexpr std::uint32_t kType2JobReportLimit = 16;
 constexpr std::size_t kManagerSlotMapOffset = 0x114;
 constexpr std::size_t kManagerSlotMapStride = 6;
 constexpr std::size_t kManagerOccupiedBitsetOffset = 0xC520;
 constexpr std::size_t kManagerDirtyBitsetOffset = 0xCA20;
 constexpr std::int16_t kInternalObjectCapacity = 0x400;
+constexpr std::size_t kInternalObjectStride = 0x70;
 
 using ApplyJob = void(__fastcall*)(std::byte*);
 using Kind0Constructor = bool(__fastcall*)(void*, const std::uint32_t*, std::uint32_t, int);
 using RecordPromotion = void(__fastcall*)(std::byte*, std::byte*);
 using DirtyService = void(__fastcall*)(std::byte*);
 using BackendBusy = bool(__fastcall*)(const std::byte*);
+using DirtyRow = std::uint8_t(__fastcall*)(std::byte*,
+                                           std::uint16_t,
+                                           int*,
+                                           std::uint8_t,
+                                           std::uint8_t,
+                                           std::uint8_t*,
+                                           std::uint8_t*,
+                                           int*,
+                                           std::uint8_t,
+                                           std::uint8_t);
 using Type2Job = int(__fastcall*)(std::byte*, const void*, void**);
 
 std::atomic_uint32_t g_applyReports{};
 std::atomic_uint32_t g_kind0Reports{};
 std::atomic_uint32_t g_promotionReports{};
 std::atomic_uint32_t g_dirtyServiceReports{};
+std::atomic_uint32_t g_dirtyRowReports{};
 std::atomic_uint32_t g_type2JobReports{};
 
 struct JobSnapshot {
@@ -83,6 +97,33 @@ struct BackendBusyTrace {
 
 thread_local BackendBusyTrace g_backendBusyTrace{};
 
+struct DirtyRowSnapshot {
+    const std::byte* manager{};
+    const std::byte* object{};
+    std::int32_t namespaceId{-1};
+    std::uint16_t internalIndex{};
+    std::uint8_t kind{};
+    std::uint8_t state{};
+    std::uint16_t cell{};
+    std::uint32_t handle{};
+    std::uint32_t entity{};
+    std::uint32_t parent{};
+    std::uintptr_t creation{};
+    std::uint8_t controlFlags{};
+    std::uint64_t deferUntil{};
+    std::uint16_t dirtyFlags{};
+    std::uint16_t retryState{};
+    int batchCount{};
+    int countOut{};
+    std::uint8_t stateOut{};
+    std::uint8_t continueOut{};
+    bool batchReadable{};
+    bool countOutReadable{};
+    bool stateOutReadable{};
+    bool continueOutReadable{};
+    bool readable{};
+};
+
 struct Type2JobSnapshot {
     const std::byte* object{};
     const void* masks{};
@@ -95,6 +136,37 @@ struct Type2JobSnapshot {
     bool jobOutReadable{};
     bool readable{};
 };
+
+/** Reads optional row output values without changing caller-owned storage. */
+[[nodiscard]] bool inspect_optional_byte(const std::uint8_t* address,
+                                         std::uint8_t& value) noexcept {
+    value = 0;
+    if (address == nullptr) {
+        return false;
+    }
+    __try {
+        std::memcpy(&value, address, sizeof value);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        value = 0;
+        return false;
+    }
+}
+
+/** Reads an optional integer row output without changing caller-owned storage. */
+[[nodiscard]] bool inspect_optional_int(const int* address, int& value) noexcept {
+    value = 0;
+    if (address == nullptr) {
+        return false;
+    }
+    __try {
+        std::memcpy(&value, address, sizeof value);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        value = 0;
+        return false;
+    }
+}
 
 /** Reads only the fields consumed by the type-2 apply dispatcher. */
 [[nodiscard]] bool inspect_job(const std::byte* job, JobSnapshot& output) noexcept {
@@ -208,6 +280,52 @@ struct Type2JobSnapshot {
     }
 }
 
+/** Reads the watched internal object and the inputs/outputs used by its dirty-row processor. */
+[[nodiscard]] bool inspect_dirty_row(const std::byte* manager,
+                                     std::int32_t namespaceId,
+                                     std::uint16_t internalIndex,
+                                     const int* batch,
+                                     const std::uint8_t* stateOut,
+                                     const std::uint8_t* continueOut,
+                                     const int* countOut,
+                                     DirtyRowSnapshot& output) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    const targets::game::network::Targets& resolved = targets::game::network::get();
+    if (manager == nullptr || namespaceId < 0 || internalIndex >= kInternalObjectCapacity
+        || resolved.sobjectObjectTable == nullptr) {
+        return false;
+    }
+    __try {
+        output.manager = manager;
+        output.namespaceId = namespaceId;
+        output.internalIndex = internalIndex;
+        output.object = resolved.sobjectObjectTable
+                        + static_cast<std::size_t>(internalIndex) * kInternalObjectStride;
+        std::memcpy(&output.kind, output.object, sizeof output.kind);
+        std::memcpy(&output.state, output.object + 1, sizeof output.state);
+        std::memcpy(&output.cell, output.object + 2, sizeof output.cell);
+        std::memcpy(&output.handle, output.object + 4, sizeof output.handle);
+        std::memcpy(&output.entity, output.object + 8, sizeof output.entity);
+        std::memcpy(&output.parent, output.object + 0x0C, sizeof output.parent);
+        std::memcpy(&output.creation, output.object + 0x30, sizeof output.creation);
+        std::memcpy(&output.controlFlags, output.object + 0x50, sizeof output.controlFlags);
+        std::memcpy(&output.deferUntil, output.object + 0x58, sizeof output.deferUntil);
+        std::memcpy(&output.dirtyFlags, output.object + 0x68, sizeof output.dirtyFlags);
+        std::memcpy(&output.retryState, output.object + 0x6A, sizeof output.retryState);
+        output.readable = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        output = {};
+        output.namespaceId = -1;
+        return false;
+    }
+    output.batchReadable = inspect_optional_int(batch, output.batchCount);
+    output.countOutReadable = inspect_optional_int(countOut, output.countOut);
+    output.stateOutReadable = inspect_optional_byte(stateOut, output.stateOut);
+    output.continueOutReadable = inspect_optional_byte(continueOut, output.continueOut);
+    return true;
+}
+
 /** Reads the stable replicated-object header and job-out pointer without dereferencing the job. */
 [[nodiscard]] bool inspect_type2_job(const std::byte* object,
                                      const void* masks,
@@ -311,6 +429,77 @@ void report_dirty_service(const char* phase,
                       static_cast<const void*>(busy.context),
                       busy.readable ? busy.count : -1,
                       busy.seen && busy.result ? 1U : 0U);
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
+/** Reports why one watched dirty row was retained before reaching the type-2 builder. */
+void report_dirty_row(std::uint32_t occurrence,
+                      const DirtyRowSnapshot& before,
+                      const DirtyRowSnapshot& after,
+                      std::uint8_t argumentState,
+                      std::uint8_t reservedArgument,
+                      std::uint8_t suppressCreate,
+                      std::uint8_t finalPass,
+                      std::uint8_t result) noexcept {
+    std::array<char, 1024> line{};
+    const int written = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=gameplay stage=sobject-dirty-row phase=return occurrence=%u "
+        "manager=%p namespace=%d internal=%u object=%p entity=0x%08X slot=%u "
+        "kind=%u state=%u cell=0x%04X handle=0x%08X parent=0x%08X creation=%p "
+        "control=0x%02X->0x%02X dirty_flags=0x%04X->0x%04X "
+        "defer=%llu->%llu retry=0x%04X->0x%04X batch=%d->%d batch_readable=%u->%u "
+        "state_out=%u->%u state_readable=%u->%u continue_out=%u->%u "
+        "continue_readable=%u->%u count_out=%d->%d count_readable=%u->%u "
+        "arg_state=%u reserved=%u suppress_create=%u final=%u result=%u after_readable=%u",
+        occurrence,
+        static_cast<const void*>(before.manager),
+        before.namespaceId,
+        static_cast<unsigned>(before.internalIndex),
+        static_cast<const void*>(before.object),
+        before.entity,
+        before.entity & kEntitySlotMask,
+        static_cast<unsigned>(before.kind),
+        static_cast<unsigned>(before.state),
+        static_cast<unsigned>(before.cell),
+        before.handle,
+        before.parent,
+        reinterpret_cast<void*>(before.creation),
+        static_cast<unsigned>(before.controlFlags),
+        static_cast<unsigned>(after.controlFlags),
+        static_cast<unsigned>(before.dirtyFlags),
+        static_cast<unsigned>(after.dirtyFlags),
+        static_cast<unsigned long long>(before.deferUntil),
+        static_cast<unsigned long long>(after.deferUntil),
+        static_cast<unsigned>(before.retryState),
+        static_cast<unsigned>(after.retryState),
+        before.batchCount,
+        after.batchCount,
+        before.batchReadable ? 1U : 0U,
+        after.batchReadable ? 1U : 0U,
+        static_cast<unsigned>(before.stateOut),
+        static_cast<unsigned>(after.stateOut),
+        before.stateOutReadable ? 1U : 0U,
+        after.stateOutReadable ? 1U : 0U,
+        static_cast<unsigned>(before.continueOut),
+        static_cast<unsigned>(after.continueOut),
+        before.continueOutReadable ? 1U : 0U,
+        after.continueOutReadable ? 1U : 0U,
+        before.countOut,
+        after.countOut,
+        before.countOutReadable ? 1U : 0U,
+        after.countOutReadable ? 1U : 0U,
+        static_cast<unsigned>(argumentState),
+        static_cast<unsigned>(reservedArgument),
+        static_cast<unsigned>(suppressCreate),
+        static_cast<unsigned>(finalPass),
+        static_cast<unsigned>(result),
+        after.readable ? 1U : 0U);
     if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::info,
@@ -550,6 +739,67 @@ __declspec(noinline) bool __fastcall backend_busy_body(const std::byte* context)
     return result;
 }
 
+/** Preserves one dirty-row pass and reports its exact object state and caller outputs. */
+__declspec(noinline) std::uint8_t __fastcall dirty_row_body(std::byte* manager,
+                                                            std::uint16_t internalIndex,
+                                                            int* batch,
+                                                            std::uint8_t argumentState,
+                                                            std::uint8_t reservedArgument,
+                                                            std::uint8_t* stateOut,
+                                                            std::uint8_t* continueOut,
+                                                            int* countOut,
+                                                            std::uint8_t suppressCreate,
+                                                            std::uint8_t finalPass) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(lease, HookSlot::sobjectDirtyRow, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<DirtyRow>(lease.original);
+    std::uint8_t result = argumentState;
+    __try {
+        std::int32_t namespaceId = -1;
+        std::uint32_t entity = 0;
+        DirtyServiceSnapshot mapping{};
+        DirtyRowSnapshot before{};
+        const bool watched =
+            lease.accepting && inspect_manager_namespace(manager, namespaceId)
+            && sobject_bind_probe::first_watched(namespaceId, entity)
+            && inspect_dirty_service(manager, namespaceId, entity, mapping) && mapping.mapped
+            && static_cast<std::uint16_t>(mapping.internalIndex) == internalIndex
+            && inspect_dirty_row(
+                manager, namespaceId, internalIndex, batch, stateOut, continueOut, countOut, before)
+            && before.entity == entity && sobject_bind_probe::watched(namespaceId, before.entity);
+        const std::uint32_t occurrence =
+            watched ? g_dirtyRowReports.fetch_add(1, std::memory_order_relaxed) + 1 : 0;
+        if (call != nullptr) {
+            result = call(manager,
+                          internalIndex,
+                          batch,
+                          argumentState,
+                          reservedArgument,
+                          stateOut,
+                          continueOut,
+                          countOut,
+                          suppressCreate,
+                          finalPass);
+        }
+        if (occurrence != 0 && occurrence <= kDirtyRowReportLimit) {
+            DirtyRowSnapshot after{};
+            (void)inspect_dirty_row(
+                manager, namespaceId, internalIndex, batch, stateOut, continueOut, countOut, after);
+            report_dirty_row(occurrence,
+                             before,
+                             after,
+                             argumentState,
+                             reservedArgument,
+                             suppressCreate,
+                             finalPass,
+                             result);
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+    return result;
+}
+
 /** Preserves type-2 serialization/allocation and never dereferences the returned job. */
 __declspec(noinline) int __fastcall
 type2_job_body(std::byte* object, const void* masks, void** jobOut) noexcept {
@@ -612,6 +862,10 @@ void* backend_busy_entry_point() noexcept {
     return reinterpret_cast<void*>(&backend_busy_body);
 }
 
+void* dirty_row_entry_point() noexcept {
+    return reinterpret_cast<void*>(&dirty_row_body);
+}
+
 void* type2_job_entry_point() noexcept {
     return reinterpret_cast<void*>(&type2_job_body);
 }
@@ -621,6 +875,7 @@ void reset() noexcept {
     g_kind0Reports.store(0, std::memory_order_relaxed);
     g_promotionReports.store(0, std::memory_order_relaxed);
     g_dirtyServiceReports.store(0, std::memory_order_relaxed);
+    g_dirtyRowReports.store(0, std::memory_order_relaxed);
     g_type2JobReports.store(0, std::memory_order_relaxed);
 }
 
