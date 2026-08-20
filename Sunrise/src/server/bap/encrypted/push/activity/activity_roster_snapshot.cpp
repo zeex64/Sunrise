@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <string_view>
 
+#include "../../../../../middleware/content/packages/tables/scenario_reader.h"
 #include "../../../../../state/account/account_state.h"
 #include "../../../../../state/activity/defaults/activity_defaults_snapshot.h"
 #include "../../../../../state/activity/destination/activity_destination_snapshot.h"
@@ -17,6 +18,7 @@ namespace sunrise::server::bap::encrypted::push::activity {
 namespace {
 
 namespace layouts = state::build_data::scenarios;
+namespace tables = middleware::content::packages::tables;
 
 /**
  * The type-17 lifetime state the roster reports.
@@ -130,6 +132,29 @@ next_state_sequence(Session& session, std::uint32_t folded, bool burst) noexcept
 
 } // namespace
 
+/** Resolves one region's authored PUB/PRV classification in a joined session's destination. */
+bool region_is_public(std::uint64_t sessionId, std::int32_t region) noexcept {
+    if (region < 0) {
+        return true;
+    }
+    state::activity::defaults::ActivityDefaults defaults{};
+    state::activity::destination::DestinationSelection selection{};
+    state::activity::defaults::snapshot(defaults);
+    if (!state::activity::destination::snapshot(sessionId, selection)) {
+        selection = defaults.defaultDestination.selection;
+    }
+    const std::string_view name(reinterpret_cast<const char*>(selection.packageName.data()),
+                                selection.packageNameLength);
+    layouts::Definition layout{};
+    if (!state::build_data::find_scenario_layout(name, layout)) {
+        // Preserve the established public path when content has not published a classification.
+        return true;
+    }
+    const std::size_t bubble = static_cast<std::uint32_t>(region) / tables::kSliceSetIndexFactor;
+    return bubble >= layout.bubbleCount || bubble >= layout.bubblePublicFlags.size()
+           || layout.bubblePublicFlags[bubble] != 0;
+}
+
 /** Resolves the one region a session publishes. */
 EffectiveRegion effective_region(std::uint64_t sessionId) noexcept {
     state::activity::defaults::ActivityDefaults defaults{};
@@ -151,6 +176,11 @@ EffectiveRegion effective_region(std::uint64_t sessionId) noexcept {
     const std::int32_t reported = state::activity::membership::reported_region(sessionId);
     region.reported = reported >= 0;
     region.index = region.reported ? reported : static_cast<std::int32_t>(region.arrival);
+    const std::size_t bubble =
+        region.index < 0 ? layout.bubblePublicFlags.size()
+                         : static_cast<std::uint32_t>(region.index) / tables::kSliceSetIndexFactor;
+    region.publicBubble = bubble >= layout.bubbleCount || bubble >= layout.bubblePublicFlags.size()
+                          || layout.bubblePublicFlags[bubble] != 0;
     return region;
 }
 
@@ -165,6 +195,7 @@ EffectiveRegion planned_region(const state::activity::membership::PendingMutatio
                > state::activity::membership::kAbsentRegionIndex) {
         region.index = mutation.authoritativeInput.region.index;
         region.reported = true;
+        region.publicBubble = region_is_public(sessionId, region.index);
     }
     return region;
 }

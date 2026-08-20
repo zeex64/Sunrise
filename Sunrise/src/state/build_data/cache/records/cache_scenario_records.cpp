@@ -42,6 +42,9 @@ bool encode(const scenarios::Definition& value, ScenarioRecord& record) noexcept
     record.spawnStemLength = value.spawnStemLength;
     std::copy(value.spawnStem.begin(), value.spawnStem.end(), record.spawnStem.begin());
     std::copy(value.bubbleStates.begin(), value.bubbleStates.end(), record.bubbleStates.begin());
+    std::copy(value.bubblePublicFlags.begin(),
+              value.bubblePublicFlags.end(),
+              record.bubblePublicFlags.begin());
     std::copy(value.bubbleHashes.begin(), value.bubbleHashes.end(), record.bubbleHashes.begin());
     std::copy(value.bubbleStateCounts.begin(),
               value.bubbleStateCounts.end(),
@@ -80,6 +83,9 @@ bool decode(const ScenarioRecord& record, scenarios::Definition& value) noexcept
     value.spawnStemLength = record.spawnStemLength;
     std::copy(record.spawnStem.begin(), record.spawnStem.end(), value.spawnStem.begin());
     std::copy(record.bubbleStates.begin(), record.bubbleStates.end(), value.bubbleStates.begin());
+    std::copy(record.bubblePublicFlags.begin(),
+              record.bubblePublicFlags.end(),
+              value.bubblePublicFlags.begin());
     std::copy(record.bubbleHashes.begin(), record.bubbleHashes.end(), value.bubbleHashes.begin());
     std::copy(record.bubbleStateCounts.begin(),
               record.bubbleStateCounts.end(),

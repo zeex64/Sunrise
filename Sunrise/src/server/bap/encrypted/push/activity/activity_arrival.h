@@ -35,7 +35,12 @@ struct EffectiveRegion final {
     std::uint16_t arrival{};
     /** True when the client reported the region, false when the arrival stood in. */
     bool reported{};
+    /** Authored PUB/PRV classification of the bubble that owns this region. */
+    bool publicBubble{true};
 };
+
+/** Resolves one region's authored PUB/PRV classification in a joined session's destination. */
+[[nodiscard]] bool region_is_public(std::uint64_t sessionId, std::int32_t region) noexcept;
 
 /**
  * Resolves the one region a session publishes.

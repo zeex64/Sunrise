@@ -43,6 +43,8 @@ struct MembershipPublication final {
     bool root{};
     bool includesCitizenAdvertisement{};
     bool settlesCitizenAdvertisement{};
+    bool publicRegion{true};
+    bool recordsPrivateRegion{};
 };
 
 /** Resolves whether this transaction still owes a citizen advertisement for its planned region. */
@@ -54,10 +56,18 @@ membership_publication(const Session& session,
     if (!publication.root || !activity.membershipMutation.hasSnapshot) {
         return publication;
     }
-    publication.region =
-        push::activity::planned_region(activity.membershipMutation, activity.sessionId).index;
+    const push::activity::EffectiveRegion effective =
+        push::activity::planned_region(activity.membershipMutation, activity.sessionId);
+    publication.region = effective.index;
+    publication.publicRegion = effective.publicBubble;
     publication.transitionToken = activity.membershipMutation.snapshot.transitionToken;
     if (publication.region < 0) {
+        return publication;
+    }
+    if (!publication.publicRegion) {
+        publication.recordsPrivateRegion =
+            session.activityPublishedRegion != publication.region
+            || session.activityPublishedTransitionToken != publication.transitionToken;
         return publication;
     }
     publication.groupSession =
@@ -127,6 +137,9 @@ membership_publication(const Session& session,
     } else if (staged && publication.settlesCitizenAdvertisement) {
         push::activity::stage_settled_region(
             session, publication.region, publication.groupSession, publication.transitionToken);
+    } else if (staged && publication.recordsPrivateRegion) {
+        push::activity::stage_published_region(
+            session, publication.region, 0, publication.transitionToken);
     }
     return staged;
 }

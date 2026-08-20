@@ -94,14 +94,19 @@ bool consume_activity_keepalive(Session& session,
         session.activitySessionId == 0
             ? -1
             : state::activity::membership::reported_region(session.activitySessionId);
-    const std::int32_t effectiveRegion =
-        session.activitySessionId == 0 ? -1 : effective_region(session.activitySessionId).index;
+    EffectiveRegion effective{};
+    effective.index = -1;
+    if (session.activitySessionId != 0) {
+        effective = effective_region(session.activitySessionId);
+    }
+    const std::int32_t effectiveRegion = effective.index;
+    const bool publicRegion = effective.publicBubble;
     const std::uint8_t visitToken =
         session.activitySessionId == 0
             ? 0
             : state::activity::membership::reported_transition_token(session.activitySessionId);
     const std::uint64_t advertisedGroup =
-        session.activityJoinedForeignSession
+        session.activityJoinedForeignSession || !publicRegion
             ? 0
             : server::gameplay::group::advertised_group_session(effectiveRegion);
     // Published/settled group arrays are durable history, while a patrol can return to the same
@@ -125,11 +130,17 @@ bool consume_activity_keepalive(Session& session,
     // A descriptor can race a preempted PUBLIC TARGET's final leave on another transport. The
     // client then applies the membership revision but cannot claim the new target. Retry at a new
     // revision only when no gameplay join followed the exact descriptor publication.
+    const std::uint64_t admissionGeneration =
+        server::gameplay::group::session_admission_generation(advertisedGroup);
+    const bool admissionObserved =
+        advertisedGroup != 0 && session.activityCitizenRetryGroupSession == advertisedGroup
+        && session.activityPublishedTransitionToken == visitToken
+        && admissionGeneration != session.activityCitizenAdmissionGeneration;
     const bool citizenRetryDue = advertisedGroupPublished && !advertisedGroupSettled
                                  && advertisedGroup != 0
                                  && session.activityCitizenRetryGroupSession == advertisedGroup
                                  && session.activityCitizenPublishAttempts < kCitizenRetryLimit
-                                 && now >= session.activityCitizenRetryDueTick
+                                 && now >= session.activityCitizenRetryDueTick && !admissionObserved
                                  && !server::gameplay::group::session_admitted(advertisedGroup);
     const bool regionPublicationDue =
         !session.activityJoinedForeignSession && reportedRegion >= 0
@@ -180,8 +191,9 @@ bool consume_activity_keepalive(Session& session,
     // The client applies one membership update per revision and drops repeats. Either a new region
     // or a newly admitted gameplay host therefore needs a fresh root-membership revision.
     const bool regionRepublishReady = regionPublicationDue
-                                      && server::gameplay::advertisement_state(effectiveRegion)
-                                             == server::gameplay::AdvertisementState::ready;
+                                      && (!publicRegion
+                                          || server::gameplay::advertisement_state(effectiveRegion)
+                                                 == server::gameplay::AdvertisementState::ready);
     const bool membershipRepublished =
         (regionRepublishReady || groupReflectionChanged)
         && state::activity::membership::acknowledged(session.activitySessionId)
@@ -223,7 +235,7 @@ bool consume_activity_keepalive(Session& session,
     // Re-sending a stable snapshot instead would make it rebuild every player snapshot.
     const bool rootMembership = !session.activityJoinedForeignSession;
     const bool citizenAdvertisementUnsettled =
-        rootMembership && effectiveRegion >= 0 && !advertisedGroupSettled;
+        rootMembership && publicRegion && effectiveRegion >= 0 && !advertisedGroupSettled;
     const bool settleCitizenAdvertisement =
         citizenAdvertisementUnsettled && advertisedGroupPublished && retirementReady;
     const bool includeCitizenAdvertisement =
@@ -261,7 +273,7 @@ bool consume_activity_keepalive(Session& session,
                                                          framedSize);
         // Publishing the descriptor disarms only the urgent group trigger. It remains in later
         // refreshes until view bind and activity-host promotion permit a descriptor-free body.
-        if (sent && includeCitizenAdvertisement) {
+        if (sent && (includeCitizenAdvertisement || (!publicRegion && regionPublicationDue))) {
             stage_published_region(session, effectiveRegion, advertisedGroup, visitToken);
         }
         if (sent && settleCitizenAdvertisement) {
@@ -318,7 +330,8 @@ bool consume_activity_keepalive(Session& session,
                       "ev=activity stage=keepalive result=%s bytes=%zu membership=%u key=0x%llX "
                       "spawn_state=%d teleport_state=%d teleport_slice=%d token=%u revision=%u "
                       "advert=%u citizen=%u settle=%u visit=%u published=%d/%u settled=%d/%u "
-                      "group=0x%llX group_published=%u group_settled=%u ready=%u retry=%u/%u",
+                      "public=%u group=0x%llX group_published=%u group_settled=%u ready=%u "
+                      "admit=%llu/%llu retry=%u/%u",
                       published ? "ok" : "fail",
                       framedSize,
                       hasMembership ? 1U : 0U,
@@ -336,10 +349,13 @@ bool consume_activity_keepalive(Session& session,
                       static_cast<unsigned>(session.activityPublishedTransitionToken),
                       session.activitySettledRegion,
                       static_cast<unsigned>(session.activitySettledTransitionToken),
+                      static_cast<unsigned>(publicRegion),
                       static_cast<unsigned long long>(advertisedGroup),
                       static_cast<unsigned>(advertisedGroupPublished),
                       static_cast<unsigned>(advertisedGroupSettled),
                       static_cast<unsigned>(retirementReady),
+                      static_cast<unsigned long long>(admissionGeneration),
+                      static_cast<unsigned long long>(session.activityCitizenAdmissionGeneration),
                       static_cast<unsigned>(citizenRetryDue),
                       static_cast<unsigned>(session.activityCitizenPublishAttempts));
     if (count > 0) {

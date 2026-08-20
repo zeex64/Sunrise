@@ -28,7 +28,7 @@ inline constexpr std::array<char, 8> kCacheMagic{'S', 'U', 'N', 'R', 'I', 'S', '
  * Current build-data cache format. An older cache is rebuilt rather than read, so a bump needs
  * no other edit. Bump it whenever a domain's stored shape changes.
  */
-inline constexpr std::uint32_t kCacheFormatVersion = 35;
+inline constexpr std::uint32_t kCacheFormatVersion = 36;
 /** Signed -1 on disk means there is no equipment slot. */
 inline constexpr std::int8_t kAbsentEquipmentSlot = -1;
 /** The standard 64-bit FNV-1a offset basis starts the payload checksum. */
@@ -269,6 +269,8 @@ struct ScenarioRecord {
     std::array<std::uint8_t, 3> reserved{};
     std::array<char, scenarios::kSpawnStemCapacity> spawnStem{};
     std::array<std::uint8_t, scenarios::kBubbleCapacity> bubbleStates{};
+    /** One for an authored public bubble and zero for a private bubble. */
+    std::array<std::uint8_t, scenarios::kBubbleCapacity> bubblePublicFlags{};
     /** Each bubble's own name hash, in the same order as the states. */
     std::array<std::uint32_t, scenarios::kBubbleCapacity> bubbleHashes{};
     /** Slice-set states each bubble declares, in the same order as the states. */
@@ -422,7 +424,7 @@ static_assert(sizeof(HashNameRecord)
 static_assert(sizeof(ScenarioRecord)
               == scenarios::kNameCapacity + sizeof(std::uint32_t) + 10 * sizeof(std::uint8_t)
                      + scenarios::kSpawnStemCapacity
-                     + 2 * scenarios::kBubbleCapacity * sizeof(std::uint8_t)
+                     + 3 * scenarios::kBubbleCapacity * sizeof(std::uint8_t)
                      + scenarios::kBubbleCapacity * sizeof(std::uint32_t)
                      + scenarios::kBubbleCapacity * sizeof(std::uint16_t)
                      + (scenarios::kDestinationGroupCapacity

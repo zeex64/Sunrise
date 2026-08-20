@@ -46,6 +46,12 @@ struct HostSessionRow {
 [[nodiscard]] bool holding_region_index(std::uint64_t hostSessionId,
                                         std::int32_t& regionIndex) noexcept;
 
+/** Records one accepted gameplay join for a public group. */
+void note_session_admission(std::uint64_t groupSessionId) noexcept;
+
+/** Returns the durable accepted-join generation of one public group. */
+[[nodiscard]] std::uint64_t session_admission_generation(std::uint64_t groupSessionId) noexcept;
+
 /** Copies every occupied host-session row. @param count Receives the copied row count. */
 void snapshot_host_sessions(std::span<HostSessionRow> output, std::size_t& count) noexcept;
 

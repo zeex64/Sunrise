@@ -705,6 +705,25 @@ Once the director evaluates an encounter and creates native squad/member objects
   rate-limited for logging while every observation still updates the overlay. The misleading
   `Slice set` status label is now `Teleport slice`: Region and Bubble remain the authoritative
   player-reported location, while an unknown teleport slice does not mean the region is unknown.
+- The `8136bd6c...` traversal run confirms that token-keyed visit history fixed the A -> B -> A
+  suppression: returning to Basin produced a fresh region-24 join and region 24 later became native
+  current. It also exposed two narrower lifecycle faults. Region 416 was logged natively as
+  `PRV416`, but Sunrise allocated and repeatedly advertised a public group that the client never
+  joined. Later, an already accepted region-408 visit was advertised again after its temporary
+  admitted row was retired, reopening the same PUBLIC TARGET several times.
+- The supplied retail packet bundle corroborates the distinction. The eight-minute
+  `d2dumpPublic` EDZ capture keeps activity flow 054 alive from `+59.069s` through `+495.310s` and
+  opens eight shorter overlapping activity-host flows while traversing public spaces. The raid
+  capture has one activity-host flow for the whole encounter/wipe. This matches one persistent
+  private/root activity plus transient PUBLIC CURRENT/TARGET hosts, rather than one public host for
+  every authored region.
+- The current candidate now carries the scenario state's authored PUB/PRV bit through build data
+  and cache format 36. A private region publishes the player's new region but carries no citizen
+  descriptor, allocates no public group, and reflects no public host. Public descriptor retry state
+  now snapshots a durable per-group admission generation; once any join is accepted for that visit,
+  releasing the short-lived admitted row cannot reopen it. Unknown content remains on the previous
+  fail-compatible public path. No native controller, role, or active-manager field is written.
+  Release SHA-256: `b83c295cb35d36328299470242b8a5b99b938fe727fe06461823ae0862ef5e57`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

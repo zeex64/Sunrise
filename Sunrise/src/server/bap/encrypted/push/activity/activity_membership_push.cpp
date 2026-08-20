@@ -117,7 +117,8 @@ make_wire_snapshot(std::uint64_t sessionId,
         // named by this region into every root refresh so a descriptor need not be replayed merely
         // to keep its non-local slot current.
         const std::uint64_t hostKey =
-            server::gameplay::group::advertised_group_session(region.index);
+            region.publicBubble ? server::gameplay::group::advertised_group_session(region.index)
+                                : 0;
         if (server::gameplay::group::session_admitted(hostKey)) {
             reflect_host(wire, hostKey);
         }
@@ -209,6 +210,11 @@ void commit_staged_published_region(Session& session) noexcept {
     remember_group(session.activityPublishedGroupSessions,
                    session.activityPublishedGroupSessionStaged);
     session.activityCitizenRetryGroupSession = session.activityPublishedGroupSessionStaged;
+    if (!sameVisit) {
+        session.activityCitizenAdmissionGeneration =
+            server::gameplay::group::session_admission_generation(
+                session.activityPublishedGroupSessionStaged);
+    }
     session.activityCitizenPublishAttempts =
         sameVisit && session.activityCitizenPublishAttempts < UINT8_MAX
             ? static_cast<std::uint8_t>(session.activityCitizenPublishAttempts + 1U)
@@ -256,6 +262,7 @@ void commit_staged_settled_region(Session& session) noexcept {
         session.activityCitizenRetryGroupSession = 0;
         session.activityCitizenRetryDueTick = 0;
         session.activityCitizenPublishAttempts = 0;
+        session.activityCitizenAdmissionGeneration = 0;
     }
     session.activitySettledRegionStaged = 0;
     session.activitySettledGroupSessionStaged = 0;

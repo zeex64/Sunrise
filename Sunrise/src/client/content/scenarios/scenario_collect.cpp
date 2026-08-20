@@ -137,6 +137,8 @@ void add_package(layouts::Definition& definition, std::uint16_t packageId) noexc
     definition.bubbleCount = static_cast<std::uint8_t>(states.count);
     definition.truncated = states.truncated ? 1U : 0U;
     std::copy(states.bytes.begin(), states.bytes.end(), definition.bubbleStates.begin());
+    std::copy(
+        states.publicFlags.begin(), states.publicFlags.end(), definition.bubblePublicFlags.begin());
     std::copy(states.hashes.begin(), states.hashes.end(), definition.bubbleHashes.begin());
     std::copy(
         states.stateCounts.begin(), states.stateCounts.end(), definition.bubbleStateCounts.begin());

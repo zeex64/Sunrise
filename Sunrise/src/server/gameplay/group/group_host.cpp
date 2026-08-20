@@ -934,6 +934,7 @@ bool publish_membership(const state::gameplay::Endpoint& peer,
                         std::uint64_t sessionId) noexcept {
     AcquireSRWLockExclusive(&g_admittedLock);
     Admitted* const record = claim(peer, sessionId);
+    const bool admitted = record != nullptr;
     bool published = false;
     if (record != nullptr) {
         forget_activity_host(sessionId);
@@ -954,6 +955,9 @@ bool publish_membership(const state::gameplay::Endpoint& peer,
         published = publish_snapshot(*record);
     }
     ReleaseSRWLockExclusive(&g_admittedLock);
+    if (admitted) {
+        note_session_admission(sessionId);
+    }
     return published;
 }
 

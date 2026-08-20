@@ -44,10 +44,12 @@ bool bubble_states(std::span<const std::byte> scenario, BubbleStates& output) no
         }
         // A bubble with no readable state array is disabled, the same as a cleared first state.
         std::uint8_t value = kBubbleDisabledByte;
+        std::uint8_t publicFlag = 0;
         SliceState state{};
         std::uint16_t mapIndex = kAbsentMapBubbleIndex;
         if (bubble.stateCount != 0 && slice_state_at(scenario, bubble, 0, state)) {
             value = state.enabled ? kBubbleEnabledByte : kBubbleDisabledByte;
+            publicFlag = state.isPublic ? 1U : 0U;
             // An index no container mask can name is absent, because nothing could match it.
             if (state.mapBubbleIndex < kBubbleIndexCapacity) {
                 mapIndex = static_cast<std::uint16_t>(state.mapBubbleIndex);
@@ -63,6 +65,7 @@ bool bubble_states(std::span<const std::byte> scenario, BubbleStates& output) no
         }
         const std::uint64_t states = (std::min)(bubble.stateCount, kBubbleStateCountCeiling);
         output.bytes[static_cast<std::size_t>(index)] = value;
+        output.publicFlags[static_cast<std::size_t>(index)] = publicFlag;
         output.hashes[static_cast<std::size_t>(index)] = bubble.nameHash;
         output.stateCounts[static_cast<std::size_t>(index)] = static_cast<std::uint8_t>(states);
         output.mapIndices[static_cast<std::size_t>(index)] = mapIndex;

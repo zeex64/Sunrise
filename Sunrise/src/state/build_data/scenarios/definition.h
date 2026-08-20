@@ -93,6 +93,8 @@ struct Definition {
      * scenario blob alone, which is why one tag read per destination builds the whole domain.
      */
     std::array<std::uint8_t, kBubbleCapacity> bubbleStates{};
+    /** One for an authored public bubble and zero for a private bubble. */
+    std::array<std::uint8_t, kBubbleCapacity> bubblePublicFlags{};
     /**
      * Each bubble's own name hash, in the same order as the states.
      * The client names its arrival bubble by hash. This turns that hash into the index whose

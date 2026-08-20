@@ -19,6 +19,8 @@ struct HostSession {
     std::uint64_t lastUse{};
     /** Region the advertisement named, used to select the current group and its spatial cell. */
     std::int32_t regionIndex{};
+    /** Rises for every accepted join and survives release of the temporary admitted row. */
+    std::uint64_t admissionGeneration{};
     bool occupied{};
 };
 
@@ -60,8 +62,12 @@ claim_locked(std::uint64_t groupSessionId, std::int32_t regionIndex, std::uint64
     }
     for (HostSession& entry : g_hostSessions) {
         if (!entry.occupied) {
-            entry = {
-                groupSessionId, state::activity::kAbsentSessionId, ++g_useStamp, regionIndex, true};
+            entry = {groupSessionId,
+                     state::activity::kAbsentSessionId,
+                     ++g_useStamp,
+                     regionIndex,
+                     0,
+                     true};
             return true;
         }
     }
@@ -81,7 +87,7 @@ claim_locked(std::uint64_t groupSessionId, std::int32_t regionIndex, std::uint64
         ++g_evictedCount;
     }
     g_hostSessions[oldest] = {
-        groupSessionId, state::activity::kAbsentSessionId, ++g_useStamp, regionIndex, true};
+        groupSessionId, state::activity::kAbsentSessionId, ++g_useStamp, regionIndex, 0, true};
     return true;
 }
 
@@ -168,6 +174,39 @@ bool holding_region_index(std::uint64_t hostSessionId, std::int32_t& regionIndex
     }
     ReleaseSRWLockShared(&g_hostSessionLock);
     return found;
+}
+
+/** Records one accepted gameplay join for a public group. */
+void note_session_admission(std::uint64_t groupSessionId) noexcept {
+    if (groupSessionId == 0) {
+        return;
+    }
+    AcquireSRWLockExclusive(&g_hostSessionLock);
+    for (HostSession& entry : g_hostSessions) {
+        if (!entry.occupied || entry.groupSessionId != groupSessionId) {
+            continue;
+        }
+        ++entry.admissionGeneration;
+        if (entry.admissionGeneration == 0) {
+            entry.admissionGeneration = 1;
+        }
+        break;
+    }
+    ReleaseSRWLockExclusive(&g_hostSessionLock);
+}
+
+/** Returns the durable accepted-join generation of one public group. */
+std::uint64_t session_admission_generation(std::uint64_t groupSessionId) noexcept {
+    std::uint64_t generation = 0;
+    AcquireSRWLockShared(&g_hostSessionLock);
+    for (const HostSession& entry : g_hostSessions) {
+        if (entry.occupied && entry.groupSessionId == groupSessionId) {
+            generation = entry.admissionGeneration;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_hostSessionLock);
+    return generation;
 }
 
 /** Copies every occupied host-session row. */

@@ -29,6 +29,8 @@ static_assert(kBubbleStateCapacity * kSliceSetIndexFactor == 512);
 /** The per-bubble state array activity msg 1 publishes. */
 struct BubbleStates {
     std::array<std::uint8_t, kBubbleStateCapacity> bytes{};
+    /** One when the bubble's first state marks it public, zero for a private bubble. */
+    std::array<std::uint8_t, kBubbleStateCapacity> publicFlags{};
     /**
      * Each bubble's own name hash, in the same order.
      * The client names its arrival bubble by hash, so this is what turns that hash into the index

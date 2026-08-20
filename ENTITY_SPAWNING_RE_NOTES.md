@@ -2955,6 +2955,49 @@ and Bubble continue to come from the coherent client-reported world snapshot.
 Release SHA-256 for the pending traversal test:
 `8136bd6c5f33aa926bdd608b6673b180f98e3c8e127923759cd09cccb192cfbd`.
 
+### Authored private bubbles and durable public-visit admission
+
+The `8136bd6c...` traversal proves the visit-token repair worked: after walking back, region 24
+received a new descriptor/join for token 4 and later reached native PUBLIC CURRENT. The same run
+then isolated a different classification error. When the client entered region 416, its retail
+world-controller name was `PRV416.4`. Sunrise nevertheless allocated group
+`0xDD3F...`, host `0x9EAA300100200004`, published the citizen descriptor four times, and never
+received a gameplay join. The overlay's absent/unjoined row was therefore accurate; the client did
+not consider this private region a new public-host target.
+
+The authored distinction was already decoded locally. `scenario_reader.cpp` reads the state byte at
+offset 12 as `SliceState::isPublic`; its verified native interpretation is that the first state
+marks the bubble PUB or PRV. `bubble_state_reader` previously discarded that field. The scenario
+definition and cache now retain one `bubblePublicFlags` byte per bubble, and region classification
+uses `region / 8`, the same authored slice-set factor used throughout the destination layout. Cache
+format 36 forces old records without this field to rebuild. A missing layout or out-of-range bubble
+defaults to public, preserving the former behavior instead of silently suppressing a descriptor.
+
+Private-region handling is intentionally narrow. Root membership still publishes the coherent
+client-reported region and roster, but it does not build a citizen advertisement, claim an
+activity-host session, or reflect a public group for that region. The successful private
+publication is remembered by `(region, transitionToken)` so the keepalive does not resend it every
+slice. Public regions retain the existing descriptor, view, activity-host, and settlement gates.
+
+The final part of the run showed why `session_admitted(group)` alone could not govern retries.
+After several transitions, the two-row public-session table retired an older admitted record even
+though that visit had already produced a valid join. The retry timer then saw no transient row and
+republished the same region-408 descriptor, causing repeated PUBLIC TARGET teardown/rejoin cycles.
+Each host-session row now has a monotonic admission generation. Descriptor commit snapshots the
+generation for that exact visit; `publish_membership` increments it after accepting a gameplay
+join. Any changed generation permanently suppresses retries for the visit even if the admitted row
+is later released. Settlement clears the retry state normally.
+
+The supplied retail captures independently support this model. `d2dumpPublic` has one long-lived
+activity connection (flow 054, `+59.069s` to `+495.310s`) spanning the EDZ session and eight shorter
+overlapping activity connections as public zones change. `d2dumpRaid` has one activity connection
+for the complete encounter/wipe. Activity payload bodies in the bundle are not typed yet, so this
+is lifecycle evidence rather than a byte-for-byte codec proof, but it rules against allocating a
+new public host for every PRV region.
+
+Release SHA-256 for this candidate:
+`b83c295cb35d36328299470242b8a5b99b938fe727fe06461823ae0862ef5e57`.
+
 After manual deployment, inspect:
 
 ```text

@@ -75,8 +75,12 @@ Table<RosterGroup, kRosterGroupCapacity> g_groups;
             && definition.bubbleStates[index] != kBubbleDisabledByte) {
             return false;
         }
+        if (declared && definition.bubblePublicFlags[index] > 1) {
+            return false;
+        }
         if (!declared
             && (definition.bubbleStates[index] != 0 || definition.bubbleHashes[index] != 0
+                || definition.bubblePublicFlags[index] != 0
                 || definition.bubbleStateCounts[index] != 0
                 || definition.bubbleMapIndices[index] != 0)) {
             return false;

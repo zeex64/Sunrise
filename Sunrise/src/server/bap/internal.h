@@ -129,6 +129,8 @@ struct Session {
     std::uint64_t activityCitizenRetryGroupSession{};
     /** Earliest tick at which an ignored citizen descriptor may be republished. */
     std::uint64_t activityCitizenRetryDueTick{};
+    /** Group admission generation captured before the current visit's descriptor was delivered. */
+    std::uint64_t activityCitizenAdmissionGeneration{};
     /** Bounded number of descriptor publications made for the current visit. */
     std::uint8_t activityCitizenPublishAttempts{};
     /** Gameplay group already mirrored into the root membership's remote slot. */
