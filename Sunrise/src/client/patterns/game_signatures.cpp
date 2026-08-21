@@ -477,6 +477,16 @@ constexpr std::string_view kSchedulerEntityFinalizerText =
 constexpr auto kSchedulerEntityFinalizer =
     signature<signature_length(kSchedulerEntityFinalizerText)>(kSchedulerEntityFinalizerText);
 
+// Matches the leaf predicate immediately above replicated-entity collector dispatch. It requires
+// both handler enable bytes and then accepts one of the four pending-state combinations.
+constexpr std::string_view kSchedulerEntityCollectorGateText =
+    "80 79 09 00 74 21 80 79 0A 00 74 1B 83 79 28 00 75 12 83 79 2C 00 75 0C "
+    "83 79 30 00 75 06 83 79 34 00 74 03 B0 01 C3 32 C0 C3";
+/** Compiled pattern bytes of the entity collector dispatch-gate signature above. */
+constexpr auto kSchedulerEntityCollectorGate =
+    signature<signature_length(kSchedulerEntityCollectorGateText)>(
+        kSchedulerEntityCollectorGateText);
+
 // Matches the replicated-entity scheduler candidate collector. It walks manager +0xC920 and
 // appends packed entity/view/lane/priority candidates without writing their encoded bodies.
 constexpr std::string_view kSchedulerEntityCollectorText =
@@ -583,6 +593,7 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"z_leg_state", kZLegState},
     patterns::Pattern{"scheduler_zero_finalizer", kSchedulerZeroFinalizer},
     patterns::Pattern{"scheduler_entity_finalizer", kSchedulerEntityFinalizer},
+    patterns::Pattern{"scheduler_entity_collector_gate", kSchedulerEntityCollectorGate},
     patterns::Pattern{"scheduler_entity_collector", kSchedulerEntityCollector},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},

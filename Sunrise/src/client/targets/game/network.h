@@ -26,6 +26,7 @@ struct Targets {
     std::byte* schedulerSignatureEncoder{};
     std::byte* schedulerZeroFinalizer{};
     std::byte* schedulerEntityFinalizer{};
+    std::byte* schedulerEntityCollectorGate{};
     std::byte* schedulerEntityCollector{};
     std::byte* sobjectCreateEncoder{};
     std::byte* sobjectUpdateEncoder{};

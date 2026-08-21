@@ -1,6 +1,6 @@
 # Server Entity Spawning / Native View Reverse-Engineering Notes
 
-Last updated: 2026-08-19
+Last updated: 2026-08-20
 
 ## Goal
 
@@ -3185,6 +3185,49 @@ The direct-manager/empty-ambient correction is built as Release SHA-256
 `de2ca0e736fcec207e4d2633ec738c3c2f43ca3da411d2357860341911fb0a91`. The completed prior run
 was otherwise healthy: there was no assertion, `network-hitch`, forced disconnect,
 corrupt-channel report, or packet loss, and shutdown completed normally at `t=161226`.
+
+### `de2ca0e...` traversal and collector-dispatch leaf gate
+
+The game-directory DLL and Release artifact both exactly matched SHA-256
+`de2ca0e736fcec207e4d2633ec738c3c2f43ca3da411d2357860341911fb0a91` for this run. The client
+completed the public `408 -> 24 -> 408` traversal without reproducing the descriptor-overcommit
+hang. Three server admissions all completed; the client produced three matched retail site-86,
+site-87, and site-88 join sequences. The only gameplay-time public leave request was associated
+with activity host `0x9EAA300100200002`, marked on the exact admitted session, and acknowledged
+six milliseconds later. Two later group leave requests were part of final teardown.
+
+Transport health stayed clean. There was no `network-hitch`, assert hit, client error, corrupt
+packet, or loss. The intermediate channel summary reported 32 delivered and zero lost; the final
+summary reported 872 delivered, zero lost, and 114 incoming reads with zero unexpected discard or
+corruption. The `_connection_failure_suicide` lines belong to deliberate old-activity-channel and
+shutdown teardown, not an unsolicited gameplay disconnect. Client and core both ended with
+`shutdown result=ok`.
+
+The passive direct-manager correction did not produce a collector report. The hook attached, but
+the run contained zero `scheduler-entity-collector`, `entity-create-out`, entity-list decode, or
+`entity-record` lines, and server attempts remained zero. Three complete outbound shapes described
+four view lanes. Every entity lane finalized at exactly 11 bits, proving that each contained only
+the empty 10-bit native prelude followed by `FUN_14171EFE0`'s one-bit finalizer. Thus no kind-0
+entity body reached the outbound scheduler in this run.
+
+Ghidra identifies the immediate dispatch predicate above `FUN_14170C080` as leaf
+`FUN_141712CA0`. Its exact 42-byte signature is unique in the current image at `0x141712CA0`. The
+predicate reads only these handler fields:
+
+- enable bytes `self+9` and `self+0xA` must both be nonzero;
+- at least one pending-state dword at `self+0x28`, `+0x2C`, `+0x30`, or `+0x34` must be nonzero.
+
+It returns false when either enable byte is clear or all four pending values are zero; otherwise it
+returns true. The new `scheduler_entity_collector_gate` detour preserves that original bool-return
+ABI, snapshots all six fields under SEH before the call, invokes the native predicate unchanged,
+and emits one bounded, deduplicated `entity-collector-gate` line for each distinct state/result.
+It writes no handler byte, pending value, manager bit, scheduler writer, candidate array, or other
+game state. This removes the remaining ambiguity: a false leaf result proves the collector was
+not dispatched, while a true leaf result with no collector evidence moves the search into the
+caller/dispatch edge rather than object eligibility.
+
+The gate-probe Release artifact is built and pending deployment. Its SHA-256 is
+`64b989bd6ede1fc1ed6c864daaf00c423671686ff4551c86fa482ec8a5f2e2e0`.
 
 ### Public descriptor overcommit hang
 

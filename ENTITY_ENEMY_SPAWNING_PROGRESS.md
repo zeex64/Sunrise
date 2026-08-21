@@ -1,6 +1,6 @@
 # Entity and Enemy Spawning Progress
 
-Last updated: 2026-08-19
+Last updated: 2026-08-20
 
 ## Current outcome
 
@@ -828,6 +828,26 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Runtime health was normal: no assertion hit, network hitch, forced disconnect, corrupt packet, or
   reported packet loss occurred, and the client shut down normally at `t=161226`. The descriptor
   hold therefore did not reproduce the prior public-slot overcommit hang in this traversal.
+- The deployed `de2ca0e...` diagnostic then completed a clean `408 -> 24 -> 408` public traversal.
+  All three gameplay joins advanced through retail sites 86, 87, and 88 and completed on the
+  server. The one in-run public leave was mapped to its exact admitted row and acknowledged; the
+  remaining leave requests occurred during orderly shutdown. There was no assertion hit,
+  `network-hitch`, client error, corrupt read, or packet loss, and both client and core reported
+  `shutdown result=ok`.
+- That run remained a useful negative entity result. The collector hook attached, but there was no
+  `scheduler-entity-collector` record, no nonempty native entity body, no `entity-create-out`, and
+  no client entity-list decode or `entity-record`; server attempts remained zero. Three complete
+  native outbound shapes covered four view lanes, and every finalized entity lane was exactly
+  11 bits--the same empty 10-bit prelude plus the one-bit native entity finalizer.
+- Ghidra now places the silence one call farther upstream. Leaf predicate `FUN_141712CA0` returns
+  true only when handler bytes `+9` and `+0xA` are both enabled and at least one pending-state
+  dword at `+0x28`, `+0x2C`, `+0x30`, or `+0x34` is nonzero. Its exact byte signature is unique at
+  `0x141712CA0`. A bounded passive detour records those six inputs and the native result as
+  `entity-collector-gate`, allowing the next run to distinguish a closed dispatch gate from a
+  collector that executes and emits zero candidates. It preserves the original predicate and
+  changes no handler, scheduler, manager, object, or output state.
+- The new gate-probe Release DLL is built but pending deployment. SHA-256:
+  `64b989bd6ede1fc1ed6c864daaf00c423671686ff4551c86fa482ec8a5f2e2e0`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

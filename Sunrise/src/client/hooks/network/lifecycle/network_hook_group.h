@@ -62,6 +62,7 @@ inline constexpr std::array kGameSlots{
     HookSlot::zLegState,
     HookSlot::schedulerZeroFinalizer,
     HookSlot::schedulerEntityFinalizer,
+    HookSlot::schedulerEntityCollectorGate,
     HookSlot::schedulerEntityCollector,
 };
 

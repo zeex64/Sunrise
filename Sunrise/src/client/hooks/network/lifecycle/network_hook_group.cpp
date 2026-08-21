@@ -73,6 +73,7 @@ constexpr std::array<const char*, kHandleCount> kSlotNames{
     "z_leg_state",
     "scheduler_zero_finalizer",
     "scheduler_entity_finalizer",
+    "scheduler_entity_collector_gate",
     "scheduler_entity_collector",
 };
 // A short table would zero-fill its tail and shift every later name onto the wrong slot.

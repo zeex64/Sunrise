@@ -31,8 +31,21 @@ constexpr std::size_t kObjectStride = 0x70;
 constexpr std::size_t kCandidateSampleCount = 4;
 constexpr std::size_t kAmbientReportCapacity = 16;
 constexpr std::size_t kWatchedReportCapacity = 64;
+constexpr std::size_t kGateReportCapacity = 16;
 
+using CollectorGate = bool(__fastcall*)(void*);
 using Collector = int(__fastcall*)(void*, std::uint32_t, std::uint32_t, void*, int, std::uint32_t*);
+
+struct GateSnapshot {
+    const void* self{};
+    std::uint32_t value28{};
+    std::uint32_t value2C{};
+    std::uint32_t value30{};
+    std::uint32_t value34{};
+    std::uint8_t enabledA{};
+    std::uint8_t enabledB{};
+    bool readable{};
+};
 
 struct Snapshot {
     std::array<std::uint32_t, kCandidateSampleCount> candidates{};
@@ -68,8 +81,10 @@ struct Snapshot {
 SRWLOCK g_seenLock{SRWLOCK_INIT};
 std::array<std::uint64_t, kAmbientReportCapacity> g_ambientSeen{};
 std::array<std::uint64_t, kWatchedReportCapacity> g_watchedSeen{};
+std::array<std::uint64_t, kGateReportCapacity> g_gateSeen{};
 std::size_t g_ambientSeenCount{};
 std::size_t g_watchedSeenCount{};
+std::size_t g_gateSeenCount{};
 
 /** FNV-1a mixes one trivially copied field into a bounded diagnostic fingerprint. */
 template <typename Value> void mix(std::uint64_t& hash, const Value& value) noexcept {
@@ -87,6 +102,94 @@ template <typename Value> void mix(std::uint64_t& hash, const Value& value) noex
         ++count;
     }
     return count;
+}
+
+/** Copies the complete leaf-predicate input without retaining game-owned storage. */
+[[nodiscard]] bool inspect_gate(const void* self, GateSnapshot& output) noexcept {
+    output = {};
+    output.self = self;
+    if (self == nullptr) {
+        return false;
+    }
+
+    __try {
+        const auto* const bytes = static_cast<const std::byte*>(self);
+        output.enabledA = std::to_integer<std::uint8_t>(bytes[9]);
+        output.enabledB = std::to_integer<std::uint8_t>(bytes[10]);
+        std::memcpy(&output.value28, bytes + 0x28, sizeof output.value28);
+        std::memcpy(&output.value2C, bytes + 0x2C, sizeof output.value2C);
+        std::memcpy(&output.value30, bytes + 0x30, sizeof output.value30);
+        std::memcpy(&output.value34, bytes + 0x34, sizeof output.value34);
+        output.readable = true;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        output = {};
+        return false;
+    }
+}
+
+/** @return Stable identity for one exact collector-dispatch gate state. */
+[[nodiscard]] std::uint64_t gate_snapshot_key(const GateSnapshot& snapshot, bool result) noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    mix(hash, snapshot.self);
+    mix(hash, snapshot.enabledA);
+    mix(hash, snapshot.enabledB);
+    mix(hash, snapshot.value28);
+    mix(hash, snapshot.value2C);
+    mix(hash, snapshot.value30);
+    mix(hash, snapshot.value34);
+    mix(hash, result);
+    return hash == 0 ? 1 : hash;
+}
+
+/** @return One-based report number for a new gate state, or zero for duplicate/full. */
+[[nodiscard]] std::uint32_t reserve_gate_report(std::uint64_t key) noexcept {
+    AcquireSRWLockExclusive(&g_seenLock);
+    for (std::size_t index = 0; index < g_gateSeenCount; ++index) {
+        if (g_gateSeen[index] == key) {
+            ReleaseSRWLockExclusive(&g_seenLock);
+            return 0;
+        }
+    }
+    if (g_gateSeenCount >= g_gateSeen.size()) {
+        ReleaseSRWLockExclusive(&g_seenLock);
+        return 0;
+    }
+    g_gateSeen[g_gateSeenCount] = key;
+    const auto report = static_cast<std::uint32_t>(++g_gateSeenCount);
+    ReleaseSRWLockExclusive(&g_seenLock);
+    return report;
+}
+
+/** Emits one bounded state from the leaf predicate immediately above collector dispatch. */
+void report_gate(const GateSnapshot& snapshot, bool result) noexcept {
+    if (!snapshot.readable) {
+        return;
+    }
+    const std::uint32_t occurrence = reserve_gate_report(gate_snapshot_key(snapshot, result));
+    if (occurrence == 0) {
+        return;
+    }
+    std::array<char, 256> line{};
+    const int written =
+        std::snprintf(line.data(),
+                      line.size(),
+                      "ev=gameplay stage=entity-collector-gate occurrence=%u self=%p enabled=%u/%u "
+                      "v28=0x%08X v2c=0x%08X v30=0x%08X v34=0x%08X result=%u",
+                      occurrence,
+                      snapshot.self,
+                      static_cast<unsigned>(snapshot.enabledA),
+                      static_cast<unsigned>(snapshot.enabledB),
+                      snapshot.value28,
+                      snapshot.value2C,
+                      snapshot.value30,
+                      snapshot.value34,
+                      result ? 1U : 0U);
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
 }
 
 /** Reads one collector result after the original has updated per-namespace eligibility state. */
@@ -385,6 +488,28 @@ void report(const Snapshot& before,
     }
 }
 
+/** Preserves the native leaf predicate and records the state that controls collector dispatch. */
+__declspec(noinline) bool __fastcall collector_gate_body(void* self) noexcept {
+    coordinator::CallLease lease{};
+    coordinator::g_callIngress(
+        lease, HookSlot::schedulerEntityCollectorGate, coordinator::ConsumerKind::none);
+    const auto call = reinterpret_cast<CollectorGate>(lease.original);
+    bool result = false;
+    __try {
+        GateSnapshot snapshot{};
+        const bool readable = lease.accepting && inspect_gate(self, snapshot);
+        if (call != nullptr) {
+            result = call(self);
+        }
+        if (readable) {
+            report_gate(snapshot, result);
+        }
+    } __finally {
+        coordinator::g_callEgress();
+    }
+    return result;
+}
+
 /** Preserves the native collector and observes only its completed candidate output. */
 __declspec(noinline) int __fastcall collector_body(void* handler,
                                                    std::uint32_t view,
@@ -427,6 +552,10 @@ __declspec(noinline) int __fastcall collector_body(void* handler,
 
 } // namespace
 
+void* gate_entry_point() noexcept {
+    return reinterpret_cast<void*>(&collector_gate_body);
+}
+
 void* collector_entry_point() noexcept {
     return reinterpret_cast<void*>(&collector_body);
 }
@@ -435,8 +564,10 @@ void reset() noexcept {
     AcquireSRWLockExclusive(&g_seenLock);
     g_ambientSeen.fill(0);
     g_watchedSeen.fill(0);
+    g_gateSeen.fill(0);
     g_ambientSeenCount = 0;
     g_watchedSeenCount = 0;
+    g_gateSeenCount = 0;
     ReleaseSRWLockExclusive(&g_seenLock);
 }
 
