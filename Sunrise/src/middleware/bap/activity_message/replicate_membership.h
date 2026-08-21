@@ -17,11 +17,16 @@ inline constexpr std::uint32_t kMessageType = 12;
 inline constexpr std::size_t kMeaningfulBitCount = 29'968;
 /** The local-only snapshot is byte-aligned at 3,746 bytes. */
 inline constexpr std::size_t kEncodedSize = 3'746;
-/** A reflected host adds its member, six-bit view gate, and 86-byte gameplay address. */
-inline constexpr std::size_t kReflectedHostExtraBitCount = 1'367;
+/** A reflected host adds its member, six-bit view gate, and 86-byte gameplay address here. */
+inline constexpr std::size_t kReflectedHostMemberExtraBitCount = 1'367;
+/** Making the third mask present adds its 32-bit value after the region block. */
+inline constexpr std::size_t kReflectedHostRetainExtraBitCount = 32;
+/** Total meaningful-bit growth for a reflected-host snapshot. */
+inline constexpr std::size_t kReflectedHostExtraBitCount =
+    kReflectedHostMemberExtraBitCount + kReflectedHostRetainExtraBitCount;
 /** One filled descriptor makes its record 1,024 bits longer and shifts every later field. */
 inline constexpr std::size_t kDescriptorBitCount = gameplay::descriptor::kDescriptorSize * 8U;
-/** Byte size once one record carries a descriptor. */
+/** Byte size of a local-only snapshot once one record carries a descriptor. */
 inline constexpr std::size_t kCitizenEncodedSize =
     kEncodedSize + gameplay::descriptor::kDescriptorSize;
 
@@ -83,8 +88,8 @@ meaningful_bit_count(const MembershipSnapshot& snapshot) noexcept {
  * Encodes one full-player membership snapshot. No allocation.
  * @param snapshot Checked identity, revision, transition, and host-echo values.
  * @param output Caller storage, left unchanged when validation fails or it is too small.
- * @param written Receives 3,746 on success or zero on failure.
- * @return True when the host-present body was encoded.
+ * @param written Receives encoded_size(snapshot) on success or zero on failure.
+ * @return True when the complete local-only or reflected-host body was encoded.
  */
 [[nodiscard]] bool encode_replicate_membership(const MembershipSnapshot& snapshot,
                                                std::span<std::byte> output,
@@ -101,14 +106,14 @@ inline constexpr std::size_t kRegionBlockEndBit = 29'899;
 [[nodiscard]] constexpr std::size_t
 region_block_start_bit(const MembershipSnapshot& snapshot) noexcept {
     return kRegionBlockStartBit
-           + (snapshot.hasReflectedHost ? kReflectedHostExtraBitCount : 0);
+           + (snapshot.hasReflectedHost ? kReflectedHostMemberExtraBitCount : 0);
 }
 
 /** @return Bit at which the region block ends for one snapshot. */
 [[nodiscard]] constexpr std::size_t
 region_block_end_bit(const MembershipSnapshot& snapshot) noexcept {
     return kRegionBlockEndBit
-           + (snapshot.hasReflectedHost ? kReflectedHostExtraBitCount : 0)
+           + (snapshot.hasReflectedHost ? kReflectedHostMemberExtraBitCount : 0)
            + (snapshot.citizen.present ? kDescriptorBitCount : 0);
 }
 

@@ -3064,6 +3064,40 @@ The shared retail captures separate cleanly into three relevant layers:
   their payload is high entropy and the gameplay cipher/session state is absent. Port 3075 is only
   short probe/handshake traffic in this capture.
 
+The decrypted activity channel is nevertheless a concrete entity-authority oracle. All nine
+`d2dumpPublic` activity-host sessions have valid service-8/service-9 envelopes with no declared-
+length failures. Each session begins with client activity type 7 and server type 8, the current
+retail build's join request/result pair, then receives exactly one server type-32 payload of 1,024
+bytes within 100--178 ms of the join result. Every one of those payloads is an 8,192-bit mask with
+exactly 125 set bits. The masks name different slot pools on different activity hosts; five hosts
+received the same low pool, while the others received pools beginning near slots 2,016, 2,144, or
+2,272.
+
+The later authority traffic confirms that this is structured slot state rather than an arbitrary
+1,024-byte body. Eight client type-42 payloads are exactly 1,028 bytes and contain a 1,024-byte mask
+at offset four. Six repeat that session's original type-32 grant byte-for-byte, one adds three bits,
+and one removes one bit. Client types 34, 36, and 41 and server types 35 and 37 form the same
+1,024-byte-mask family with one-, two-, or five-byte prefixes during later handoffs. This evidence
+can validate Sunrise's slot grant, acknowledgement, and authority lifecycle, and its 8,192-slot
+width independently corroborates the target build's entity-slot codec.
+
+The numeric activity ids cannot be copied into build 86657: the retail capture uses types 7/8 for
+join where the target uses 3/4, and retail type 32 occupies the role target code assigns type 0.
+More importantly, none of these activity messages exposes the native scheduler handler object.
+They cannot directly reveal `self+9`, `self+0xA`, the four pending-state dwords, or whether
+`FUN_141712CA0` returned true. Those remain in-process observations from `entity-collector-gate`.
+The packet evidence can identify a missing authority transaction if that runtime byte never opens,
+but it is not itself a plaintext entity-create exemplar.
+
+The ten sustained UDP/3074 gameplay flows contain 11,753 datagrams. Each begins with the same
+425-byte client/301-byte server exchange shape before protected traffic; those widths and the
+subsequent counter progression are consistent with the association key-exchange and protected-
+datagram layers, but the current retail clear header differs from build 86657's exact bit layout.
+Across 5,412,192 bytes after the stable clear prefixes, byte entropy is 7.9999 bits per byte and all
+256 byte values occur. Capturing both public exchange values does not recover the private SRP/ECDH
+material needed to derive the traffic key. Packet lengths and timing remain usable, but attempting
+to parse scheduler or entity lanes out of that ciphertext would create false structure.
+
 A binary scan found zero literal occurrences of synthetic Vandal RSAT `0x815B204B` and zero of the
 shared Vandal definition `0x80C187BD` across the bundled bodies, in either byte order. That negative
 result is expected for encrypted, bit-packed gameplay data and also prevents falsely attributing an
@@ -3301,3 +3335,25 @@ citizen-acceptance
 citizen-join-status
 z-leg-state
 ```
+
+### Reflected-host retain-mask experiment
+
+The collector gate run isolated the missing native lifecycle input. `FUN_141712CA0` saw initialized
+entity handlers with pending create/update counters, but handler byte `+0xA` remained clear. Its
+sole setter is reached from `FUN_141703910`; that lifecycle receives the per-peer bit returned by
+`FUN_1404DF650`, which reads membership snapshot mask `+0x59250`. The existing membership decoder
+diagnostic already labels that field `retain`, and every failing snapshot reported `retain=0` even
+while `occupied` and `eligible` contained both local slot zero and reflected-host slot one.
+
+The bounded wire experiment now makes the third top-level mask present only in a reflected-host
+snapshot and writes `0x00000002`. Slot zero is deliberately excluded: it is the local client, while
+slot one is the non-local gameplay host whose per-peer replication root must remain active. A
+local-only snapshot still encodes the retain field absent, and the following two tail fields remain
+absent in both forms. This adds exactly 32 meaningful bits only to reflected-host bodies: their
+count changes from 31,335 to 31,367 bits and their padded byte size from 3,917 to 3,921; the
+29,968-bit/3,746-byte local-only form is unchanged.
+
+This does not patch or force the native handler byte. It supplies the decoded membership lifecycle
+input and leaves `FUN_141703910` responsible for activating or tearing down the root. The next run
+should therefore show `retain=0x00000002`, followed by collector-gate `enabled=1/1`; if it does not,
+the failure is in schema placement rather than entity candidate state.
