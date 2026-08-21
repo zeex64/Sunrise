@@ -881,6 +881,28 @@ Once the director evaluates an encounter and creates native squad/member objects
   two-view/275-bit shape and performs no native manager write. The integrated Release artifact is
   SHA-256 `b810e23321d5ad504fecfadbf2fb741d7e99c3deb4dd1f04d1ab6920647f4d2e`;
   the Release and deployed game DLLs match exactly.
+- The deployed `b810e233...` run proves the preseed packet itself. At `t=88051` the exact
+  two-view/275-bit path sent namespace 2 slot 13 in region/bubble/cell `24/3/11`; the client decoded
+  entity `0x0020000D`, promoted it with internal flags `0x23`, changed occupancy `0 -> 1`, and
+  directly acknowledged packet 155. It produced no type-2 job, apply, kind-0 construction, native
+  registration, or bind because that destination manager was still inactive.
+- The record was then lost with its target-view incarnation. The first region-24 transition was
+  preempted, its view was dropped and disappeared, and the later region-24 incarnation reused the
+  same token and manager address with slot 13 clear. That later incarnation finally became native
+  current, but the peer-link-wide one-shot latch prevented it from receiving a new preseed. Its
+  dirty-service observations consequently reported `internal=-1`, `mapped=0`, and `dirty=0`.
+- The bounded lifecycle correction carries the client-chosen stage-two native view index through
+  each server view signature. Attempt one records token plus index; only an exact matching drop may
+  retire it, and only a later bound view with the same token and a different native index may arm
+  attempt two. `clear_view` cannot rearm. The second send remains target-preseed-only, repeats every
+  scheduler/manager/z-leg/slot/generation/RSAT/spatial/send-time check, and the peer-link lifetime
+  cap is two. Release SHA-256: `f80b2cebe4e5f44aced9780f7552ff8a783524b1ca4623b5c9fc93fe77174165`.
+- The synthetic entity record has no explicit activity slice-set field. Its residency inputs are
+  replication owner/view, spatial cell, and transform; many entities normally share one view and
+  cell. The public API manifest supplied separately maps bubble hash `0xC718E100` to the EDZ
+  Outskirts and contains authored locations/coordinates, but contains neither RSAT `0x815B204B`
+  nor native entity records. It is useful for bubble and transform cross-checks, not for choosing
+  or encoding a missing entity slice.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

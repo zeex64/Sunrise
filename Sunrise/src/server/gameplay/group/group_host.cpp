@@ -487,6 +487,7 @@ void publish_replication_view(Admitted& record) noexcept {
     }
     state::gameplay::ViewSignature signature{};
     signature.token = record.view.token;
+    signature.nativeViewIndex = record.view.index;
     signature.kind = kReplicationViewStage;
     signature.listCount = record.view.signature.count;
     signature.hasList = true;
@@ -510,6 +511,7 @@ void complete_view(Admitted& record) noexcept {
     }
     state::gameplay::ViewSignature signature{};
     signature.token = record.view.token;
+    signature.nativeViewIndex = record.view.index;
     signature.kind = kFinalViewStage;
     signature.listCount = record.view.signature.count;
     signature.hasList = record.view.signatureReady;

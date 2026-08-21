@@ -132,6 +132,8 @@ constexpr std::int32_t kTargetPreseedManagerCount = 3;
 constexpr std::uintptr_t kTargetPreseedManagerStride = 0x11E08;
 /** Slots 0 and 1 are claimed by native bootstrap when the destination manager becomes active. */
 constexpr std::uint16_t kTargetPreseedSlot = 13;
+/** One retry is allowed only after the first destination-view incarnation is removed. */
+constexpr std::uint8_t kTargetPreseedAttemptLimit = 2;
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
@@ -178,6 +180,8 @@ struct EntityCreatePlan {
     std::uint64_t token{};
     std::uint64_t schedulerKey{};
     std::uint32_t rsat{};
+    /** Client-chosen native view index, distinct from the scheduler lane below. */
+    std::int32_t nativeViewIndex{-1};
     std::uint16_t slot{};
     std::uint8_t schedulerTag{};
     std::uint8_t handleGeneration{};
@@ -908,8 +912,8 @@ post_handoff_probe_body_bits(const state::gameplay::SchedulerSignature& schedule
 [[nodiscard]] bool same_entity_create_plan(const EntityCreatePlan& left,
                                            const EntityCreatePlan& right) noexcept {
     return left.token == right.token && left.schedulerKey == right.schedulerKey
-           && left.rsat == right.rsat && left.slot == right.slot
-           && left.schedulerTag == right.schedulerTag
+           && left.rsat == right.rsat && left.nativeViewIndex == right.nativeViewIndex
+           && left.slot == right.slot && left.schedulerTag == right.schedulerTag
            && left.handleGeneration == right.handleGeneration
            && left.objectGeneration == right.objectGeneration && left.viewIndex == right.viewIndex
            && left.namespaceId == right.namespaceId && left.spatialRegion == right.spatialRegion
@@ -1096,6 +1100,10 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
     bool targetPreseed = false;
     if (!client::hooks::network::sobject_apply_probe::current_region_manager_active(
             capture.token, capture.namespaceId)) {
+        if (retained == nullptr && peer.targetPreseedAttempts >= kTargetPreseedAttemptLimit) {
+            gate = EntityCreateGate::attempted;
+            return false;
+        }
         if (!target_preseed_manager_ready(peer, selected, probe, capture)) {
             gate = EntityCreateGate::activeManager;
             return false;
@@ -1116,6 +1124,21 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         plannedSlot = preseedSlot.slot;
         plannedHandleGeneration = preseedSlot.handleGeneration;
         targetPreseed = true;
+    }
+    if (retained == nullptr && peer.targetPreseedRearmPending) {
+        if (!targetPreseed || peer.targetPreseedAttempts != 1
+            || capture.token != peer.targetPreseedToken || selected.signature.nativeViewIndex < 0
+            || selected.signature.nativeViewIndex == peer.targetPreseedNativeViewIndex) {
+            gate = targetPreseed ? EntityCreateGate::view : EntityCreateGate::activeManager;
+            return false;
+        }
+    } else if (retained == nullptr && targetPreseed && peer.targetPreseedAttempts != 0) {
+        gate = EntityCreateGate::attempted;
+        return false;
+    }
+    if (targetPreseed && selected.signature.nativeViewIndex < 0) {
+        gate = EntityCreateGate::view;
+        return false;
     }
     if (!scheduler_matches_local_capture(probe.scheduler, capture)) {
         gate = EntityCreateGate::schedulerIdentity;
@@ -1143,6 +1166,7 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
     output.schedulerKey = capture.schedulerKey;
     output.schedulerTag = capture.schedulerTag;
     output.rsat = state::gameplay::kFirstEntityRsat;
+    output.nativeViewIndex = selected.signature.nativeViewIndex;
     output.slot = plannedSlot;
     output.handleGeneration = plannedHandleGeneration;
     output.objectGeneration = kFirstObjectGeneration;
@@ -3173,8 +3197,54 @@ static void reset_entity_create(state::gameplay::PeerLink& peer) noexcept {
     peer.postHandoffProbeHandlerComplete = false;
 }
 
+/** Records retirement of exactly the incarnation which received the first strict preseed. */
+[[nodiscard]] static bool retire_target_preseed(state::gameplay::PeerLink& peer,
+                                                std::uint64_t removed,
+                                                std::int32_t removedNativeViewIndex) noexcept {
+    if (removed == 0 || removed != peer.targetPreseedToken
+        || removedNativeViewIndex != peer.targetPreseedNativeViewIndex
+        || !peer.targetPreseedAwaitingExplicitClear) {
+        return false;
+    }
+    peer.targetPreseedAwaitingExplicitClear = false;
+    peer.targetPreseedRetired = peer.targetPreseedAttempts == 1;
+    return peer.targetPreseedRetired;
+}
+
+/**
+ * Reopens the proven two-view path for a later bound incarnation of the same logical token.
+ * The native stage-two index proves this is not another handshake update for the seeded view.
+ * Preparation consumes an existing native-update capture and fails closed at RSAT if none remains.
+ */
+[[nodiscard]] static bool
+rearm_bound_target_preseed(state::gameplay::PeerLink& peer,
+                           const state::gameplay::ViewSignature& signature) noexcept {
+    if (!peer.targetPreseedRetired || peer.targetPreseedRearmPending
+        || peer.targetPreseedAwaitingExplicitClear || peer.targetPreseedAttempts != 1
+        || !signature.bound || signature.token == 0 || signature.token != peer.targetPreseedToken
+        || signature.nativeViewIndex < 0
+        || signature.nativeViewIndex == peer.targetPreseedNativeViewIndex
+        || !peer.twoViewProbeAttempted) {
+        return false;
+    }
+    peer.twoViewProbeScheduler = {};
+    peer.twoViewProbeToken = 0;
+    peer.twoViewProbeSentAt = 0;
+    peer.twoViewProbePacket = 0;
+    peer.twoViewProbePacketsAfter = 0;
+    peer.twoViewProbeAttempted = false;
+    peer.twoViewProbeAwaitingAcknowledgement = false;
+    peer.twoViewProbeAccepted = false;
+    peer.twoViewProbeMutationReported = false;
+    peer.targetPreseedRetired = false;
+    peer.targetPreseedRearmPending = true;
+    return true;
+}
+
 /** Publishes one session's provisional or bound view signature. */
 void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& signature) noexcept {
+    bool targetPreseedRearmed = false;
+    std::int32_t seededNativeIndex = -1;
     AcquireSRWLockExclusive(&g_lock);
     state::gameplay::PeerLink* peer = find_session_locked(sessionId);
     if (peer != nullptr) {
@@ -3191,8 +3261,21 @@ void bind_view(std::uint64_t sessionId, const state::gameplay::ViewSignature& si
         } else {
             peer->entityCreateGate = 0xFF;
         }
+        targetPreseedRearmed = rearm_bound_target_preseed(*peer, signature);
+        if (targetPreseedRearmed) {
+            seededNativeIndex = peer->targetPreseedNativeViewIndex;
+        }
     }
     ReleaseSRWLockExclusive(&g_lock);
+    if (targetPreseedRearmed) {
+        report(core::log::Level::info,
+               "ev=gameplay stage=entity-create-preseed result=rearmed reason=view-bind "
+               "token=0x%016llX native_index=%d prior_native_index=%d attempt=2 limit=%u",
+               static_cast<unsigned long long>(signature.token),
+               signature.nativeViewIndex,
+               seededNativeIndex,
+               static_cast<unsigned>(kTargetPreseedAttemptLimit));
+    }
 }
 
 /** Clears one session's provisional or bound replication view. */
@@ -3330,6 +3413,10 @@ void service(std::uint64_t now) noexcept {
         EntityCreatePlan candidate{};
         const SelectedReplicationView selected = select_replication_view(peer);
         const bool firstAttempt = peer.entityCreateAttempts == 0;
+        const bool targetPreseedLifecyclePending =
+            peer.targetPreseedAttempts == 1
+            && (peer.targetPreseedAwaitingExplicitClear || peer.targetPreseedRetired
+                || peer.targetPreseedRearmPending);
         if (!peer.entityCreateAccepted && entity_create_accepted(peer)) {
             peer.entityCreateAccepted = true;
             peer.entityCreateAcceptedSince = now;
@@ -3364,8 +3451,8 @@ void service(std::uint64_t now) noexcept {
                                        && prepare_two_view_probe(peer, selected, twoViewProbe);
         PostHandoffProbePlan postHandoffProbe{};
         const bool postHandoffProbeReady =
-            !twoViewProbeReady && !validatedTwoView && !validatedPostHandoff && firstAttempt
-            && !peer.entityCreateAccepted
+            !targetPreseedLifecyclePending && !twoViewProbeReady && !validatedTwoView
+            && !validatedPostHandoff && firstAttempt && !peer.entityCreateAccepted
             && peer.postHandoffProbeAttempts < kPostHandoffProbeAttemptLimit
             && !peer.postHandoffProbeAwaitingAcknowledgement
             && !peer.postHandoffProbeScheduler.present
@@ -3382,12 +3469,18 @@ void service(std::uint64_t now) noexcept {
             // native scheduler layouts, the token, and the slot remain unchanged.
             bool candidatePrepared = false;
             if (twoViewProbeReady) {
-                if (!controlQueueSettled) {
+                if (targetPreseedLifecyclePending && !peer.targetPreseedRearmPending) {
+                    gate = EntityCreateGate::attempted;
+                } else if (!controlQueueSettled) {
                     gate = EntityCreateGate::controlQueue;
                 } else {
                     candidatePrepared = prepare_entity_create_with_two_view_probe(
                         peer, selected, twoViewProbe, nullptr, candidate, gate);
                 }
+            } else if (targetPreseedLifecyclePending) {
+                // After the first preseed, only a retired and rebound strict target-preseed may
+                // authorize attempt two. A changed topology never falls into a generic path.
+                gate = EntityCreateGate::attempted;
             } else if (postHandoffProbeReady) {
                 gate = controlQueueSettled ? EntityCreateGate::schedulerProbe
                                            : EntityCreateGate::controlQueue;
@@ -3519,6 +3612,15 @@ void service(std::uint64_t now) noexcept {
             peer.entityCreateAttempts = kEntityCreateAttemptLimit;
         }
         if (twoViewProbeDue) {
+            if (candidate.targetPreseed
+                && peer.targetPreseedAttempts < kTargetPreseedAttemptLimit) {
+                ++peer.targetPreseedAttempts;
+                peer.targetPreseedToken = candidate.token;
+                peer.targetPreseedNativeViewIndex = candidate.nativeViewIndex;
+                peer.targetPreseedAwaitingExplicitClear = true;
+                peer.targetPreseedRetired = false;
+                peer.targetPreseedRearmPending = false;
+            }
             peer.twoViewProbeScheduler = twoViewProbe.scheduler;
             peer.twoViewProbeToken = twoViewProbe.token;
             peer.twoViewProbeSentAt = now;
@@ -3821,7 +3923,7 @@ void service(std::uint64_t now) noexcept {
                        "ev=gameplay stage=entity-create-out result=%s token=0x%016llX "
                        "attempt=%u namespace=%d view=%u key=0x%016llX tag=%u slot=%u hgen=%u "
                        "ogen=%u rsat=0x%08X region=%d bubble=%u cell=%u update=%s update_bits=%u "
-                       "bootstrap=%u combined=%u preseed=%u",
+                       "bootstrap=%u combined=%u preseed=%u preseed_attempt=%u native_index=%d",
                        sent ? "sent" : "fail",
                        static_cast<unsigned long long>(entityCreates[index].token),
                        static_cast<unsigned>(owed[index].entityCreateAttempts),
@@ -3840,7 +3942,11 @@ void service(std::uint64_t now) noexcept {
                        static_cast<unsigned>(entityCreates[index].updateBits),
                        entityCreates[index].bootstrapScheduler ? 1U : 0U,
                        entityCreates[index].combinedCreate ? 1U : 0U,
-                       entityCreates[index].targetPreseed ? 1U : 0U);
+                       entityCreates[index].targetPreseed ? 1U : 0U,
+                       entityCreates[index].targetPreseed
+                           ? static_cast<unsigned>(owed[index].targetPreseedAttempts)
+                           : 0U,
+                       entityCreates[index].nativeViewIndex);
             }
         }
         if (!sent) {
@@ -3851,6 +3957,9 @@ void service(std::uint64_t now) noexcept {
 
 /** Drops one group session, leaving the link and its other sessions alone. */
 void drop(std::uint64_t sessionId) noexcept {
+    bool targetPreseedRetired = false;
+    std::uint64_t retiredToken = 0;
+    std::int32_t retiredNativeIndex = -1;
     AcquireSRWLockExclusive(&g_lock);
     state::gameplay::PeerLink* const peer = find_session_locked(sessionId);
     if (peer != nullptr) {
@@ -3860,9 +3969,21 @@ void drop(std::uint64_t sessionId) noexcept {
         for (std::size_t index = 0; index < peer->sessions.size(); ++index) {
             if (peer->sessions[index] == sessionId) {
                 const std::uint64_t removed = peer->views[index].token;
+                const std::int32_t removedNativeViewIndex = peer->views[index].nativeViewIndex;
+                const bool removesTargetPreseed =
+                    removed != 0 && removed == peer->targetPreseedToken
+                    && removedNativeViewIndex == peer->targetPreseedNativeViewIndex
+                    && peer->targetPreseedAwaitingExplicitClear;
                 peer->sessions[index] = 0;
                 peer->views[index] = {};
-                if (removed == selected || removed == peer->entityCreateToken) {
+                if (removed == selected || removed == peer->entityCreateToken
+                    || removesTargetPreseed) {
+                    targetPreseedRetired =
+                        retire_target_preseed(*peer, removed, removedNativeViewIndex);
+                    if (targetPreseedRetired) {
+                        retiredToken = removed;
+                        retiredNativeIndex = peer->targetPreseedNativeViewIndex;
+                    }
                     reset_entity_create(*peer);
                 } else {
                     peer->entityCreateGate = 0xFF;
@@ -3872,6 +3993,14 @@ void drop(std::uint64_t sessionId) noexcept {
         }
     }
     ReleaseSRWLockExclusive(&g_lock);
+    if (targetPreseedRetired) {
+        report(core::log::Level::info,
+               "ev=gameplay stage=entity-create-preseed result=retired reason=session-drop "
+               "token=0x%016llX native_index=%d attempt=1 limit=%u",
+               static_cast<unsigned long long>(retiredToken),
+               retiredNativeIndex,
+               static_cast<unsigned>(kTargetPreseedAttemptLimit));
+    }
 }
 
 /** Drops every link at one endpoint, which is what a connect-closed names. */

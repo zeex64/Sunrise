@@ -3414,3 +3414,62 @@ The integrated Release build containing the actor-like capture, live namespace c
 arbitration telemetry, and strict slot-13 target preseed is SHA-256
 `b810e23321d5ad504fecfadbf2fb741d7e99c3deb4dd1f04d1ab6920647f4d2e`. The Release and deployed
 game DLLs match exactly.
+
+### `b810e233...` preseed result and exact-incarnation retry
+
+The strict preseed executed successfully at `t=88051`. The selected destination was token
+`0x9EAA300100200003`, namespace 2, scheduler view 1, region/bubble/cell `24/3/11`, fixed slot 13,
+object generation 2, and Vandal RSAT `0x815B204B`. Packet 155 carried the proven 501-bit combined
+body. The client consumed one 216-bit entity-list record, decoded `0x0020000D` with flags
+`0x0003`, promoted it in manager `0x4730E48`, and changed namespace-2 occupancy from zero to
+`0x00002000`. A direct transport acknowledgement arrived 21 ms later. Packet grammar, handler
+alignment, target-manager routing, slot selection, spatial cell, create/update decode, promotion,
+and transport acceptance are therefore all proven.
+
+The first missing boundary was same-incarnation persistence into dirty service. The destination
+manager was not native-current, and the first region-24 transition was later preempted. The target
+session was explicitly dropped and its native family disappeared about 60 ms later. A subsequent
+region-24 visit reused the same token, view address, and manager address, but its slot 13 was
+pristine again. When this later view finally became native-current, natural bootstrap occupied
+slots 0 through 12 and repeated watched dirty-service calls saw slot 13 as unmapped and clean. No
+type-2 job, apply callback, kind-0 construction, target native registration, or bind occurred.
+
+The client-chosen stage-two view index supplies the incarnation identity which token and native
+addresses cannot. The failed preseed used native index 1; the later successful target handshake
+used index 2. `ViewSignature` now carries that index from both stage-four publication and stage-five
+completion. A strict preseed send persists its token/index and a two-attempt peer-link budget.
+`clear_view` changes no retry authorization. An exact `drop` must match both the persisted token and
+native index before recording retirement. Only a later bound stage-five view with the same token,
+a valid different index, and the retired tombstone may reopen the two-view path. Attempt two remains
+gated on inactive-target preseed status, the exact two-view/275-bit identity, fresh z-leg direction,
+fixed manager stride, pristine slot 13 and generations, RSAT/update availability, and full send-time
+plan equality including the native index. Generic and post-handoff paths remain blocked throughout
+the one-attempt retirement interval. Release SHA-256:
+`f80b2cebe4e5f44aced9780f7552ff8a783524b1ca4623b5c9fc93fe77174165`.
+
+The first accepted record republished a 130-bit player-X+3 update, so the observed second-incarnation
+window has a bit-valid payload available. It encodes the earlier position and is therefore a native
+construction/lifecycle test, not a guarantee that the object will remain beside a player who moved
+far away. If no capture is available, attempt two fails closed rather than calling a native encoder
+from the server thread or fabricating transform bits.
+
+### Spatial ownership, slices, and supplied public manifest
+
+The kind-0 entity-create envelope does not carry a distinct activity slice-set identifier. It
+carries the replication owner/namespace, an explicit spatial cell, the sobject definition, and
+component state including transform. Multiple enemies normally share the same replication view and
+spatial cell; their handles and transforms distinguish them. The overlay's `slice unknown` is a
+separate missing activity diagnostic and is not a value that can be filled into this entity record.
+The former audible region-408/cell-145 test demonstrated only that audio could resolve the decoded
+transform while the object belonged to the outgoing world; it did not prove render ownership or
+cell 145 was correct for the physical region-24 view.
+
+`/home/zeex64/Documents/manifest` is Bungie's public world manifest version
+`87221.20.09.10.1506-2`. It provides high-level activity, destination, graph, bubble, location, and
+world-position records. In particular, decimal bubble hash `3340296448` (`0xC718E100`) maps to the
+EDZ Outskirts and has authored location entries. The database contains neither target RSAT
+`0x815B204B` nor the native scheduler/entity records and does not expose the runtime replication
+namespace, spatial-cell table, or slice-set state. It is useful for validating public bubble names
+and approximate transforms, but it cannot supply an enemy baseline or override the lifecycle proof
+above. Its build also differs from the target runtime, so hashes and coordinates are corroborating
+evidence rather than a wire-format oracle.

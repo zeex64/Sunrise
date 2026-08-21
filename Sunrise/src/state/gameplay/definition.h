@@ -88,6 +88,8 @@ inline constexpr std::size_t kViewListCapacity = 16;
 struct ViewSignature {
     std::array<std::byte, kViewListCapacity> list{};
     std::uint64_t token{};
+    /** Client-chosen native view index from stage two; distinguishes token reincarnations. */
+    std::int32_t nativeViewIndex{-1};
     std::uint8_t kind{};
     std::uint8_t listCount{};
     bool hasList{};
@@ -246,6 +248,18 @@ struct PeerLink {
     bool twoViewProbeAccepted{};
     /** Suppresses repeat or pre-existing remote-layout mutation diagnostics. */
     bool twoViewProbeMutationReported{};
+    /** Destination token used by the most recent strict inactive-manager preseed. */
+    std::uint64_t targetPreseedToken{};
+    /** Client-chosen native view index used by that preseed incarnation. */
+    std::int32_t targetPreseedNativeViewIndex{-1};
+    /** Strict destination-manager preseeds attempted across this peer-link lifetime. */
+    std::uint8_t targetPreseedAttempts{};
+    /** The preseeded incarnation must be explicitly dropped before one retry may be armed. */
+    bool targetPreseedAwaitingExplicitClear{};
+    /** The exact preseeded incarnation was dropped and is awaiting a different native index. */
+    bool targetPreseedRetired{};
+    /** A later bound incarnation authorized only the second strict target-preseed attempt. */
+    bool targetPreseedRearmPending{};
     /** Exact stable multi-view layout tested after native PUBLIC CURRENT has changed. */
     SchedulerSignature postHandoffProbeScheduler{};
     /** Current-world token and view index authorized by that exact layout. */
