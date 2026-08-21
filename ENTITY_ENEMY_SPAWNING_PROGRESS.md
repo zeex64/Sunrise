@@ -1,33 +1,32 @@
 # Entity and Enemy Spawning Progress
 
-Last updated: 2026-08-20
+Last updated: 2026-08-21
 
 ## Current outcome
 
-Sunrise has proven the server-to-client native entity path, including one successful
-server-authored object allocation. It has not yet produced a visible, functioning enemy.
+Sunrise has now proven the complete server-to-client native object lifecycle for the synthetic
+Vandal: decode, promotion, delayed service when its namespace becomes native current, type-2 job,
+native construction, and glue bind. It has not yet produced a visible, functioning enemy.
 
 The distinction matters: the hand-built entity is currently a wire-protocol probe. Normal enemies
 should originate from the authored activity/director layer, which evaluates triggers, spawn rules,
 squads, and encounters before publishing native objects through the replication path.
 
-The latest broad-spawn control restored the configuration that reliably constructs an audible
-Vandal. The new in-game entity overlay proves why it is not visible: the bound entity belongs to
-Town replication namespace 1 at region 408 / bubble 51 / cell 145, while the player and renderer
-are currently in Basin at region 24 / bubble 3. This is an explicit owner mismatch, not a failed
-RSAT load, type-2 job, kind-0 construction, or native glue bind.
+The latest runtime result also corrects the ownership model. At the initial EDZ spawn the sessions
+overlay is accurate: region 408 / bubble 51 is the client's native `CURRENT` simulation and region
+24 / bubble 3 is the semantic `TARGET`. The player/activity region can report 24 before the native
+simulation role swaps. The old region-408 test was audible because it was owned by the active
+simulation; sending the Vandal to target region 24 delayed construction until namespace 2 became
+native current, at which point that view was already beginning to retire.
 
-The next test removes that mismatch by promoting the simulation manager belonging to the player's
-coherent current region. Ghidra shows that `FUN_1416EC250` is the sole non-initialization writer of
-the active manager identity at runtime `+0x560E0`; it first marks the chosen manager container at
-`+0x15C`. Sunrise now mirrors only those two manager-local writes. The override is fail-closed
-until the client is in-world, the native slice equals the membership region, the region's group
-view is bound, and the captured manager pointer exactly matches that namespace's fixed runtime
-slot. A normal in-world z-leg is allowed to report the new region while the retiring native slice
-still names the old one; that mismatch is diagnostic and is the transition this override repairs.
-Initial loading remains blocked by the fresh `in_world` requirement. The atomic two-view create
-then targets that same current host token, namespace, region, bubble, and map-global cell instead
-of the outgoing Town view.
+The next immediate-spawn test therefore keeps semantic authority on scheduler view 1 but assigns
+the entity to the distinct native-`CURRENT` owner on view 0. That owner is selected from the fresh
+active-manager snapshot, reconstructed fixed manager array, unique bound view capture, and exact
+scheduler member. Region, bubble, and cell come from that token rather than the semantic player
+region; the expected initial result is namespace 1 at 408/51/145. The path remains exact
+two-view/275-bit framing, requires the natural 13-object baseline and pristine slot 13, and emits
+the proven 501-bit body. It performs no native manager write, and inactive-target preseed sending
+is disabled for this direct test.
 
 ## Progress by layer
 
@@ -36,7 +35,7 @@ of the outgoing Town view.
 | Gameplay session and views | Working and substantially stabilized |
 | Replication scheduler | One-view 203-bit and two-view 501-bit framing are runtime validated |
 | Native entity creation | Shared Vandal RSAT `0x815B204B` reaches type-2, kind-0, native registration, and a completed glue bind |
-| Entity placement and updates | Nearby transform and positional audio work; the current probe is bound to Town while the player is in Basin |
+| Entity placement and updates | Nearby transform and positional audio work; the next probe is owned by the client's actual native-current view |
 | Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
 
 ## Current debug overlays
@@ -45,20 +44,22 @@ of the outgoing Town view.
   client lifecycle in one snapshot. It shows identity/RSAT, namespace/view/token, region/bubble/
   cell, wire decode, promotion/type-2/apply state, native construction/binding, and the active
   simulation manager versus the current region's requested namespace.
-- The latest screenshot shows `State bound`, RSAT `0x815B204B`, namespace 1/view 0, spatial owner
-  408/51/145, and `Current world region 24 OWNER MISMATCH`. That is the present visual blocker.
+- The entity overlay now compares the entity owner with native-current ownership rather than the
+  earlier semantic player-region value. This prevents 408/51 from being mislabeled as an owner
+  mismatch while namespace 1 is still the active simulation manager.
 - The player status overlay now separates the client-reported Region from Slice set. Bubble is
   derived from the scenario layout and the reported region; Slice set comes from the native world
   manager when the client-authored teleport field is absent. Closest-spawn caching is also keyed
   by destination so a previous map cannot linger for 250 ms.
 - The session overlay no longer presents dormant host-session cache entries as active instances.
-  Rows now survive only while current, admitted, or carried by a live link, and are labeled
-  `current` or `overlap`. In the latest screenshot both 408 and 24 are genuinely connected/ready;
-  408 is therefore an outgoing overlap, not merely a stale UI row.
-- Current overlay/debug Release SHA-256:
-  `5ac62efcbd6f0db1c880a32d6783355a17ac62fa478544b822b2d3115d0bf670`.
-- Current-region manager promotion Release SHA-256:
-  `54c55d9b2e6cdc40ac3634181d36506d23f3bc734d7632355bd0909d3c419edf`.
+  Rows now survive only while semantically current, admitted, or carried by a live link. Native
+  ownership takes precedence in the role label: the active simulation is `current`, the
+  player-reported destination is `target`, and another live row is `overlap`. Thus the initial
+  408/51 `current` plus 24/3 `target` rows are two phases of one player's handoff, not stale
+  sessions or two players.
+- Current native-current immediate-spawn and overlay Release build (deployed):
+  SHA-256 `42cba716c50137b0ac680ac9af85e3539ce127bf6227a419e5ee03fc3e004261`,
+  size 15,209,472 bytes.
 
 ## Confirmed progress
 
@@ -78,6 +79,23 @@ of the outgoing Town view.
   schema body.
 
 ## Latest runtime checkpoint
+
+The completed run of `f80b2ceb...` proves that an inactive target preseed can survive into the
+native-current lifecycle:
+
+- At `t=75397`, attempt one sent the Vandal to target token view 1, namespace 2, region/bubble/cell
+  `24/3/11`. The client decoded entity `0x0020000D`, promoted it, and retained the dirty slot while
+  namespace 2 was inactive.
+- Namespace 2 became native current at `t=95010`. At `t=95017` dirty service mapped slot 13 and the
+  type-2 job returned success; by `t=95020` the target RSAT had a native object, and at `t=95021`
+  glue binding completed successfully. The object unbound at `t=103204` as that view retired.
+- The exact-incarnation retry correctly retired native view index 1 and rearmed when the same token
+  returned as native view index 2 at `t=151250`. It did not send a second record because the first
+  decode reported `entity-player-position result=missing`, leaving no reusable 130-bit transform
+  capture. This is a fail-closed payload-availability result, not a retry-lifecycle failure.
+- The synthetic record has no top-level activity slice field. Ownership is expressed through its
+  replication view/namespace plus spatial cell and transform; Ghidra and natural traffic show
+  multiple distinct entities sharing the same inherited cell.
 
 The run of commit `b46dabce` completed the stationary-create milestone:
 
@@ -897,6 +915,10 @@ Once the director evaluates an encounter and creates native squad/member objects
   attempt two. `clear_view` cannot rearm. The second send remains target-preseed-only, repeats every
   scheduler/manager/z-leg/slot/generation/RSAT/spatial/send-time check, and the peer-link lifetime
   cap is two. Release SHA-256: `f80b2cebe4e5f44aced9780f7552ff8a783524b1ca4623b5c9fc93fe77174165`.
+- The completed `f80b2ceb...` run then carried attempt one through native-current service and bind:
+  send/decode at `t=75397`, namespace-2 activation at `t=95010`, dirty/type-2/native/bind success
+  across `t=95017..95021`, and view-retirement unbind at `t=103204`. Attempt two rearmed on native
+  view index 2 at `t=151250` but remained unsent because no 130-bit transform capture was available.
 - The synthetic entity record has no explicit activity slice-set field. Its residency inputs are
   replication owner/view, spatial cell, and transform; many entities normally share one view and
   cell. The public API manifest supplied separately maps bubble hash `0xC718E100` to the EDZ
@@ -909,6 +931,9 @@ Once the director evaluates an encounter and creates native squad/member objects
 - Runtime log: `/home/zeex64/Games/Sunrise/bin/x64/Sunrise/logs/sunrise.log`
 - Detailed reverse-engineering notes: `ENTITY_SPAWNING_RE_NOTES.md`
 - The deployed game DLL matches the Release SHA-256 above.
+- The native-current immediate-spawn Release DLL is deployed with SHA-256
+  `42cba716c50137b0ac680ac9af85e3539ce127bf6227a419e5ee03fc3e004261` and size
+  15,209,472 bytes.
 
 ## Assessment of upstream commit `b8ccfb9b`
 

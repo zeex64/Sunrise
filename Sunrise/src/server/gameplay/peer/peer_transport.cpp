@@ -109,12 +109,12 @@ constexpr std::uint16_t kProvenSchedulerWireBits = 203;
 constexpr std::uint8_t kTwoViewProbeViewCount = 2;
 /** Captured two-view signature, including its one-bit update gate. */
 constexpr std::uint16_t kTwoViewProbeWireBits = 275;
-/** The transition capture orders the outgoing EDZ view before the player's current region view. */
-constexpr std::uint8_t kTwoViewProbeEntityView = 1;
+/** The transition capture orders native PUBLIC CURRENT before the semantic destination view. */
+constexpr std::uint8_t kTwoViewProbeEntityView = 0;
 constexpr std::uint8_t kTwoViewProbeAuthorityView = 1;
 /**
- * Stored 275-bit signature, old view's five-bit empty remainder, the current view's explicit
- * event bit, and its 220-bit entity body. The stored final signature bit supplies view 0's event.
+ * Stored 275-bit signature, native-current view 0's 220-bit entity remainder, then semantic
+ * target view 1's complete six-bit empty body. The signature's final bit supplies view 0's event.
  */
 constexpr std::uint16_t kTwoViewProbeBodyBits = 501;
 /** Fail before the native four-second corrupt-packet timeout can close the channel. */
@@ -130,10 +130,12 @@ constexpr std::uint64_t kTargetPreseedZLegFreshMilliseconds = 1500;
 /** The runtime owns exactly three fixed-stride simulation-manager containers. */
 constexpr std::int32_t kTargetPreseedManagerCount = 3;
 constexpr std::uintptr_t kTargetPreseedManagerStride = 0x11E08;
-/** Slots 0 and 1 are claimed by native bootstrap when the destination manager becomes active. */
-constexpr std::uint16_t kTargetPreseedSlot = 13;
+/** The proven native-current baseline occupies slots 0..12, leaving slot 13 pristine. */
+constexpr std::uint16_t kFirstEntitySlot = 13;
 /** One retry is allowed only after the first destination-view incarnation is removed. */
 constexpr std::uint8_t kTargetPreseedAttemptLimit = 2;
+/** Keeps the destination-manager preseed available for diagnostics but out of this direct test. */
+constexpr bool kTargetPreseedSendEnabled = false;
 SRWLOCK g_lock{SRWLOCK_INIT};
 std::array<state::gameplay::PeerLink, state::gameplay::kAssociationCapacity> g_peers;
 /** Channel ids this host hands out. The peer refuses one that does not increase. */
@@ -202,14 +204,14 @@ struct EntityCreatePlan {
     bool present{};
 };
 
-/** One fail-contained scheduler validation carrying an atomic create in the current live view. */
+/** One fail-contained scheduler validation carrying an atomic create in native PUBLIC CURRENT. */
 struct TwoViewProbePlan {
     state::gameplay::SchedulerSignature scheduler{};
-    /** Current-region authority token retained for topology and acknowledgement proof. */
+    /** Semantic current-region authority retained for topology and acknowledgement proof. */
     std::uint64_t token{};
-    /** Current scheduler-view token whose entity manager receives the bounded record. */
+    /** Native-current scheduler token whose exact manager receives the bounded record. */
     std::uint64_t entityToken{};
-    /** Current-region authority view and entity owner. */
+    /** Semantic authority lane and distinct native-current entity lane. */
     std::uint8_t selectedView{};
     std::uint8_t entityView{};
     std::uint8_t remoteViews{};
@@ -751,7 +753,7 @@ post_handoff_probe_body_bits(const state::gameplay::SchedulerSignature& schedule
     return true;
 }
 
-/** Writes the exact two-view signature and one atomic create in the current-region view. */
+/** Writes the exact two-view signature and one atomic create in native PUBLIC CURRENT. */
 [[nodiscard]] bool write_two_view_probe(bits::Writer& writer,
                                         const TwoViewProbePlan& plan,
                                         const EntityCreatePlan& entityCreate) noexcept {
@@ -759,8 +761,9 @@ post_handoff_probe_body_bits(const state::gameplay::SchedulerSignature& schedule
         || plan.scheduler.viewCount != kTwoViewProbeViewCount
         || plan.scheduler.wireBits != kTwoViewProbeWireBits
         || plan.selectedView != kTwoViewProbeAuthorityView
-        || plan.entityView != kTwoViewProbeEntityView || plan.entityToken == 0
-        || plan.entityToken != plan.token || !entityCreate.present || !entityCreate.combinedCreate
+        || plan.entityView != kTwoViewProbeEntityView || plan.entityToken == 0 || plan.token == 0
+        || plan.entityToken == plan.token || !entityCreate.present
+        || plan.scheduler.views[plan.selectedView].key != plan.token || !entityCreate.combinedCreate
         || entityCreate.updateOnly || entityCreate.updateBits != kFirstEntityUpdateBits
         || entityCreate.token != plan.entityToken || entityCreate.viewIndex != plan.entityView
         || entityCreate.namespaceId < 0
@@ -772,8 +775,8 @@ post_handoff_probe_body_bits(const state::gameplay::SchedulerSignature& schedule
     }
     for (std::size_t index = 0; index < kTwoViewProbeViewCount; ++index) {
         if (index == plan.entityView) {
-            // Only view zero inherits an event bit from the captured signature. The current view
-            // is entry one in this transition and therefore publishes its own event absence.
+            // Native CURRENT is view zero, so its event bit is already carried by the captured
+            // signature. The later semantic target remains a complete six-bit empty handler.
             if ((index != 0 && !writer.write(0, 1))
                 || !write_entity_create_view(writer, entityCreate)) {
                 return false;
@@ -846,64 +849,183 @@ post_handoff_probe_body_bits(const state::gameplay::SchedulerSignature& schedule
     return found;
 }
 
-/**
- * Builds the one-shot two-view validation only for the bound view owned by the current world.
- * The remote layout need only be readable: direct packet acknowledgement, not mutation, is proof.
- */
-[[nodiscard]] bool prepare_two_view_probe(const state::gameplay::PeerLink& peer,
-                                          const SelectedReplicationView& selected,
-                                          TwoViewProbePlan& output) noexcept {
-    output = {};
-    if (!selected.present || !selected.signature.bound || selected.signature.token == 0
-        || !selected.capturePresent || !selected.worldPresent
-        || selected.world.region == state::activity::membership::kAbsentRegionIndex) {
-        return false;
-    }
-    const std::uint64_t currentGroup = group::advertised_group_session(selected.world.region);
-    if (currentGroup == 0
-        || group::holding_group_session(selected.signature.token) != currentGroup) {
-        return false;
-    }
-
+/** @return True when one capture is an exact, unique member of the live scheduler. */
+[[nodiscard]] bool
+exact_scheduler_member(const state::gameplay::PeerLink& peer,
+                       const client::hooks::network::entity_slot_probe::ViewCapture& capture,
+                       std::uint8_t& output) noexcept {
     const state::gameplay::SchedulerSignature& scheduler = peer.schedulerSignature;
-    const client::hooks::network::entity_slot_probe::ViewCapture& capture = selected.capture;
-    if (!scheduler.present || scheduler.viewCount != kTwoViewProbeViewCount
-        || scheduler.wireBits != kTwoViewProbeWireBits || capture.token != selected.signature.token
-        || capture.schedulerKey != capture.token
-        || !scheduler_matches_local_capture(scheduler, capture)
-        || !capture.schedulerRemoteSignatureValid
-        || capture.schedulerRemoteViewCount > capture.schedulerRemoteViewKeys.size()) {
+    if (capture.token == 0 || capture.schedulerKey != capture.token
+        || !scheduler_matches_local_capture(scheduler, capture)) {
         return false;
     }
-
-    std::size_t selectedIndex = scheduler.views.size();
+    std::size_t match = scheduler.views.size();
     for (std::size_t index = 0; index < scheduler.viewCount; ++index) {
         if (scheduler.views[index].key != capture.schedulerKey
             || scheduler.views[index].tag != capture.schedulerTag) {
             continue;
         }
-        // Duplicate logical entries make the selected per-view handler ambiguous.
-        if (selectedIndex != scheduler.views.size()) {
+        if (match != scheduler.views.size()) {
             return false;
         }
-        selectedIndex = index;
+        match = index;
     }
-    if (selectedIndex == scheduler.views.size() || selectedIndex != kTwoViewProbeAuthorityView) {
+    if (match == scheduler.views.size()) {
         return false;
     }
-    const std::uint64_t entityToken = scheduler.views[selectedIndex].key;
-    if (entityToken == 0 || entityToken != capture.schedulerKey
-        || !unique_view_token(peer, entityToken)) {
+    output = static_cast<std::uint8_t>(match);
+    return true;
+}
+
+/**
+ * Selects the one bound view backed by native PUBLIC CURRENT's exact manager.
+ *
+ * The active-manager snapshot's named token can already be the semantic destination while its
+ * active namespace still owns the outgoing region.  Its managerMatched witness nevertheless
+ * proves the fixed manager-array base.  Reconstruct that base, then require exactly one bound
+ * scheduler member whose captured manager is the active namespace's exact address.
+ */
+[[nodiscard]] SelectedReplicationView
+select_native_current_entity_view(const state::gameplay::PeerLink& peer) noexcept {
+    SelectedReplicationView output{};
+    output.worldPresent = state::activity::membership::primary_world(output.world);
+    const state::gameplay::SchedulerSignature& scheduler = peer.schedulerSignature;
+    if (!output.worldPresent || !scheduler.present || scheduler.viewCount != kTwoViewProbeViewCount
+        || scheduler.wireBits != kTwoViewProbeWireBits) {
+        return output;
+    }
+
+    client::hooks::network::sobject_apply_probe::ActiveManagerDebugSnapshot active{};
+    const std::uint64_t now = GetTickCount64();
+    if (!client::hooks::network::sobject_apply_probe::active_manager_debug_snapshot(active)
+        || active.observedAt == 0 || now < active.observedAt
+        || now - active.observedAt >= kTargetPreseedActiveManagerFreshMilliseconds
+        || !active.managerMatched || active.token == 0 || active.requestedNamespace < 0
+        || active.requestedNamespace >= kTargetPreseedManagerCount || active.activeAfter < 0
+        || active.activeAfter >= kTargetPreseedManagerCount
+        || active.activeBefore != active.activeAfter || !unique_view_token(peer, active.token)) {
+        return output;
+    }
+
+    std::size_t witnessCount = 0;
+    const std::uint64_t witnessGroup = group::holding_group_session(active.token);
+    for (std::size_t index = 0; index < peer.views.size(); ++index) {
+        const state::gameplay::ViewSignature& view = peer.views[index];
+        if (view.bound && view.token == active.token && witnessGroup != 0
+            && peer.sessions[index] == witnessGroup) {
+            ++witnessCount;
+        }
+    }
+    client::hooks::network::entity_slot_probe::ViewCapture witness{};
+    std::uint8_t witnessSchedulerIndex = 0;
+    if (witnessCount != 1 || !client::hooks::network::entity_slot_probe::find(active.token, witness)
+        || witness.token != active.token || witness.manager == nullptr
+        || witness.namespaceId != active.requestedNamespace
+        || !exact_scheduler_member(peer, witness, witnessSchedulerIndex)) {
+        return output;
+    }
+
+    const auto witnessManager = reinterpret_cast<std::uintptr_t>(witness.manager);
+    const auto witnessOffset =
+        static_cast<std::uintptr_t>(active.requestedNamespace) * kTargetPreseedManagerStride;
+    if (witnessManager < witnessOffset) {
+        return output;
+    }
+    const auto managerBase = witnessManager - witnessOffset;
+    const auto expectedActiveManager =
+        managerBase + static_cast<std::uintptr_t>(active.activeAfter) * kTargetPreseedManagerStride;
+
+    std::size_t currentCount = 0;
+    for (std::size_t index = 0; index < peer.views.size(); ++index) {
+        const state::gameplay::ViewSignature& view = peer.views[index];
+        if (!view.bound || view.token == 0 || !unique_view_token(peer, view.token)) {
+            continue;
+        }
+        client::hooks::network::entity_slot_probe::ViewCapture capture{};
+        std::uint8_t schedulerIndex = 0;
+        std::int32_t region = state::activity::membership::kAbsentRegionIndex;
+        const std::uint64_t holdingGroup = group::holding_group_session(view.token);
+        if (!client::hooks::network::entity_slot_probe::find(view.token, capture)
+            || capture.token != view.token || capture.manager == nullptr
+            || capture.namespaceId != active.activeAfter
+            || reinterpret_cast<std::uintptr_t>(capture.manager) != expectedActiveManager
+            || !exact_scheduler_member(peer, capture, schedulerIndex) || holdingGroup == 0
+            || peer.sessions[index] != holdingGroup
+            || !group::holding_region_index(view.token, region)
+            || region == state::activity::membership::kAbsentRegionIndex) {
+            continue;
+        }
+        ++currentCount;
+        output.signature = view;
+        output.capture = capture;
+        output.capturePresent = true;
+    }
+    output.present = currentCount == 1;
+    if (!output.present) {
+        output.signature = {};
+        output.capture = {};
+        output.capturePresent = false;
+    }
+    return output;
+}
+
+/**
+ * Builds the one-shot two-view validation from semantic authority to native PUBLIC CURRENT.
+ * The remote layout need only be readable: direct packet acknowledgement, not mutation, is proof.
+ */
+[[nodiscard]] bool prepare_two_view_probe(const state::gameplay::PeerLink& peer,
+                                          const SelectedReplicationView& authority,
+                                          const SelectedReplicationView& entity,
+                                          TwoViewProbePlan& output) noexcept {
+    output = {};
+    if (!authority.present || !authority.signature.bound || authority.signature.token == 0
+        || !authority.capturePresent || !authority.worldPresent
+        || authority.world.region == state::activity::membership::kAbsentRegionIndex
+        || !entity.present || !entity.signature.bound || entity.signature.token == 0
+        || !entity.capturePresent || !entity.worldPresent
+        || entity.world.region != authority.world.region) {
+        return false;
+    }
+    const std::uint64_t currentGroup = group::advertised_group_session(authority.world.region);
+    if (currentGroup == 0
+        || group::holding_group_session(authority.signature.token) != currentGroup) {
+        return false;
+    }
+
+    const state::gameplay::SchedulerSignature& scheduler = peer.schedulerSignature;
+    const client::hooks::network::entity_slot_probe::ViewCapture& authorityCapture =
+        authority.capture;
+    const client::hooks::network::entity_slot_probe::ViewCapture& entityCapture = entity.capture;
+    if (!scheduler.present || scheduler.viewCount != kTwoViewProbeViewCount
+        || scheduler.wireBits != kTwoViewProbeWireBits
+        || authorityCapture.token != authority.signature.token
+        || entityCapture.token != entity.signature.token
+        || authorityCapture.token == entityCapture.token
+        || !scheduler_matches_local_capture(scheduler, authorityCapture)
+        || !scheduler_matches_local_capture(scheduler, entityCapture)
+        || !authorityCapture.schedulerRemoteSignatureValid
+        || authorityCapture.schedulerRemoteViewCount
+               > authorityCapture.schedulerRemoteViewKeys.size()) {
+        return false;
+    }
+
+    std::uint8_t authorityIndex = 0;
+    std::uint8_t entityIndex = 0;
+    if (!exact_scheduler_member(peer, authorityCapture, authorityIndex)
+        || !exact_scheduler_member(peer, entityCapture, entityIndex)
+        || authorityIndex != kTwoViewProbeAuthorityView || entityIndex != kTwoViewProbeEntityView
+        || !unique_view_token(peer, authorityCapture.token)
+        || !unique_view_token(peer, entityCapture.token)) {
         return false;
     }
 
     output.scheduler = scheduler;
-    output.token = selected.signature.token;
-    output.entityToken = entityToken;
-    output.selectedView = static_cast<std::uint8_t>(selectedIndex);
-    output.entityView = static_cast<std::uint8_t>(selectedIndex);
-    output.remoteViews = capture.schedulerRemoteViewCount;
-    output.remoteAlreadyMatches = scheduler_matches_remote_capture(scheduler, capture);
+    output.token = authority.signature.token;
+    output.entityToken = entity.signature.token;
+    output.selectedView = authorityIndex;
+    output.entityView = entityIndex;
+    output.remoteViews = authorityCapture.schedulerRemoteViewCount;
+    output.remoteAlreadyMatches = scheduler_matches_remote_capture(scheduler, authorityCapture);
     output.present = true;
     return true;
 }
@@ -1041,25 +1163,25 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         || probe.scheduler.viewCount != kTwoViewProbeViewCount
         || probe.scheduler.wireBits != kTwoViewProbeWireBits
         || probe.selectedView != kTwoViewProbeAuthorityView
-        || probe.entityView != kTwoViewProbeEntityView || probe.entityToken == 0
-        || probe.entityToken != probe.token
+        || probe.entityView != kTwoViewProbeEntityView || probe.entityToken == 0 || probe.token == 0
+        || probe.entityToken == probe.token
+        || probe.scheduler.views[probe.selectedView].key != probe.token
         || probe.scheduler.views[probe.entityView].key != probe.entityToken) {
         gate = EntityCreateGate::schedulerShape;
         return false;
     }
     if (!selected.present || !selected.signature.bound || selected.signature.token == 0
-        || selected.signature.token != probe.token || !selected.worldPresent
+        || selected.signature.token != probe.entityToken || !selected.worldPresent
         || selected.world.region == state::activity::membership::kAbsentRegionIndex) {
         gate = EntityCreateGate::view;
         return false;
     }
     const std::uint64_t currentGroup = group::advertised_group_session(selected.world.region);
-    if (currentGroup == 0
-        || group::holding_group_session(selected.signature.token) != currentGroup) {
+    if (currentGroup == 0 || group::holding_group_session(probe.token) != currentGroup) {
         gate = EntityCreateGate::view;
         return false;
     }
-    if (!unique_view_token(peer, probe.entityToken)) {
+    if (!unique_view_token(peer, probe.token) || !unique_view_token(peer, probe.entityToken)) {
         gate = EntityCreateGate::view;
         return false;
     }
@@ -1078,7 +1200,9 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         gate = EntityCreateGate::candidate;
         return false;
     }
-    if (capture.slot >= 0x2000 || capture.availableCount == 0) {
+    if (capture.occupiedCount != kFirstEntityBaselineOccupied
+        || capture.occupiedLow != ((1U << kFirstEntityBaselineOccupied) - 1U)
+        || capture.slot != kFirstEntitySlot || capture.availableCount == 0) {
         gate = EntityCreateGate::slot;
         return false;
     }
@@ -1095,11 +1219,42 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         gate = EntityCreateGate::spatialCell;
         return false;
     }
-    std::uint16_t plannedSlot = capture.slot;
-    std::uint8_t plannedHandleGeneration = capture.handleGeneration;
+
+    const SelectedReplicationView activeSelection = select_native_current_entity_view(peer);
+    const bool nativeCurrent =
+        activeSelection.present && activeSelection.capturePresent
+        && activeSelection.signature.token == selected.signature.token
+        && activeSelection.signature.nativeViewIndex == selected.signature.nativeViewIndex
+        && activeSelection.capture.token == capture.token
+        && activeSelection.capture.namespaceId == capture.namespaceId
+        && activeSelection.capture.manager == capture.manager;
+    if (!nativeCurrent) {
+        gate = EntityCreateGate::activeManager;
+        return false;
+    }
+
+    client::hooks::network::entity_slot_probe::SlotInspection currentSlot{};
+    if (!client::hooks::network::entity_slot_probe::inspect_slot(
+            capture.manager, capture.namespaceId, kFirstEntitySlot, currentSlot)
+        || currentSlot.slot != kFirstEntitySlot || currentSlot.slot != capture.slot
+        || !currentSlot.available || !currentSlot.free || currentSlot.occupied
+        || !currentSlot.descriptorFree) {
+        gate = EntityCreateGate::slot;
+        return false;
+    }
+    if (currentSlot.handleGeneration != capture.handleGeneration
+        || currentSlot.reservedGeneration != capture.reservedGeneration
+        || currentSlot.objectGeneration != capture.objectGeneration
+        || currentSlot.handleGeneration != 0 || currentSlot.reservedGeneration != 0
+        || currentSlot.objectGeneration != 0) {
+        gate = EntityCreateGate::generation;
+        return false;
+    }
+
+    std::uint16_t plannedSlot = currentSlot.slot;
+    std::uint8_t plannedHandleGeneration = currentSlot.handleGeneration;
     bool targetPreseed = false;
-    if (!client::hooks::network::sobject_apply_probe::current_region_manager_active(
-            capture.token, capture.namespaceId)) {
+    if (!nativeCurrent && kTargetPreseedSendEnabled) {
         if (retained == nullptr && peer.targetPreseedAttempts >= kTargetPreseedAttemptLimit) {
             gate = EntityCreateGate::attempted;
             return false;
@@ -1110,8 +1265,8 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         }
         client::hooks::network::entity_slot_probe::SlotInspection preseedSlot{};
         if (!client::hooks::network::entity_slot_probe::inspect_slot(
-                capture.manager, capture.namespaceId, kTargetPreseedSlot, preseedSlot)
-            || preseedSlot.slot != kTargetPreseedSlot || !preseedSlot.available || !preseedSlot.free
+                capture.manager, capture.namespaceId, kFirstEntitySlot, preseedSlot)
+            || preseedSlot.slot != kFirstEntitySlot || !preseedSlot.available || !preseedSlot.free
             || preseedSlot.occupied || !preseedSlot.descriptorFree) {
             gate = EntityCreateGate::slot;
             return false;
@@ -1125,14 +1280,15 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         plannedHandleGeneration = preseedSlot.handleGeneration;
         targetPreseed = true;
     }
-    if (retained == nullptr && peer.targetPreseedRearmPending) {
+    if (kTargetPreseedSendEnabled && retained == nullptr && peer.targetPreseedRearmPending) {
         if (!targetPreseed || peer.targetPreseedAttempts != 1
             || capture.token != peer.targetPreseedToken || selected.signature.nativeViewIndex < 0
             || selected.signature.nativeViewIndex == peer.targetPreseedNativeViewIndex) {
             gate = targetPreseed ? EntityCreateGate::view : EntityCreateGate::activeManager;
             return false;
         }
-    } else if (retained == nullptr && targetPreseed && peer.targetPreseedAttempts != 0) {
+    } else if (kTargetPreseedSendEnabled && retained == nullptr && targetPreseed
+               && peer.targetPreseedAttempts != 0) {
         gate = EntityCreateGate::attempted;
         return false;
     }
@@ -1897,6 +2053,7 @@ capture_entity_create_gate(const state::gameplay::PeerLink& peer,
     client::hooks::network::entity_slot_probe::ViewCapture entityCapture{};
     const client::hooks::network::entity_slot_probe::ViewCapture* capture = nullptr;
     if (probe.present) {
+        output.token = probe.token;
         output.entityToken = probe.entityToken;
         output.authorityView = probe.selectedView;
         output.entityView = probe.entityView;
@@ -2949,14 +3106,16 @@ void consume_established(const state::gameplay::Endpoint& from,
     // timeout. Keep ordinary acknowledgements scheduler-free; multi-view data appears only in one
     // bounded validation or one entity packet after that exact validation succeeds.
     const SelectedReplicationView selected = select_replication_view(peer);
+    const SelectedReplicationView entitySelected = select_native_current_entity_view(peer);
     const bool viewPresent = selected.present && selected.signature.token != 0;
     if (twoViewProbe.present) {
         TwoViewProbePlan verified{};
         EntityCreatePlan verifiedEntity{};
         EntityCreateGate ignoredGate = EntityCreateGate::view;
-        if (!entityCreate.present || !prepare_two_view_probe(peer, selected, verified)
+        if (!entityCreate.present
+            || !prepare_two_view_probe(peer, selected, entitySelected, verified)
             || !prepare_entity_create_with_two_view_probe(
-                peer, selected, verified, &entityCreate, verifiedEntity, ignoredGate)
+                peer, entitySelected, verified, &entityCreate, verifiedEntity, ignoredGate)
             || verified.token != twoViewProbe.token
             || verified.entityToken != twoViewProbe.entityToken
             || verified.selectedView != twoViewProbe.selectedView
@@ -3003,7 +3162,7 @@ void consume_established(const state::gameplay::Endpoint& from,
         }
     }
     if (twoViewEntityScheduler) {
-        if (!selected.capturePresent || entityCreate.token != selected.signature.token
+        if (!entitySelected.capturePresent || entityCreate.token != entitySelected.signature.token
             || entityCreate.viewIndex >= scheduler.viewCount
             || scheduler.views[entityCreate.viewIndex].key != entityCreate.schedulerKey
             || scheduler.views[entityCreate.viewIndex].tag != entityCreate.schedulerTag) {
@@ -3412,9 +3571,10 @@ void service(std::uint64_t now) noexcept {
         // first guarded create directly so an idle zone does not need movement traffic to wake it.
         EntityCreatePlan candidate{};
         const SelectedReplicationView selected = select_replication_view(peer);
+        const SelectedReplicationView entitySelected = select_native_current_entity_view(peer);
         const bool firstAttempt = peer.entityCreateAttempts == 0;
         const bool targetPreseedLifecyclePending =
-            peer.targetPreseedAttempts == 1
+            kTargetPreseedSendEnabled && peer.targetPreseedAttempts == 1
             && (peer.targetPreseedAwaitingExplicitClear || peer.targetPreseedRetired
                 || peer.targetPreseedRearmPending);
         if (!peer.entityCreateAccepted && entity_create_accepted(peer)) {
@@ -3445,10 +3605,10 @@ void service(std::uint64_t now) noexcept {
         const bool validatedTwoView = two_view_layout_ready(peer, selected);
         const bool validatedPostHandoff = post_handoff_layout_ready(peer, selected);
         TwoViewProbePlan twoViewProbe{};
-        const bool twoViewProbeReady = !peer.twoViewProbeAttempted && firstAttempt
-                                       && !peer.entityCreateAccepted
-                                       && peer.stage == state::gameplay::PeerStage::connected
-                                       && prepare_two_view_probe(peer, selected, twoViewProbe);
+        const bool twoViewProbeReady =
+            !peer.twoViewProbeAttempted && firstAttempt && !peer.entityCreateAccepted
+            && peer.stage == state::gameplay::PeerStage::connected
+            && prepare_two_view_probe(peer, selected, entitySelected, twoViewProbe);
         PostHandoffProbePlan postHandoffProbe{};
         const bool postHandoffProbeReady =
             !targetPreseedLifecyclePending && !twoViewProbeReady && !validatedTwoView
@@ -3475,7 +3635,7 @@ void service(std::uint64_t now) noexcept {
                     gate = EntityCreateGate::controlQueue;
                 } else {
                     candidatePrepared = prepare_entity_create_with_two_view_probe(
-                        peer, selected, twoViewProbe, nullptr, candidate, gate);
+                        peer, entitySelected, twoViewProbe, nullptr, candidate, gate);
                 }
             } else if (targetPreseedLifecyclePending) {
                 // After the first preseed, only a retired and rebound strict target-preseed may
@@ -3531,7 +3691,12 @@ void service(std::uint64_t now) noexcept {
         if (peer.entityCreateGate != gateValue && gateReportCount < gateReports.size()) {
             peer.entityCreateGate = gateValue;
             gateReports[gateReportCount++] =
-                capture_entity_create_gate(peer, selected, twoViewProbe, candidate, gate, now);
+                capture_entity_create_gate(peer,
+                                           twoViewProbe.present ? entitySelected : selected,
+                                           twoViewProbe,
+                                           candidate,
+                                           gate,
+                                           now);
         }
         // An unacknowledged send queue keeps the packet going out until the peer confirms it.
         // Every packet burns one sequence, so the resend is paced.

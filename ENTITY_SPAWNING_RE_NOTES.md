@@ -3453,6 +3453,66 @@ construction/lifecycle test, not a guarantee that the object will remain beside 
 far away. If no capture is available, attempt two fails closed rather than calling a native encoder
 from the server thread or fabricating transform bits.
 
+### `f80b2ceb...` completed target lifecycle
+
+The subsequent run closes the native construction question for attempt one. At `t=75397`, the
+server sent the exact 501-bit two-view body with the entity on scheduler view 1, target token
+`...0003`, namespace 2, slot 13, and region/bubble/cell `24/3/11`. The client decoded entity
+`0x0020000D`, promoted it, and kept the dirty record while namespace 2 was inactive. When namespace
+2 became native `PUBLIC CURRENT` at `t=95010`, its normal service path immediately reached the
+record: `sobject-dirty-service` mapped internal slot 13 and `sobject-type2-job` returned result zero
+at `t=95017`. Target RSAT `0x815B204B` registered a native object at `t=95020`, and the glue bind
+completed at `t=95021`. The object remained bound until its owner view retired and unbound it at
+`t=103204`.
+
+This proves the packet grammar, namespace/manager routing, spatial-cell eligibility, promotion,
+dirty service, type-2 construction, native registration, and bind as one continuous lifecycle. An
+`sobject-apply` trace line was not required for the proof because the downstream native object and
+successful bind can only occur after the accepted service path.
+
+The exact-incarnation retry also behaved as designed. The first send used native view index 1; its
+matching drop retired that incarnation, and the later bound view with the same token and native
+index 2 rearmed attempt two at `t=151250`. No second entity was sent. The first decoded update had
+reported `entity-player-position result=missing`, so the consumed player-X+3 payload was not
+republished as another reusable 130-bit capture. The retry therefore failed closed at RSAT/update
+availability rather than reusing stale transform bits.
+
+### Native-current owner for the immediate-spawn test
+
+The sessions overlay at initial spawn is not stale or reversed. It correctly shows region
+408/bubble 51 as native `CURRENT` and region 24/bubble 3 as semantic `TARGET`. The membership and
+player-location layer can advance to region 24 while native namespace 1 still services region 408.
+That distinction explains both controls: the region-408 Vandal produced positional audio because
+it belonged to the active simulation, while the region-24 preseed did not construct until
+namespace 2 became current at `t=95010`, just as its view began transitioning away.
+
+The new direct test separates semantic authority from entity ownership. Scheduler view 1 remains
+the authority lane for the player's reported target and acknowledgement topology, but the entity
+is written into scheduler view 0, the unique bound capture backed by the active namespace's exact
+fixed-stride manager address. The selector requires a fresh active-manager witness, reconstructs
+the manager-array base from that witness, rejects ambiguous peer tokens or manager matches, and
+requires exact scheduler key/tag membership. It then derives the entity's region, bubble, and
+map-global cell from the selected native-current token. At the initial EDZ spawn the expected
+selection is namespace 1, region/bubble/cell `408/51/145`.
+
+Framing remains the runtime-proven exact two-view/275-bit signature. View 0 inherits its event bit
+from the signature and contributes the 220-bit entity remainder; view 1 contributes the complete
+six-bit empty handler, for a total of 501 bits. Creation additionally requires the natural
+13-object baseline, low occupied mask `0x1FFF`, pristine slot 13 and zero generations, exact RSAT
+and 130-bit update capture, plus complete send-time revalidation. The old inactive-target preseed
+code remains available for diagnostics but its send gate is disabled. No manager, scheduler,
+view-role, slice, or slot state is written by selection.
+
+The entity overlay follows the same corrected model. `Native current` and the manager row compare
+the entity token/namespace to the active native manager instead of comparing its region with the
+ahead-of-handoff membership region. This makes an initial 408/51 owner report `owner matches` while
+namespace 1 is actually current, even if the player overlay already reports region 24.
+
+The Release build containing this native-current selection and overlay correction is deployed.
+SHA-256:
+`42cba716c50137b0ac680ac9af85e3539ce127bf6227a419e5ee03fc3e004261`;
+size: 15,209,472 bytes.
+
 ### Spatial ownership, slices, and supplied public manifest
 
 The kind-0 entity-create envelope does not carry a distinct activity slice-set identifier. It
@@ -3460,9 +3520,11 @@ carries the replication owner/namespace, an explicit spatial cell, the sobject d
 component state including transform. Multiple enemies normally share the same replication view and
 spatial cell; their handles and transforms distinguish them. The overlay's `slice unknown` is a
 separate missing activity diagnostic and is not a value that can be filled into this entity record.
-The former audible region-408/cell-145 test demonstrated only that audio could resolve the decoded
-transform while the object belonged to the outgoing world; it did not prove render ownership or
-cell 145 was correct for the physical region-24 view.
+The former audible region-408/cell-145 test demonstrated that audio could resolve the decoded
+transform while the object belonged to the native-current world. The later overlay proves that
+408/51 was genuinely `CURRENT` and 24/3 was `TARGET` at initial spawn, so cell 145 was correct for
+that active owner even though it was not the semantic player-region value. It still did not prove
+that all required visual components were present.
 
 `/home/zeex64/Documents/manifest` is Bungie's public world manifest version
 `87221.20.09.10.1506-2`. It provides high-level activity, destination, graph, bubble, location, and

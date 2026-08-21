@@ -7,13 +7,11 @@
 
 #include "../../../../client/hooks/network/sobject_apply_probe.h"
 #include "../../../../client/hooks/network/sobject_bind_probe.h"
-#include "../../../../state/activity/membership/activity_membership_query.h"
 
 namespace sunrise::core::ui::hud::overlays::entity {
 namespace {
 
 namespace probe = client::hooks::network::sobject_bind_probe;
-namespace membership = state::activity::membership;
 
 constexpr int kColumnCount = 2;
 
@@ -93,10 +91,8 @@ void draw() noexcept {
         return;
     }
 
-    membership::WorldSnapshot world{};
-    const bool worldPresent = membership::primary_world(world);
-    const bool ownerMismatch = worldPresent && world.region != membership::kAbsentRegionIndex
-                               && entity.region >= 0 && world.region != entity.region;
+    const bool ownerNativeCurrent =
+        client::hooks::network::sobject_apply_probe::native_manager_active(entity.token);
     if (!ImGui::BeginTable("##sunrise_hud_entity_table", kColumnCount)) {
         return;
     }
@@ -121,14 +117,14 @@ void draw() noexcept {
                 static_cast<unsigned>(entity.bubble),
                 static_cast<unsigned>(entity.cell));
 
-    begin_row("Current world");
-    if (!worldPresent || world.region == membership::kAbsentRegionIndex) {
+    begin_row("Native current");
+    if (!managerPresent || manager.activeAfter < 0) {
         ImGui::TextDisabled("unknown");
-    } else if (ownerMismatch) {
+    } else if (!ownerNativeCurrent) {
         ImGui::TextColored(
-            ImVec4{1.0F, 0.55F, 0.25F, 1.0F}, "region %d  OWNER MISMATCH", world.region);
+            ImVec4{1.0F, 0.55F, 0.25F, 1.0F}, "native ns %d  OWNER MISMATCH", manager.activeAfter);
     } else {
-        ImGui::Text("region %d  owner matches", world.region);
+        ImGui::Text("region %d  owner matches", entity.region);
     }
 
     begin_row("Wire");
@@ -160,15 +156,15 @@ void draw() noexcept {
     begin_row("Manager");
     if (!managerPresent) {
         ImGui::TextDisabled("unknown");
-    } else if (!manager.ready) {
+    } else if (!ownerNativeCurrent) {
         ImGui::TextColored(ImVec4{1.0F, 0.55F, 0.25F, 1.0F},
-                           "native ns %d  current owner needs ns %d",
+                           "native current ns %d  entity owner ns %d",
                            manager.activeAfter,
-                           manager.requestedNamespace);
+                           entity.namespaceId);
     } else {
-        ImGui::Text("native current ns %d  region %d  slice %d",
+        ImGui::Text("native current ns %d  owner region %d  slice %d",
                     manager.activeAfter,
-                    manager.region,
+                    entity.region,
                     manager.nativeSlice);
     }
 
