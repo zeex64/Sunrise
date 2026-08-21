@@ -796,6 +796,38 @@ Once the director evaluates an encounter and creates native squad/member objects
   when the client drops it locally without a gameplay leave. The descriptor then waits a further
   125 ms teardown grace. Release SHA-256 for the collector plus lifecycle candidate is
   `203cce8b1121e33ee1ad39eea9dcefa470602f9dff8349343f71f34bfcf248f1`.
+- The deployed `203cce8...` traversal was a clean negative entity test. The collector and both
+  scheduler-finalizer hooks attached successfully. Four unique native outbound shapes and nine
+  duplicate commits completed, and no rejected or incomplete commit was logged. Every view again
+  carried an 11-bit finalized entity lane, meaning the body before the one-bit entity finalizer
+  remained the empty 10-bit prelude. There was no `entity-create-out`, `entity-update-out`,
+  `entity-record`, entity-list decode, create/update encoder call, or synthetic attempt; `attempts`
+  stayed zero throughout.
+- The first baseline-ready target was blocked before any synthetic plan existed. At `t=106580`,
+  token `0x9EAA300100200002`, namespace 1, slot 13, and region/bubble/cell `408/51/145` had a captured
+  manager, 13 occupied baseline slots, a free candidate, and spatial data, but the server rejected
+  scheduler shape `3/275` (`local=1/3`, `remote=1/0`). When the exact one-view/203-bit layout later
+  appeared for token `0x9EAA300100200007`, region `80/10/30`, the next gate was instead
+  `active-manager`. The final region-24 candidate returned to `scheduler-shape` with three local
+  views. No gate reached `ready`.
+- Zero `scheduler-entity-collector` lines do not yet locate a native collector gate. The current
+  report deliberately suppresses an empty call when no watched entity exists, but the watched
+  entity is armed only by a successfully prepared server plan or an inbound entity decode. Because
+  the upstream gate prevented both, the diagnostic is circular: this run cannot distinguish a
+  collector that was never invoked from one that was invoked and returned zero candidates. The
+  Entity Debug overlay consequently had no legitimate synthetic plan or collector fields to show.
+- The passive correction now resolves the current first-free candidate directly from the
+  collector's live manager pointer and provider namespace before a send plan exists. It uses a
+  bounded first-match scan rather than a cached token, because native manager storage is reused
+  across public-session generations. Pre/post snapshots keep the exact same slot only while the
+  manager and namespace remain identical, so an unchanged flag cannot be misreported as a
+  `0 -> value` transition. Empty passive evidence uses the small ambient budget; every positive
+  collector result retains the larger useful-evidence budget. The probe publishes no false entity
+  plan and mutates no manager state. Release SHA-256 for this next diagnostic build is
+  `de2ca0e736fcec207e4d2633ec738c3c2f43ca3da411d2357860341911fb0a91`.
+- Runtime health was normal: no assertion hit, network hitch, forced disconnect, corrupt packet, or
+  reported packet loss occurred, and the client shut down normally at `t=161226`. The descriptor
+  hold therefore did not reproduce the prior public-slot overcommit hang in this traversal.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

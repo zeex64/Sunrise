@@ -3130,6 +3130,62 @@ and emitted. It also captures a bounded sample of packed candidate words, whose 
 entity slot and whose high fields carry priority/lane/view. It changes no manager, bitset, object,
 or output value.
 
+### `203cce8...` collector test and circular watch gap
+
+The deployed DLL exactly matched SHA-256
+`203cce8b1121e33ee1ad39eea9dcefa470602f9dff8349343f71f34bfcf248f1`. In the resulting single
+runtime session, `scheduler_zero_finalizer`, `scheduler_entity_finalizer`, and
+`scheduler_entity_collector` all attached successfully at `t=3555`. The outbound boundary recorded
+four new complete shapes and nine duplicate commits; no rejected or incomplete commit was logged.
+Every captured view still finalized an 11-bit entity lane, so every native entity body remained
+the empty 10-bit prelude before `FUN_14171EFE0` appended its terminal one.
+
+No synthetic lifecycle began. The log contains zero `entity-create-out`, `entity-update-out`,
+`entity-record`, entity-list decode, or `scheduler-entity-collector` records, and every server gate
+report retained `attempts=0`. The earliest fully populated baseline candidate was
+`0x9EAA300100200002`, namespace 1, slot 13, region/bubble/cell `408/51/145`. At `t=106580` its
+capture had 13 occupied slots, 137 available slots, a valid free candidate, and spatial data, but
+the first upstream failure was `scheduler-shape`: the stored scheduler described three views and
+275 bits (`local=1/3`, `remote=1/0`) rather than the guarded one-view shape. Later the exact
+one-view/203-bit form appeared for token `0x9EAA300100200007`, namespace 2, slot 13, and
+`80/10/30`; at `t=138690`, `t=138952`, and `t=138968` that candidate advanced only as far as
+`active-manager`. The final region-24 candidate again failed `scheduler-shape`. Across the run the
+deduplicated gate transitions were 22 `view`, 12 `scheduler-shape`, and nine `active-manager`, with
+none reaching `ready`.
+
+The absence of collector records is not evidence that `FUN_14170C080` was never called. The first
+version's `report` path suppresses `emitted <= 0` whenever no watched entity exists. Its watch is
+currently supplied by `record_plan`, which is published only after the server successfully builds
+an entity-create plan, or by an inbound decoder watch. This run reached neither source because the
+server failed closed first. The result is circular silence: a zero-result collector call, no
+collector invocation, and an unreadable inspection all remain observationally indistinguishable.
+For the same reason the Entity Debug overlay correctly had no synthetic-plan lifecycle to render,
+but its outbound collector row could not diagnose the intended candidate.
+
+The observation-only correction now associates a collector call with the current native candidate
+before plan creation. It reads the first valid free slot directly from the collector's live manager
+and provider namespace; it intentionally does not infer a token from cached view captures because
+the three native manager allocations are reused across public-session generations. The first-match
+reader returns immediately and is SEH guarded. Pre-call inspection resolves the passive slot, and
+post-call inspection reuses it only when the manager pointer and namespace are unchanged. A changed
+manager resolves independently and normalizes the comparison fields, preventing a fabricated
+`0 -> value` transition. Empty passive calls use the 16-state ambient budget, while every positive
+collector result uses the 64-state useful-evidence budget. This preserves the meaning of
+`record_plan`--the overlay will not claim that an entity was prepared or sent--while making the
+following outcomes distinct on the next run:
+
+- collector never entered;
+- collector entered but the handler was disabled;
+- candidate bit inactive or slot-to-internal mapping absent;
+- namespace support or ownership mismatch;
+- dependency flag `0x80` absent or object suppression `0x0200` present;
+- eligible target omitted from output, or emitted with its packed priority/lane/view fields.
+
+The direct-manager/empty-ambient correction is built as Release SHA-256
+`de2ca0e736fcec207e4d2633ec738c3c2f43ca3da411d2357860341911fb0a91`. The completed prior run
+was otherwise healthy: there was no assertion, `network-hitch`, forced disconnect,
+corrupt-channel report, or packet loss, and shutdown completed normally at `t=161226`.
+
 ### Public descriptor overcommit hang
 
 The last traversal's 20-second `network_update` hitch began after Sunrise published a third public

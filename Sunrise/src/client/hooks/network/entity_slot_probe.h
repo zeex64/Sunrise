@@ -58,6 +58,10 @@ void observe_view(std::uint64_t token, const void* view) noexcept;
 /** @return True when a current safe-slot capture exists for the requested view token. */
 [[nodiscard]] bool find(std::uint64_t token, ViewCapture& output) noexcept;
 
+/** Reads the current first safe slot from the exact native manager/namespace. */
+[[nodiscard]] bool
+inspect_candidate_slot(const void* manager, std::int32_t namespaceId, std::uint16_t& slot) noexcept;
+
 /** Clears the bounded set of already-reported entity managers. */
 void reset() noexcept;
 

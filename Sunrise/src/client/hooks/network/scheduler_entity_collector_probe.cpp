@@ -13,6 +13,7 @@
 #include "../../../core/logging/log.h"
 #include "../../targets/game.h"
 #include "coordinator/network_call_coordinator.h"
+#include "entity_slot_probe.h"
 #include "platform.h"
 #include "sobject_bind_probe.h"
 
@@ -60,6 +61,7 @@ struct Snapshot {
     bool ownerMatches{};
     bool targetEligible{};
     bool targetCandidate{};
+    bool passiveTarget{};
     bool readable{};
 };
 
@@ -92,7 +94,8 @@ template <typename Value> void mix(std::uint64_t& hash, const Value& value) noex
                            int emitted,
                            int capacity,
                            const std::uint32_t* candidates,
-                           Snapshot& output) noexcept {
+                           Snapshot& output,
+                           const Snapshot* prior) noexcept {
     output = {};
     output.namespaceId = -1;
     output.globalSlot = -1;
@@ -107,9 +110,18 @@ template <typename Value> void mix(std::uint64_t& hash, const Value& value) noex
         output.enabledB = std::to_integer<std::uint8_t>(bytes[10]);
         std::memcpy(&output.namespaceId, bytes + 0xC, sizeof output.namespaceId);
         std::memcpy(&output.manager, bytes + 0x10, sizeof output.manager);
+        const bool reusePassive = prior != nullptr && prior->passiveTarget
+                                  && prior->manager == output.manager
+                                  && prior->namespaceId == output.namespaceId;
         sobject_bind_probe::EntityDebugSnapshot plan{};
-        if (sobject_bind_probe::debug_snapshot(plan) && plan.present
-            && plan.namespaceId == output.namespaceId) {
+        if (reusePassive) {
+            output.watched = true;
+            output.passiveTarget = true;
+            output.planToken = prior->planToken;
+            output.planSlot = prior->planSlot;
+            output.watchedEntity = prior->watchedEntity;
+        } else if (sobject_bind_probe::debug_snapshot(plan) && plan.present
+                   && plan.namespaceId == output.namespaceId) {
             output.watched = true;
             output.planToken = plan.token;
             output.planSlot = plan.slot;
@@ -118,6 +130,19 @@ template <typename Value> void mix(std::uint64_t& hash, const Value& value) noex
             output.watched =
                 sobject_bind_probe::first_watched(output.namespaceId, output.watchedEntity);
             output.planSlot = static_cast<std::uint16_t>(output.watchedEntity & kEntitySlotMask);
+        }
+        // Before the first server-authored create there is deliberately no bind watch or debug
+        // plan. Resolve the passive safe-slot capture by the collector's exact native manager so
+        // the enrollment diagnostic does not depend on the create it is meant to unblock.
+        if (!output.watched && output.manager != nullptr) {
+            std::uint16_t candidateSlot = 0;
+            if (entity_slot_probe::inspect_candidate_slot(
+                    output.manager, output.namespaceId, candidateSlot)) {
+                output.watched = true;
+                output.passiveTarget = true;
+                output.planSlot = candidateSlot;
+                output.watchedEntity = candidateSlot;
+            }
         }
 
         const bool outputReadable = emitted >= 0 && emitted <= 0x400 && capacity >= emitted
@@ -246,6 +271,7 @@ template <typename Value> void mix(std::uint64_t& hash, const Value& value) noex
     mix(hash, after.metadataOwner);
     mix(hash, after.ownerMatches);
     mix(hash, after.targetEligible);
+    mix(hash, after.passiveTarget);
     mix(hash, after.objectFlags);
     mix(hash, before.namespacePriority);
     mix(hash, after.namespacePriority);
@@ -280,7 +306,7 @@ template <typename Value> void mix(std::uint64_t& hash, const Value& value) noex
     return report;
 }
 
-/** Emits one deduplicated collector state; ordinary empty/unwatched calls stay silent. */
+/** Emits one deduplicated collector state, including bounded empty ambient call proof. */
 void report(const Snapshot& before,
             const Snapshot& after,
             int emitted,
@@ -288,7 +314,7 @@ void report(const Snapshot& before,
             std::uint32_t view,
             std::uint32_t lane,
             const void* context) noexcept {
-    if (!after.readable || (emitted <= 0 && !after.watched)) {
+    if (!after.readable) {
         return;
     }
     if (after.watched) {
@@ -302,8 +328,9 @@ void report(const Snapshot& before,
                                              after.namespaceFlags,
                                              after.supportMask);
     }
+    const bool watchedBudget = emitted > 0 || (after.watched && !after.passiveTarget);
     const std::uint32_t occurrence =
-        reserve_report(snapshot_key(before, after, emitted, view, lane), after.watched);
+        reserve_report(snapshot_key(before, after, emitted, view, lane), watchedBudget);
     if (occurrence == 0) {
         return;
     }
@@ -373,14 +400,22 @@ __declspec(noinline) int __fastcall collector_body(void* handler,
     __try {
         Snapshot before{};
         if (lease.accepting) {
-            (void)inspect(handler, 0, 0, nullptr, before);
+            (void)inspect(handler, 0, 0, nullptr, before, nullptr);
         }
         if (call != nullptr) {
             result = call(handler, view, lane, viewContext, capacity, candidates);
         }
         if (lease.accepting) {
             Snapshot snapshot{};
-            if (inspect(handler, result, capacity, candidates, snapshot)) {
+            if (inspect(handler, result, capacity, candidates, snapshot, &before)) {
+                const bool comparable = before.watched && snapshot.watched
+                                        && before.manager == snapshot.manager
+                                        && before.namespaceId == snapshot.namespaceId
+                                        && before.planSlot == snapshot.planSlot;
+                if (!comparable) {
+                    before.namespaceFlags = snapshot.namespaceFlags;
+                    before.namespacePriority = snapshot.namespacePriority;
+                }
                 report(before, snapshot, result, capacity, view, lane, viewContext);
             }
         }

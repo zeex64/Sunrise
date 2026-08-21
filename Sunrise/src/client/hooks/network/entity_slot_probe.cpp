@@ -722,6 +722,56 @@ bool find(std::uint64_t token, ViewCapture& output) noexcept {
     return found;
 }
 
+bool inspect_candidate_slot(const void* manager,
+                            std::int32_t namespaceId,
+                            std::uint16_t& slot) noexcept {
+    slot = 0;
+    if (manager == nullptr || namespaceId < 0) {
+        return false;
+    }
+    __try {
+        const auto* const bytes = static_cast<const std::byte*>(manager);
+        const std::byte* provider = nullptr;
+        std::memcpy(&provider, bytes + 8, sizeof provider);
+        if (provider == nullptr) {
+            return false;
+        }
+        std::int32_t actualNamespace = -1;
+        std::memcpy(&actualNamespace, provider + 8, sizeof actualNamespace);
+        if (actualNamespace != namespaceId) {
+            return false;
+        }
+
+        const auto* const freeWords =
+            reinterpret_cast<const std::uint32_t*>(bytes + kFreeBitsetOffset);
+        const auto* const occupiedWords =
+            reinterpret_cast<const std::uint32_t*>(bytes + kOccupiedBitsetOffset);
+        for (std::size_t word = 0; word < kBitsetWordCount; ++word) {
+            const std::uint32_t available = freeWords[word] & ~occupiedWords[word];
+            if (available == 0) {
+                continue;
+            }
+            for (std::size_t bit = 0; bit < 32; ++bit) {
+                if ((available & (1U << bit)) == 0) {
+                    continue;
+                }
+                const std::size_t candidate = word * 32 + bit;
+                std::int16_t descriptor = 0;
+                std::memcpy(&descriptor,
+                            bytes + kEntryBaseOffset + candidate * kEntryStride,
+                            sizeof descriptor);
+                if (descriptor == -1) {
+                    slot = static_cast<std::uint16_t>(candidate);
+                    return true;
+                }
+            }
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+    return false;
+}
+
 void reset() noexcept {
     for (std::atomic_uint64_t& seen : g_seenSnapshots) {
         seen.store(0, std::memory_order_relaxed);
