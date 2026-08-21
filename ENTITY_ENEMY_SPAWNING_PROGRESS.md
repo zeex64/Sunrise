@@ -846,7 +846,8 @@ Once the director evaluates an encounter and creates native squad/member objects
   `entity-collector-gate`, allowing the next run to distinguish a closed dispatch gate from a
   collector that executes and emits zero candidates. It preserves the original predicate and
   changes no handler, scheduler, manager, object, or output state.
-- The new gate-probe Release DLL is built but pending deployment. SHA-256:
+- The new gate-probe Release DLL is built and deployed; the Release and game DLLs match exactly.
+  SHA-256:
   `64b989bd6ede1fc1ed6c864daaf00c423671686ff4551c86fa482ec8a5f2e2e0`.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:

@@ -3226,8 +3226,8 @@ game state. This removes the remaining ambiguity: a false leaf result proves the
 not dispatched, while a true leaf result with no collector evidence moves the search into the
 caller/dispatch edge rather than object eligibility.
 
-The gate-probe Release artifact is built and pending deployment. Its SHA-256 is
-`64b989bd6ede1fc1ed6c864daaf00c423671686ff4551c86fa482ec8a5f2e2e0`.
+The gate-probe Release artifact is built and deployed. The Release and game DLLs match exactly at
+SHA-256 `64b989bd6ede1fc1ed6c864daaf00c423671686ff4551c86fa482ec8a5f2e2e0`.
 
 ### Public descriptor overcommit hang
 
