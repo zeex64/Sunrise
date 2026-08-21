@@ -849,6 +849,38 @@ Once the director evaluates an encounter and creates native squad/member objects
 - The new gate-probe Release DLL is built and deployed; the Release and game DLLs match exactly.
   SHA-256:
   `64b989bd6ede1fc1ed6c864daaf00c423671686ff4551c86fa482ec8a5f2e2e0`.
+- The deployed retain-mask experiment, SHA-256
+  `3b49a5d4defcfd90e741db4dc3e55fa34bbe9fb6251c21fd9113156d204caa7c`, placed
+  `retain=0x00000002` correctly in reflected-host membership. The client consumed the complete
+  31,367-bit body, decoded `tail2=2`, reported `retain=2`, and passed peer-one retain state into
+  view creation. Local-only membership remained unchanged, and the run showed no malformed decode,
+  assertion, corrupt packet, or network hitch.
+- That lifecycle input opened the previously closed native leaf: all seven observed
+  `entity-collector-gate` states reported `enabled=1/1`, with five nonzero-pending states returning
+  true and the two drained states returning false. The natural collector ran, and the native
+  outbound encoder produced 15 entity records. This is progress through the real replication path,
+  not 15 enemy spawns: none classified as an enemy, none used the synthetic Vandal target RSAT, and
+  no inbound synthetic entity record was decoded.
+- The server still sent no synthetic entity. Arbitration remained fail-closed with zero attempts,
+  so the 15 records came from the client's natural actor/world bootstrap rather than Sunrise's
+  create plan. New passive arbitration telemetry correlates the primary group/world, live manager
+  age, scheduler/capture keys, peer-view tokens, and namespace without changing selection state.
+- One natural actor-like record provides the next exact wire template: entity `0x00100001`, flags
+  `0xC3`, nested RSAT `0x80EF143E`, and a 3,745-bit outer entity body. The pending build instruments
+  that exact nested RSAT and captures the bounded outer body while preserving the writer's partial
+  prefix and suffix accumulators. This capture has not yet been run or treated as an enemy payload.
+- The collector namespace diagnostic is corrected in the pending build. Handler byte `+0xC` is now
+  logged only as its raw selector; authoritative namespace comes from the live manager provider.
+  Cached manager/token captures are optional annotations only when the manager match is unique,
+  because native manager storage is reused across token generations.
+- Strict target preseed is also pending. Retain keeps the target replication root alive, but it does
+  not make an inactive manager or cell current. The first free namespace-2 candidate was slot zero,
+  which natural bootstrap can later claim, so preseed is limited to exact slot 13 and rechecks its
+  free/occupied bitsets, six-byte descriptor, and handle/reserved/object generations both when the
+  plan is prepared and at send time. It applies only to the fresh matched target of the exact
+  two-view/275-bit shape and performs no native manager write. The integrated Release artifact is
+  SHA-256 `b810e23321d5ad504fecfadbf2fb741d7e99c3deb4dd1f04d1ab6920647f4d2e`;
+  the Release and deployed game DLLs match exactly.
 - DLL: `/home/zeex64/Documents/Sunrise/build/x64/Release/steam_api64.dll`
 - Previous committed entity DLL SHA-256:
   `dfd0b4a16fad03e868433234752f43a2c45cf7b7e20501f50b2ddc1303374c54`

@@ -3354,6 +3354,63 @@ count changes from 31,335 to 31,367 bits and their padded byte size from 3,917 t
 29,968-bit/3,746-byte local-only form is unchanged.
 
 This does not patch or force the native handler byte. It supplies the decoded membership lifecycle
-input and leaves `FUN_141703910` responsible for activating or tearing down the root. The next run
-should therefore show `retain=0x00000002`, followed by collector-gate `enabled=1/1`; if it does not,
-the failure is in schema placement rather than entity candidate state.
+input and leaves `FUN_141703910` responsible for activating or tearing down the root.
+
+### `3b49a5d4...` retain runtime result
+
+The deployed DLL for the retain run matched SHA-256
+`3b49a5d4defcfd90e741db4dc3e55fa34bbe9fb6251c21fd9113156d204caa7c`. At `t=60760` the client
+consumed the entire 31,367-bit reflected-host membership body and decoded `tail2=2`; at `t=60794`
+`view-membership` reported `retain=0x00000002` and peer-one `view-create` received retain state one.
+The descriptor-plus-host body consumed all 32,391 bits. There was no malformed membership decode,
+assertion hit, corrupt packet, or network hitch. This proves both the mask placement and the intended
+slot-one bit ordering; the 29,968-bit local-only form remained unchanged.
+
+The retain input opened the native lifecycle gate. All seven deduplicated
+`entity-collector-gate` states reported `enabled=1/1`. The five states containing pending work
+returned one, and the two all-zero states returned zero, matching `FUN_141712CA0` exactly. Natural
+collector activity followed at `t=60927`, `t=67334`, `t=67401`, `t=67467`, `t=77160`, and
+`t=92234`. Across the run the native outbound entity encoder produced 15 entity records.
+
+Those 15 records are not evidence of 15 enemy spawns. They came from the client's natural
+actor/world bootstrap, no record classified as an enemy, none used the synthetic Vandal target
+RSAT, and there was no inbound synthetic `entity-record` or server `entity-create-out`. Server
+arbitration never authorized a synthetic plan and attempts stayed zero. The result therefore proves
+that `retain=0x2` restores native collection/encoding, while leaving target-manager and scheduler
+selection as the next independent gate.
+
+One natural record is especially useful as a precise native template. Entity `0x00100001`, flags
+`0xC3`, contains nested sobject RSAT `0x80EF143E`; its complete outer entity body is 3,745 bits. The
+pending instrumentation recognizes that exact nested RSAT while the entity encoder is active and
+captures the bounded outer body, including the writer's partial prefix and suffix accumulator state.
+It emits capped metadata and hex chunks rather than changing the writer. This instrumentation has
+not yet produced a runtime capture, and `0x80EF143E` is described only as actor-like, not classified
+as an enemy.
+
+### Live collector namespace and strict target preseed
+
+The retain-run collector log's `ns=0` was a diagnostic interpretation error, not proof that natural
+records belonged to namespace zero. Handler byte `+0xC` is a selector, not the authoritative
+namespace. The pending correction reads namespace directly from the live manager provider under
+SEH and logs the `+0xC` byte separately as `raw_ns`. Manager-to-`ViewCapture` matches supply token,
+slot, and generation context only when exactly one live capture matches; reused manager storage can
+otherwise associate a current handler with a stale token. New passive arbitration telemetry also
+records the primary group/world, active-manager age, scheduler and capture keys, peer-view tokens,
+and their live namespaces without influencing arbitration.
+
+Retain makes it reasonable to test a preseed before the target namespace becomes native-current:
+prior promoted dirty state can survive until manager activation. It does not, however, guarantee
+that the selected manager or cell is current, so the experiment remains narrow and fail-closed. An
+inactive namespace-2 manager exposed slot zero as its first candidate, but natural bootstrap can
+claim that slot later. The target preseed therefore uses exact slot 13 only. A passive exact-slot
+inspection reads the manager's free and occupied bitsets plus the six-byte slot descriptor and
+returns its handle, reserved, and object generations. Availability is checked when the plan is
+prepared and repeated immediately before send; any disagreement cancels the attempt.
+
+Preseed is further restricted to the fresh matched-but-not-ready target manager in the exact
+two-view/275-bit scheduler shape, entity view one, with a unique live manager match and matching
+z-leg transition. It does not write a manager, claim a slot, or relax the generic arbitration path.
+The integrated Release build containing the actor-like capture, live namespace correction,
+arbitration telemetry, and strict slot-13 target preseed is SHA-256
+`b810e23321d5ad504fecfadbf2fb741d7e99c3deb4dd1f04d1ab6920647f4d2e`. The Release and deployed
+game DLLs match exactly.

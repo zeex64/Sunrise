@@ -39,6 +39,18 @@ struct ViewCapture {
     [[nodiscard]] bool operator==(const ViewCapture&) const noexcept = default;
 };
 
+/** Exact read-only state for one requested entity-manager slot. */
+struct SlotInspection {
+    std::uint16_t slot{};
+    std::uint8_t handleGeneration{};
+    std::uint8_t reservedGeneration{};
+    std::uint8_t objectGeneration{};
+    bool free{};
+    bool occupied{};
+    bool descriptorFree{};
+    bool available{};
+};
+
 /** @return Native inbound entity-list decoder replacement body. */
 [[nodiscard]] void* decoder_entry_point() noexcept;
 
@@ -57,6 +69,18 @@ void observe_view(std::uint64_t token, const void* view) noexcept;
 
 /** @return True when a current safe-slot capture exists for the requested view token. */
 [[nodiscard]] bool find(std::uint64_t token, ViewCapture& output) noexcept;
+
+/** @return True when a captured view owns the exact native entity manager. */
+[[nodiscard]] bool find_by_manager(const void* manager, ViewCapture& output) noexcept;
+
+/** Reads the namespace directly from an exact native manager's live provider. */
+[[nodiscard]] bool inspect_namespace(const void* manager, std::int32_t& namespaceId) noexcept;
+
+/** Reads one exact slot without selecting, reserving, or otherwise changing it. */
+[[nodiscard]] bool inspect_slot(const void* manager,
+                                std::int32_t namespaceId,
+                                std::uint16_t slot,
+                                SlotInspection& output) noexcept;
 
 /** Reads the current first safe slot from the exact native manager/namespace. */
 [[nodiscard]] bool

@@ -403,19 +403,33 @@ void report(const Snapshot& snapshot,
 /** @return True when publishing changed this token's captured view state. */
 [[nodiscard]] bool publish(const ViewCapture& capture) noexcept {
     AcquireSRWLockExclusive(&g_captureLock);
-    ViewCapture* destination = nullptr;
+    ViewCapture* tokenMatch = nullptr;
+    ViewCapture* managerMatch = nullptr;
+    ViewCapture* empty = nullptr;
     for (ViewCapture& current : g_viewCaptures) {
         if (current.token == capture.token) {
-            destination = &current;
-            break;
+            tokenMatch = &current;
         }
-        if (destination == nullptr && current.token == 0) {
-            destination = &current;
+        if (managerMatch == nullptr && capture.manager != nullptr
+            && current.manager == capture.manager) {
+            managerMatch = &current;
+        }
+        if (empty == nullptr && current.token == 0) {
+            empty = &current;
         }
     }
+    // Managers are pooled across public-session generations. Replace that manager's prior token
+    // capture and collapse any stale token/manager split into the token's one current row.
+    ViewCapture* destination = tokenMatch != nullptr ? tokenMatch : managerMatch;
+    if (tokenMatch != nullptr && managerMatch != nullptr && tokenMatch != managerMatch) {
+        *managerMatch = {};
+    }
     if (destination == nullptr) {
-        destination = &g_viewCaptures[g_captureCursor % g_viewCaptures.size()];
-        ++g_captureCursor;
+        destination = empty;
+        if (destination == nullptr) {
+            destination = &g_viewCaptures[g_captureCursor % g_viewCaptures.size()];
+            ++g_captureCursor;
+        }
     }
     const bool changed = !(*destination == capture);
     *destination = capture;
@@ -722,11 +736,33 @@ bool find(std::uint64_t token, ViewCapture& output) noexcept {
     return found;
 }
 
-bool inspect_candidate_slot(const void* manager,
-                            std::int32_t namespaceId,
-                            std::uint16_t& slot) noexcept {
-    slot = 0;
-    if (manager == nullptr || namespaceId < 0) {
+bool find_by_manager(const void* manager, ViewCapture& output) noexcept {
+    output = {};
+    output.namespaceId = -1;
+    if (manager == nullptr) {
+        return false;
+    }
+    AcquireSRWLockShared(&g_captureLock);
+    bool found = false;
+    for (const ViewCapture& capture : g_viewCaptures) {
+        if (capture.token != 0 && capture.manager == manager) {
+            if (found) {
+                output = {};
+                output.namespaceId = -1;
+                ReleaseSRWLockShared(&g_captureLock);
+                return false;
+            }
+            output = capture;
+            found = true;
+        }
+    }
+    ReleaseSRWLockShared(&g_captureLock);
+    return found;
+}
+
+bool inspect_namespace(const void* manager, std::int32_t& namespaceId) noexcept {
+    namespaceId = -1;
+    if (manager == nullptr) {
         return false;
     }
     __try {
@@ -736,12 +772,68 @@ bool inspect_candidate_slot(const void* manager,
         if (provider == nullptr) {
             return false;
         }
-        std::int32_t actualNamespace = -1;
-        std::memcpy(&actualNamespace, provider + 8, sizeof actualNamespace);
-        if (actualNamespace != namespaceId) {
-            return false;
-        }
+        std::memcpy(&namespaceId, provider + 8, sizeof namespaceId);
+        return namespaceId >= 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        namespaceId = -1;
+        return false;
+    }
+}
 
+bool inspect_slot(const void* manager,
+                  std::int32_t namespaceId,
+                  std::uint16_t slot,
+                  SlotInspection& output) noexcept {
+    output = {};
+    output.slot = slot;
+    if (manager == nullptr || namespaceId < 0 || slot >= kEntityCapacity) {
+        return false;
+    }
+    std::int32_t actualNamespace = -1;
+    if (!inspect_namespace(manager, actualNamespace) || actualNamespace != namespaceId) {
+        return false;
+    }
+    __try {
+        const auto* const bytes = static_cast<const std::byte*>(manager);
+        const std::size_t word = slot >> 5U;
+        const std::uint32_t bit = 1U << (slot & 31U);
+        std::uint32_t freeWord = 0;
+        std::uint32_t occupiedWord = 0;
+        std::memcpy(&freeWord, bytes + kFreeBitsetOffset + word * sizeof freeWord, sizeof freeWord);
+        std::memcpy(&occupiedWord,
+                    bytes + kOccupiedBitsetOffset + word * sizeof occupiedWord,
+                    sizeof occupiedWord);
+        const auto* const entry = bytes + kEntryBaseOffset + slot * kEntryStride;
+        std::int16_t descriptor = 0;
+        std::memcpy(&descriptor, entry, sizeof descriptor);
+        output.handleGeneration = std::to_integer<std::uint8_t>(entry[2]) & 0x0FU;
+        output.reservedGeneration = std::to_integer<std::uint8_t>(entry[3]) & 0x0FU;
+        output.objectGeneration = std::to_integer<std::uint8_t>(entry[4]);
+        output.free = (freeWord & bit) != 0;
+        output.occupied = (occupiedWord & bit) != 0;
+        output.descriptorFree = descriptor == -1;
+        output.available = output.free && !output.occupied && output.descriptorFree;
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        output = {};
+        output.slot = slot;
+        return false;
+    }
+}
+
+bool inspect_candidate_slot(const void* manager,
+                            std::int32_t namespaceId,
+                            std::uint16_t& slot) noexcept {
+    slot = 0;
+    if (manager == nullptr || namespaceId < 0) {
+        return false;
+    }
+    std::int32_t actualNamespace = -1;
+    if (!inspect_namespace(manager, actualNamespace) || actualNamespace != namespaceId) {
+        return false;
+    }
+    __try {
+        const auto* const bytes = static_cast<const std::byte*>(manager);
         const auto* const freeWords =
             reinterpret_cast<const std::uint32_t*>(bytes + kFreeBitsetOffset);
         const auto* const occupiedWords =

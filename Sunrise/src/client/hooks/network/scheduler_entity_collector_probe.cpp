@@ -51,21 +51,31 @@ struct Snapshot {
     std::array<std::uint32_t, kCandidateSampleCount> candidates{};
     const void* manager{};
     std::uint64_t planToken{};
+    std::uint64_t mappedToken{};
     std::uint32_t watchedEntity{};
     std::uint32_t supportMask{};
     std::uint32_t namespacePriority{};
     std::uint16_t objectFlags{};
     std::uint16_t namespaceFlags{};
     std::int32_t namespaceId{-1};
+    std::int32_t handlerNamespaceId{-1};
+    std::int32_t mappedNamespaceId{-1};
     std::int32_t globalSlot{-1};
     std::int16_t internalIndex{-1};
     std::uint16_t activeCount{};
     std::uint16_t planSlot{};
+    std::uint16_t mappedSlot{};
     std::uint8_t enabledA{};
     std::uint8_t enabledB{};
+    std::uint8_t mappedHandleGeneration{};
+    std::uint8_t mappedReservedGeneration{};
+    std::uint8_t mappedObjectGeneration{};
     std::int8_t ownerSelector{-1};
     std::int8_t metadataOwner{-1};
     std::uint8_t candidateCount{};
+    bool managerNamespaceReadable{};
+    bool managerMapped{};
+    bool mappedCandidate{};
     bool watched{};
     bool occupied{};
     bool targetActive{};
@@ -201,6 +211,8 @@ void report_gate(const GateSnapshot& snapshot, bool result) noexcept {
                            const Snapshot* prior) noexcept {
     output = {};
     output.namespaceId = -1;
+    output.handlerNamespaceId = -1;
+    output.mappedNamespaceId = -1;
     output.globalSlot = -1;
     output.internalIndex = -1;
     if (handler == nullptr) {
@@ -211,8 +223,29 @@ void report_gate(const GateSnapshot& snapshot, bool result) noexcept {
         const auto* const bytes = static_cast<const std::byte*>(handler);
         output.enabledA = std::to_integer<std::uint8_t>(bytes[9]);
         output.enabledB = std::to_integer<std::uint8_t>(bytes[10]);
-        std::memcpy(&output.namespaceId, bytes + 0xC, sizeof output.namespaceId);
+        std::memcpy(&output.handlerNamespaceId, bytes + 0xC, sizeof output.handlerNamespaceId);
         std::memcpy(&output.manager, bytes + 0x10, sizeof output.manager);
+
+        // Handler +0xC is a collector-local selector and has remained zero for managers whose live
+        // providers are namespace 1 or 2. Read the authoritative namespace directly from that
+        // provider. A unique exact-manager capture annotates the observation but cannot select the
+        // namespace because native manager storage is reused across public-session generations.
+        output.managerNamespaceReadable =
+            entity_slot_probe::inspect_namespace(output.manager, output.namespaceId);
+        if (!output.managerNamespaceReadable) {
+            output.namespaceId = output.handlerNamespaceId;
+        }
+        entity_slot_probe::ViewCapture managerCapture{};
+        if (entity_slot_probe::find_by_manager(output.manager, managerCapture)) {
+            output.managerMapped = true;
+            output.mappedNamespaceId = managerCapture.namespaceId;
+            output.mappedToken = managerCapture.token;
+            output.mappedCandidate = managerCapture.candidatePresent;
+            output.mappedSlot = managerCapture.slot;
+            output.mappedHandleGeneration = managerCapture.handleGeneration;
+            output.mappedReservedGeneration = managerCapture.reservedGeneration;
+            output.mappedObjectGeneration = managerCapture.objectGeneration;
+        }
         const bool reusePassive = prior != nullptr && prior->passiveTarget
                                   && prior->manager == output.manager
                                   && prior->namespaceId == output.namespaceId;
@@ -243,6 +276,9 @@ void report_gate(const GateSnapshot& snapshot, bool result) noexcept {
                     output.manager, output.namespaceId, candidateSlot)) {
                 output.watched = true;
                 output.passiveTarget = true;
+                if (output.managerMapped && output.mappedNamespaceId == output.namespaceId) {
+                    output.planToken = output.mappedToken;
+                }
                 output.planSlot = candidateSlot;
                 output.watchedEntity = candidateSlot;
             }
@@ -341,6 +377,8 @@ void report_gate(const GateSnapshot& snapshot, bool result) noexcept {
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         output = {};
         output.namespaceId = -1;
+        output.handlerNamespaceId = -1;
+        output.mappedNamespaceId = -1;
         output.globalSlot = -1;
         output.internalIndex = -1;
         return false;
@@ -355,11 +393,21 @@ void report_gate(const GateSnapshot& snapshot, bool result) noexcept {
                                          std::uint32_t lane) noexcept {
     std::uint64_t hash = 1469598103934665603ULL;
     mix(hash, after.namespaceId);
+    mix(hash, after.handlerNamespaceId);
+    mix(hash, after.mappedNamespaceId);
     mix(hash, emitted);
     mix(hash, view);
     mix(hash, lane);
     mix(hash, after.planToken);
+    mix(hash, after.mappedToken);
     mix(hash, after.planSlot);
+    mix(hash, after.mappedSlot);
+    mix(hash, after.mappedHandleGeneration);
+    mix(hash, after.mappedReservedGeneration);
+    mix(hash, after.mappedObjectGeneration);
+    mix(hash, after.managerMapped);
+    mix(hash, after.managerNamespaceReadable);
+    mix(hash, after.mappedCandidate);
     mix(hash, after.activeCount);
     mix(hash, after.watchedEntity);
     mix(hash, after.globalSlot);
@@ -437,50 +485,63 @@ void report(const Snapshot& before,
     if (occurrence == 0) {
         return;
     }
-    std::array<char, 640> line{};
-    const int written = std::snprintf(
-        line.data(),
-        line.size(),
-        "ev=gameplay stage=scheduler-entity-collector occurrence=%u ns=%d view=%u lane=%u "
-        "context=%p enabled=%u/%u active=%u emitted=%d capacity=%d watched=%u "
-        "plan=0x%016llX/%u entity=0x%08X internal=%d "
-        "occupied=%u collector=%u dirty=%u "
-        "supported=%u owner=%d/%d owner_ok=%u object_flags=0x%04X "
-        "ns_flags=0x%04X->0x%04X priority=0x%08X->0x%08X eligible=%u candidate=%u "
-        "c0=0x%08X c1=0x%08X c2=0x%08X c3=0x%08X",
-        occurrence,
-        after.namespaceId,
-        view,
-        lane,
-        context,
-        static_cast<unsigned>(after.enabledA),
-        static_cast<unsigned>(after.enabledB),
-        static_cast<unsigned>(after.activeCount),
-        emitted,
-        capacity,
-        after.watched ? 1U : 0U,
-        static_cast<unsigned long long>(after.planToken),
-        static_cast<unsigned>(after.planSlot),
-        after.watchedEntity,
-        after.internalIndex,
-        after.occupied ? 1U : 0U,
-        after.targetActive ? 1U : 0U,
-        after.dirty ? 1U : 0U,
-        after.targetSupported ? 1U : 0U,
-        static_cast<int>(after.ownerSelector),
-        static_cast<int>(after.metadataOwner),
-        after.ownerMatches ? 1U : 0U,
-        static_cast<unsigned>(after.objectFlags),
-        static_cast<unsigned>(before.namespaceFlags),
-        static_cast<unsigned>(after.namespaceFlags),
-        before.namespacePriority,
-        after.namespacePriority,
-        after.targetEligible ? 1U : 0U,
-        after.targetCandidate ? 1U : 0U,
-        after.candidates[0],
-        after.candidates[1],
-        after.candidates[2],
-        after.candidates[3]);
+    std::array<char, 896> line{};
+    const int written =
+        std::snprintf(line.data(),
+                      line.size(),
+                      "ev=gameplay stage=scheduler-entity-collector occurrence=%u ns=%d raw_ns=%d "
+                      "live_ns=%u manager=%p mapped=%u map_ns=%d map_token=0x%016llX "
+                      "map_candidate=%u map_slot=%u map_gen=%u/%u/%u view=%u lane=%u "
+                      "context=%p enabled=%u/%u active=%u emitted=%d capacity=%d watched=%u "
+                      "plan=0x%016llX/%u entity=0x%08X internal=%d "
+                      "occupied=%u collector=%u dirty=%u "
+                      "supported=%u owner=%d/%d owner_ok=%u object_flags=0x%04X "
+                      "ns_flags=0x%04X->0x%04X priority=0x%08X->0x%08X eligible=%u candidate=%u "
+                      "c0=0x%08X c1=0x%08X c2=0x%08X c3=0x%08X",
+                      occurrence,
+                      after.namespaceId,
+                      after.handlerNamespaceId,
+                      after.managerNamespaceReadable ? 1U : 0U,
+                      after.manager,
+                      after.managerMapped ? 1U : 0U,
+                      after.mappedNamespaceId,
+                      static_cast<unsigned long long>(after.mappedToken),
+                      after.mappedCandidate ? 1U : 0U,
+                      static_cast<unsigned>(after.mappedSlot),
+                      static_cast<unsigned>(after.mappedHandleGeneration),
+                      static_cast<unsigned>(after.mappedReservedGeneration),
+                      static_cast<unsigned>(after.mappedObjectGeneration),
+                      view,
+                      lane,
+                      context,
+                      static_cast<unsigned>(after.enabledA),
+                      static_cast<unsigned>(after.enabledB),
+                      static_cast<unsigned>(after.activeCount),
+                      emitted,
+                      capacity,
+                      after.watched ? 1U : 0U,
+                      static_cast<unsigned long long>(after.planToken),
+                      static_cast<unsigned>(after.planSlot),
+                      after.watchedEntity,
+                      after.internalIndex,
+                      after.occupied ? 1U : 0U,
+                      after.targetActive ? 1U : 0U,
+                      after.dirty ? 1U : 0U,
+                      after.targetSupported ? 1U : 0U,
+                      static_cast<int>(after.ownerSelector),
+                      static_cast<int>(after.metadataOwner),
+                      after.ownerMatches ? 1U : 0U,
+                      static_cast<unsigned>(after.objectFlags),
+                      static_cast<unsigned>(before.namespaceFlags),
+                      static_cast<unsigned>(after.namespaceFlags),
+                      before.namespacePriority,
+                      after.namespacePriority,
+                      after.targetEligible ? 1U : 0U,
+                      after.targetCandidate ? 1U : 0U,
+                      after.candidates[0],
+                      after.candidates[1],
+                      after.candidates[2],
+                      after.candidates[3]);
     if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
         core::log::write(core::log::Channel::client,
                          core::log::Level::info,

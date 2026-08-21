@@ -12,6 +12,7 @@
 
 #include "../../../core/logging/log.h"
 #include "coordinator/network_call_coordinator.h"
+#include "entity_create_probe.h"
 #include "platform.h"
 
 namespace sunrise::client::hooks::network::sobject_create_probe {
@@ -141,6 +142,11 @@ encode_body(void* codec, const void* createBuffer, void* writerAddress) noexcept
     const bool beforeReadable = inspect(createBuffer, writerAddress, create, before);
     __try {
         if (call != nullptr) {
+            if (beforeReadable) {
+                std::uint32_t rsat{};
+                std::memcpy(&rsat, create.data(), sizeof rsat);
+                entity_create_probe::observe_sobject_rsat(rsat);
+            }
             call(codec, createBuffer, writerAddress);
         }
         std::array<std::byte, kCreateBufferSize> ignored{};
