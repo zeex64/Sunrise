@@ -1,32 +1,37 @@
 # Entity and Enemy Spawning Progress
 
-Last updated: 2026-08-21
+Last updated: 2026-08-22
 
 ## Current outcome
 
-Sunrise has now proven the complete server-to-client native object lifecycle for the synthetic
-Vandal: decode, promotion, delayed service when its namespace becomes native current, type-2 job,
-native construction, and glue bind. It has not yet produced a visible, functioning enemy.
+Sunrise has proven the complete server-to-client native object lifecycle for the synthetic Vandal,
+but that hand-built object remains an audio-only wire probe. The active implementation now uses the
+package-authored squad path carried by activity message 5 instead of fabricating an enemy entity.
 
-The distinction matters: the hand-built entity is currently a wire-protocol probe. Normal enemies
-should originate from the authored activity/director layer, which evaluates triggers, spawn rules,
-squads, and encounters before publishing native objects through the replication path.
+The `41cc...` runtime pass proved why the first authored-squad publication produced no actor. The
+root ActivityClient repeatedly committed the region-24 parking source with registry key
+`0xE0DD0E60`, type-1 slot 0, generation 1, and a bubble-3 grant. The client's native `CURRENT`
+simulation nevertheless remained region 408 on a different foreign ActivityClient. No authored
+controller, queue, materializer, squad helper, or client controller event followed. This is a
+route/container mismatch, not evidence that the package group or 91-bit Squad Auth body was
+malformed.
 
-The latest runtime result also corrects the ownership model. At the initial EDZ spawn the sessions
-overlay is accurate: region 408 / bubble 51 is the client's native `CURRENT` simulation and region
-24 / bubble 3 is the semantic `TARGET`. The player/activity region can report 24 before the native
-simulation role swaps. The old region-408 test was audible because it was owned by the active
-simulation; sending the Vandal to target region 24 delayed construction until namespace 2 became
-native current, at which point that view was already beginning to retire.
+The final architecture therefore leaves the root stream base-roster-only and sends one complete,
+squad-only message-5 body on the exact foreign ActivityClient that owns native `CURRENT`. The
+operator request captures and revalidates the root activity, current gameplay group, foreign host,
+region, admission generation, authority token, scenario, and authored source. Any ambiguity or
+handoff holds the request without emitting an empty or wrong-host authority body. A controlled
+stationary EDZ test of this foreign-current route is pending; no visible, fightable enemy is claimed
+until that run completes.
 
-The next immediate-spawn test therefore keeps semantic authority on scheduler view 1 but assigns
-the entity to the distinct native-`CURRENT` owner on view 0. That owner is selected from the fresh
-active-manager snapshot, reconstructed fixed manager array, unique bound view capture, and exact
-scheduler member. Region, bubble, and cell come from that token rather than the semantic player
-region; the expected initial result is namespace 1 at 408/51/145. The path remains exact
-two-view/275-bit framing, requires the natural 13-object baseline and pristine slot 13, and emits
-the proven 501-bit body. It performs no native manager write, and inactive-target preseed sending
-is disabled for this direct test.
+The installed-package audit is no longer a two-row catalog. The conservative static catalog now
+normalizes 33 complete roster groups and 95 independently addressable type-1 source slots across
+native regions 24 and 408. Their exact source-specific rules resolve to 77 distinct authored
+coordinates; simple/alternate rows that share a coordinate remain distinct because their group,
+registry key, source slot, rule, and anchor identities differ. Only the two previously proved Auth
+rows are enabled: `0x80BE950D` slot 0 in region 408 and `0x80BE23FF` slot 0 in region 24. The other
+93 rows remain visible for inspection but cannot publish while their complete per-member requested-
+count vectors are unresolved.
 
 ## Progress by layer
 
@@ -35,8 +40,9 @@ is disabled for this direct test.
 | Gameplay session and views | Working and substantially stabilized |
 | Replication scheduler | One-view 203-bit and two-view 501-bit framing are runtime validated |
 | Native entity creation | Shared Vandal RSAT `0x815B204B` reaches type-2, kind-0, native registration, and a completed glue bind |
-| Entity placement and updates | Nearby transform and positional audio work; the next probe is owned by the client's actual native-current view |
-| Enemy AI and encounters | Not running; authored activity/director initialization remains missing |
+| Entity placement and updates | Synthetic nearby transform and positional audio are proven; synthetic spawning is no longer the active enemy path |
+| Authored squad transport | Root target-region publication is a proven negative; foreign native-current squad-only publication is built and awaiting a stationary run |
+| Enemy AI and encounters | Package-authored squad resolution is wired, but visible actors and controller activation remain runtime-unproven on the final route |
 
 ## Current debug overlays
 
@@ -57,9 +63,9 @@ is disabled for this direct test.
   player-reported destination is `target`, and another live row is `overlap`. Thus the initial
   408/51 `current` plus 24/3 `target` rows are two phases of one player's handoff, not stale
   sessions or two players.
-- Current native-current immediate-spawn and overlay Release build (deployed):
-  SHA-256 `42cba716c50137b0ac680ac9af85e3539ce127bf6227a419e5ee03fc3e004261`,
-  size 15,209,472 bytes.
+- Current normalized catalog, exact source-slot routing, authored-location UI, and passive camera
+  projection-probe Release artifact is **built and deployed**: SHA-256
+  `36d294a5d790cc55d85ac85f3e4e084f132ec07bb598f7cadb5271cfe2a69261`, size 15,301,632 bytes.
 
 ## Confirmed progress
 
@@ -934,6 +940,19 @@ Once the director evaluates an encounter and creates native squad/member objects
 - The native-current immediate-spawn Release DLL is deployed with SHA-256
   `42cba716c50137b0ac680ac9af85e3539ce127bf6227a419e5ee03fc3e004261` and size
   15,209,472 bytes.
+- Static reverse engineering now proves a separate client-authored squad path. A six-state activity
+  controller accepts authored source rows, expands them into at most 32 descriptors, marks squad
+  descriptors with class `0x80809A3B`, and materializes them through the game's native owner,
+  member, retry, and squad-creation machinery. Two higher-level helpers spawn from a world transform
+  or an existing native object and are materially safer than calling the low-level physics
+  constructor with fabricated state.
+- EDZ archive exemplars are trigger `0x80B2E99F`, spawn rule `0x80B2E997`, fallback rule
+  `0x80B2E99A`, and squad `0x80B2E9A2`. Their semantic relationship is corroborating content
+  evidence, not yet a runtime call authorization.
+- A new passive build records controller initialization, source-list arrival, state/queue expansion,
+  first squad descriptor, materialization, and both high-level squad APIs. It changes no activity or
+  native state. Release and deployed SHA-256:
+  `54d980c8a24343c767725dad70296a96f7f002e9bf43b21e2c1613fc2d52983a`; size 15,247,360 bytes.
 
 ## Assessment of upstream commit `b8ccfb9b`
 
@@ -951,3 +970,132 @@ The shared commit is useful as architecture, but it does not duplicate or replac
 Cherry-picking the commit wholesale would mix a large independent architecture change into a
 validated runtime path without supplying the missing native payload. Reuse should be selective,
 after the exact client codec is recovered.
+
+## Physics-host authority follow-up
+
+- The completed `54d980c8...` runtime pass attached all six authored-squad probes but produced no
+  controller, state, queue, materializer, or high-level helper event. The physics-replication test
+  still created and bound the transform-only Vandal in native current, so the dormant authored path
+  is a separate authority/script-input boundary rather than a broken detour or entity transport.
+- A supplied Destiny 1 client binary preserves the architecture explicitly: it contains a client
+  AI spawn system, squad authority-change observer, per-entity-slot authority messages, and
+  `is_current_bubble_authority`. The Destiny 2 target retains the same current-bubble and domain
+  authority predicates. Its current-bubble result tests the current map bubble against granted and
+  revoked authority bitsets; domain authority tests the reserved `0x40` bit. This supports physics
+  host replication as the correct transport and makes direct AH squad-spawn commands incorrect.
+- Sunrise already emits and decodes per-bubble grants, including bubble 51 in the latest run, but
+  the final native authority predicate was not previously observed. A new passive build records the
+  first true and false result for current-bubble and domain authority without forcing either value.
+  Release SHA-256 `407f682878a79756620bd869d013ab93d0f7525f56437aa52d8c0cc3ffe2148d`;
+  its first boot failed closed before any game-network hook attached because adding probes 65 and
+  66 exceeded the detour layer's old 64-hook fixed transaction limit.
+- The detour and protected-uninstall limits now share public 96-hook/98-entry capacities, and the
+  network hook table has compile-time size guards. The corrected Release and deployed DLLs match at
+  SHA-256 `ebcb818dc3876cc0de88719f6c069ce406f3bcdc0f9db9b1abe6c2dee9043028`.
+- The completed `ebcb818d...` run attached all 66 game-network hooks and shut down cleanly. Both
+  native authority predicates returned false, but those calls occurred roughly 1.2 seconds before
+  the first bubble-51 type-5 grant decoded. The authored controller/queue/materializer/squad helpers
+  remained silent, while the native-CURRENT Vandal again decoded, promoted, constructed, and bound.
+  This leaves grant timing versus final authority state unresolved rather than proving the grant
+  ineffective.
+- The next passive build records each authority caller RVA and samples the unchanged native
+  current-bubble and domain predicates immediately after every successful roster-authority decode.
+  It performs no authority or gameplay write. Release and deployed DLL SHA-256:
+  `00cf50fa72772cddba26551a78fbf0d0bfd02b0b5c05777b2b4f56ffdf240ac5`.
+
+## Authored squad message-5 route
+
+### Root target-region negative proof
+
+The `41cc...` run committed a valid-looking authored squad on the wrong ActivityClient container.
+At `t=92802` and on later keepalives, the root session `0x9EAA300100200001` published the complete
+region-24 parking group as `groups=2 objects=35 bytes=625`, with
+`squad=1/0xE0DD0E60/0/1` and grant `3/3`. The same rows still reported `slice=408`. Region 24 was
+the semantic target, while native `CURRENT` remained region 408 and was owned by a different
+foreign host session. The client decoded no authored controller, queue, materializer, squad helper,
+or controller creation after the committed update.
+
+This is a useful controlled negative: a root message-5 body can be bit-valid and commit its Squad
+Auth while still being invisible to the simulation that is actually active on screen. Adding the
+target region or its grant to the root stream does not move that message into the foreign
+ActivityClient's per-session roster/Auth container.
+
+### Final foreign-current architecture and invariants
+
+- The root activity session remains the request owner and lifecycle identity, but its message-5
+  stream is permanently base-roster-only. It never receives a squad group or Squad Auth.
+- Native `CURRENT` must resolve to exactly one live public host row. The selected gameplay group
+  must still be advertised for the region, admitted, view-bound, and activity-host-published; its
+  held host, reverse host-to-group mapping, region, active native manager, admission generation,
+  and nonzero authority token must all agree on two consecutive value-only reads.
+- The request freezes the root activity session, current group session, foreign host session,
+  admission generation, scenario, native-current region, authored source object, requested count,
+  authority token, request id, and positive 31-bit spawn generation. A route-tuple change
+  invalidates the UI selection and makes an existing request fail closed.
+- Only the exact joined foreign ActivityClient named by the request may carry the custom body. It
+  must have its own patch epoch and no staged message. A transient route mismatch holds the owned
+  request and suppresses the ordinary empty authority body; it does not fall back to root.
+- The foreign body contains exactly one byte-validated, complete package roster group. Phase 1
+  registers its whole topology and phase 2 emits every authored slot. It carries no player-key
+  group, participation binding, player object, root roster group, region override, teleport,
+  synthetic spawn, enemy class, or coordinate.
+- The selected type-1 slot receives the proved Squad Auth: bounded requested member counts,
+  positive generation, active state, mode 0, and no optional name hash. The schema id comes from
+  the package descriptor rather than the wire.
+- The same body grants the exact native-current bubble with the request's authority token. The
+  foreign session advances its roster topology sequence once when this group first appears and
+  keeps that sequence stable on committed repeats. Later keepalives repeat the Auth because phase
+  2 resets client Auth state.
+- A committed request remains latched and blocks a second placement until exact teardown/rebind
+  retirement. Prepare, commit, discard, and retire continue to use the root request owner even
+  though the encrypted transport is the foreign host.
+
+### Proven catalog locations and addressability
+
+Activity message 5 addresses a `ClientRef` by registry key, slot type 1, and source slot. The Squad
+Auth body contains no type-66 rule slot, spawn-rule tag, map-table tag, anchor ordinal, or transform.
+The normalized catalog therefore keys a source by scenario, native-current region, roster object,
+and exact type-1 slot. It stores each of 33 complete group layouts once, then references those
+groups from 95 source rows. Exact package-local definition/rule/WorldID/map joins yield 77 distinct
+coordinates. No retained source has more than one source-specific rule/anchor; coordinate-sharing
+simple/alternate rows remain separate independently addressable sources.
+
+| Native-current region | Selectable source | Authored rule and anchor | Position | Addressability |
+| --- | --- | --- | --- | --- |
+| 408 / bubble 51 | object `0x80BE950D`, key `0xC984DDDE`, type-1 slot 0 | rule `0x80BE9303`, type-66 slot 3, anchor `0x80BE6452:6` | `(541.295, 92.516, 92.362)` | Unique for this source; choosing the source resolves this one proved location |
+| 24 / bubble 3 | object `0x80BE23FF`, key `0xE0DD0E60`, type-1 slot 0 | source-specific rule `0x80BE37A8`, type-66 slot 11, anchor `0x80BE22E5:0` | `(149.807, -109.127, 18.394)` | Unique retained source location |
+| 24 / bubble 3 | passive evidence for the same group/source | generic group rule `0x80BE37A5`, type-66 slot 6, anchor `0x80BE20F8:2` | `(140.053, -61.294, 39.026)` | Not source-specific and not independently addressable; diagnostic evidence only |
+
+All 95 retained type-1 descriptors select Auth schema `0x80807EC9`, and their logical member widths
+are package-proved. That does not prove the signed requested-count vector semantics or every
+per-member value. Only `0x80BE950D` slot 0 and `0x80BE23FF` slot 0 retain the previously validated
+one-member vector and are actionable. The other 93 sources are current-region-filtered,
+searchable, and visible with their exact coordinates and classifications, but remain display-only;
+the request API rejects them even if called outside the panel.
+
+### Passive camera-projection checkpoint
+
+The passive camera probe has a stable camera position at block offset `+0x594` and a forward vector
+at `+0x5BC`. The observed consumer builds a position/direction-style object, not a complete view-
+projection transform. No right/up basis, field of view, projection coefficients, near plane,
+viewport transform, or finalized view-projection matrix is yet proved. Actual in-world 3D spawn
+boxes are therefore pending a dedicated capture with movement, camera rotation, and ADS changes;
+the current UI remains a coordinate/location list rather than guessing a projection.
+
+### Built candidate and next test
+
+The normalized group/source catalog, exact source-slot request identity, static group materializer,
+sender diagnostics, teardown guards, authored-location panel, and passive camera probe are built
+and deployed:
+
+```text
+SHA-256 36d294a5d790cc55d85ac85f3e4e084f132ec07bb598f7cadb5271cfe2a69261
+Size    15,301,632 bytes
+State   built / deployed
+```
+
+A controlled stationary EDZ run is pending. Success requires the log to show
+`stage=current-squad result=ok` with transport equal to the exact native-current foreign host,
+the root roster remaining base-only, and downstream client controller/squad/actor activity. Until
+that evidence exists, the foreign-current architecture is built and deployed but not runtime-
+validated as a visible, collidable, fightable enemy spawn.

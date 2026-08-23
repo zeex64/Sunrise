@@ -26,12 +26,13 @@ bool pad_bits(bits::Writer& writer, std::size_t count) noexcept {
 bool write_bubble_block(bits::Writer& writer, const Grant& grant) noexcept {
     bool encoded = true;
     for (std::size_t bubble = 0; encoded && bubble < kAuthoritySlotCount; ++bubble) {
-        encoded = writer.write(bubble == grant.bubble ? 1U : 0U, kPresenceWidth);
+        const bool granted = bubble == grant.bubble || bubble == kDomainAuthorityBubble;
+        encoded = writer.write(granted ? 1U : 0U, kPresenceWidth);
     }
     // The block's own root presence bit, then the absent i32 header at struct +0.
     encoded = encoded && writer.write(1, kPresenceWidth) && writer.write(0, kPresenceWidth);
     for (std::size_t bubble = 0; encoded && bubble < kAuthoritySlotCount; ++bubble) {
-        const bool granted = bubble == grant.bubble;
+        const bool granted = bubble == grant.bubble || bubble == kDomainAuthorityBubble;
         // The host token stays absent. A wire copy that differs from the mirror parks a 5 s stamp.
         encoded =
             writer.write(0, kPresenceWidth) && writer.write(granted ? 1U : 0U, kPresenceWidth);
@@ -82,10 +83,12 @@ bool write_object_block(bits::Writer& writer,
                         std::uint8_t slotType,
                         std::uint16_t slotIndex,
                         std::uint8_t flags,
-                        bool carriesPlayerKey) noexcept {
+                        bool carriesPlayerKey,
+                        bool carriesSquadAuth) noexcept {
     const bool emitAuth = (flags & kSlotAuthFlag) != 0;
     const bool emitSense = (flags & kSlotSenseFlag) != 0;
-    const std::size_t body = emitAuth ? auth_body_bits(snapshot, slotType, carriesPlayerKey) : 0;
+    const std::size_t body =
+        emitAuth ? auth_body_bits(snapshot, slotType, carriesPlayerKey, carriesSquadAuth) : 0;
     const std::size_t remainder = (emitAuth ? 2U : 0U) + (emitSense ? 1U : 0U) + body;
     bool encoded = writer.write(1, kPresenceWidth) && writer.write(key, kKeyWidth)
                    && writer.write(std::uint32_t{slotType} + kSlotTypeBias, kSlotTypeWidth)
@@ -97,7 +100,8 @@ bool write_object_block(bits::Writer& writer,
         encoded =
             writer.write(1, kPresenceWidth) && writer.write(body > 0 ? 1U : 0U, kPresenceWidth);
         if (encoded && body > 0) {
-            encoded = write_auth_body(writer, snapshot, slotType, carriesPlayerKey);
+            encoded =
+                write_auth_body(writer, snapshot, slotType, carriesPlayerKey, carriesSquadAuth);
         }
     }
     // A sense-present bit of one costs 35 more bits, not one, so it is always sent absent.

@@ -11,6 +11,9 @@
 #include "../../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../../state/build_data/runtime.h"
 #include "../../../../../state/runtime/runtime.h"
+#include "../../../../gameplay/group/group_host.h"
+#include "../../../../gameplay/group/group_host_sessions.h"
+#include "../../../../gameplay/peer/peer_transport.h"
 #include "activity_arrival.h"
 #include "internal.h"
 
@@ -182,6 +185,70 @@ EffectiveRegion effective_region(std::uint64_t sessionId) noexcept {
     region.publicBubble = bubble >= layout.bubbleCount || bubble >= layout.bubblePublicFlags.size()
                           || layout.bubblePublicFlags[bubble] != 0;
     return region;
+}
+
+/** Resolves one exact ready root-publication route. */
+bool publication_route(std::uint64_t sessionId, PublicationRoute& output) noexcept {
+    output = {};
+    output.region.index = state::activity::membership::kAbsentRegionIndex;
+    if (sessionId == state::activity::kAbsentSessionId) {
+        return false;
+    }
+
+    output.activitySessionId = sessionId;
+    output.region = effective_region(sessionId);
+    output.transitionToken = state::activity::membership::reported_transition_token(sessionId);
+    if (!output.region.reported
+        || output.region.index <= state::activity::membership::kAbsentRegionIndex) {
+        return false;
+    }
+
+    output.groupSessionId = server::gameplay::group::advertised_group_session(output.region.index);
+    if (output.groupSessionId == 0) {
+        return false;
+    }
+    output.hostSessionId = server::gameplay::group::held_host_session(output.groupSessionId);
+    output.authorityToken = server::gameplay::group::authority_manager_token(output.groupSessionId);
+    std::int32_t heldRegion = server::gameplay::group::kUnknownRegion;
+    if (output.hostSessionId == state::activity::kAbsentSessionId || output.authorityToken == 0
+        || server::gameplay::group::holding_group_session(output.hostSessionId)
+               != output.groupSessionId
+        || !server::gameplay::group::holding_region_index(output.hostSessionId, heldRegion)
+        || heldRegion != output.region.index
+        || !server::gameplay::group::session_admitted(output.groupSessionId)
+        || !server::gameplay::peer::view_bound(output.groupSessionId)
+        || !server::gameplay::group::activity_host_published(output.groupSessionId)) {
+        return false;
+    }
+
+    state::activity::membership::WorldSnapshot host{};
+    if (!state::activity::membership::session_world(output.hostSessionId, host)
+        || host.sessionId != output.hostSessionId || host.region != output.region.index) {
+        return false;
+    }
+
+    // The route is assembled across independent State, group, and peer locks. Collect its root
+    // generation and mappings once more so a handoff between those reads fails closed.
+    const EffectiveRegion verifiedRegion = effective_region(sessionId);
+    const std::uint8_t verifiedTransition =
+        state::activity::membership::reported_transition_token(sessionId);
+    std::int32_t verifiedHeldRegion = server::gameplay::group::kUnknownRegion;
+    return verifiedRegion.reported && verifiedRegion.index == output.region.index
+           && verifiedTransition == output.transitionToken
+           && server::gameplay::group::advertised_group_session(verifiedRegion.index)
+                  == output.groupSessionId
+           && server::gameplay::group::held_host_session(output.groupSessionId)
+                  == output.hostSessionId
+           && server::gameplay::group::authority_manager_token(output.groupSessionId)
+                  == output.authorityToken
+           && server::gameplay::group::holding_group_session(output.hostSessionId)
+                  == output.groupSessionId
+           && server::gameplay::group::holding_region_index(output.hostSessionId,
+                                                            verifiedHeldRegion)
+           && verifiedHeldRegion == output.region.index
+           && server::gameplay::group::session_admitted(output.groupSessionId)
+           && server::gameplay::peer::view_bound(output.groupSessionId)
+           && server::gameplay::group::activity_host_published(output.groupSessionId);
 }
 
 /** Resolves the region one prepared membership body publishes. */

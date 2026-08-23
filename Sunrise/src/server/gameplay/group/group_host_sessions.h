@@ -52,6 +52,23 @@ void note_session_admission(std::uint64_t groupSessionId) noexcept;
 /** Returns the durable accepted-join generation of one public group. */
 [[nodiscard]] std::uint64_t session_admission_generation(std::uint64_t groupSessionId) noexcept;
 
+/**
+ * Advances the bubble-authority token after one native replication view reaches stage four.
+ * The arrival roster can precede construction of that view's native authority manager. Advancing
+ * here makes the next roster a real change against the client's durable token mirror, so the new
+ * manager applies the grant instead of discarding an unchanged repeat.
+ * @param groupSessionId Group session whose replication view became ready.
+ * @return New nonzero token, or zero when the group owns no host-session row.
+ */
+[[nodiscard]] std::uint16_t note_authority_manager_ready(std::uint64_t groupSessionId) noexcept;
+
+/**
+ * Reads the latest stage-four authority token for one advertised group.
+ * @param groupSessionId Group session selected by the roster's reported region.
+ * @return Nonzero token after a stage-four view, otherwise zero.
+ */
+[[nodiscard]] std::uint16_t authority_manager_token(std::uint64_t groupSessionId) noexcept;
+
 /** Copies every occupied host-session row. @param count Receives the copied row count. */
 void snapshot_host_sessions(std::span<HostSessionRow> output, std::size_t& count) noexcept;
 

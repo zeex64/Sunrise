@@ -7,6 +7,7 @@ namespace bits = encoding::bits;
 
 /** Slot types whose auth body this module fills. Every other block is seed-only. */
 constexpr std::uint8_t kSlotTypeParticipation = 13;
+constexpr std::uint8_t kSlotTypeSquad = 1;
 constexpr std::uint8_t kSlotTypeLifetime = 17;
 constexpr std::uint8_t kSlotTypeConfiguration = 8;
 constexpr std::uint8_t kSlotTypePackage = 16;
@@ -21,6 +22,8 @@ constexpr std::size_t kConfigurationBits = 35;
 constexpr std::size_t kPackageBits = 7;
 constexpr std::size_t kQueueBits = 12;
 constexpr std::size_t kSpawnKeyBits = 32 * 32 + 1 + 32;
+/** Fixed type-1 fields around its variable requested-count array and optional name hash. */
+constexpr std::size_t kSquadFixedBits = 59;
 
 /** Signed fields in these bodies carry a -2^31 bias, so this wire value stores zero. */
 constexpr std::uint32_t kSignedZero = 0x80000000;
@@ -114,11 +117,37 @@ constexpr std::size_t kSpawnKeyCount = 32;
     return encoded && writer.write(0, kPresenceWidth) && writer.write(kSignedMinusOne, 32);
 }
 
+/** Writes package-authored squad authority schema 0x80807EC9. */
+[[nodiscard]] bool write_squad_auth(bits::Writer& writer, const SquadAuth& value) noexcept {
+    bool encoded = writer.write(0, 3) && writer.write(1, kPresenceWidth)
+                   && writer.write(value.memberSlotCount, 4);
+    for (std::size_t index = 0; encoded && index < value.memberSlotCount; ++index) {
+        encoded = writer.write(
+            static_cast<std::uint32_t>(value.requestedCounts[index]) + kSignedZero, 32);
+    }
+    encoded = encoded && writer.write(0, 2) && writer.write(1, kPresenceWidth)
+              && writer.write(value.generation, 31)
+              && writer.write(0, 11)
+              // Biases store logical active=1 and the requested mode (0 or 2).
+              && writer.write(2, 2) && writer.write(std::uint32_t{value.mode} + 1, 3)
+              && writer.write(value.hasNameHash ? 1U : 0U, kPresenceWidth);
+    if (encoded && value.hasNameHash) {
+        encoded = writer.write(value.nameHash, 32);
+    }
+    return encoded;
+}
+
 } // namespace
 
 /** Reports how many bits of auth body one slot carries. */
-std::size_t
-auth_body_bits(const Snapshot& snapshot, std::uint8_t slotType, bool carriesPlayerKey) noexcept {
+std::size_t auth_body_bits(const Snapshot& snapshot,
+                           std::uint8_t slotType,
+                           bool carriesPlayerKey,
+                           bool carriesSquadAuth) noexcept {
+    if (slotType == kSlotTypeSquad && carriesSquadAuth) {
+        return kSquadFixedBits + 32 * snapshot.squadAuth.memberSlotCount
+               + (snapshot.squadAuth.hasNameHash ? 32U : 0U);
+    }
     if (slotType == kSlotTypeParticipation) {
         return carriesPlayerKey
                    ? kParticipationBits + (snapshot.hasRegion ? kParticipationRegionBits : 0)
@@ -146,11 +175,15 @@ auth_body_bits(const Snapshot& snapshot, std::uint8_t slotType, bool carriesPlay
 bool write_auth_body(bits::Writer& writer,
                      const Snapshot& snapshot,
                      std::uint8_t slotType,
-                     bool carriesPlayerKey) noexcept {
+                     bool carriesPlayerKey,
+                     bool carriesSquadAuth) noexcept {
     const std::size_t start = writer.bit_count();
-    const std::size_t expected = auth_body_bits(snapshot, slotType, carriesPlayerKey);
+    const std::size_t expected =
+        auth_body_bits(snapshot, slotType, carriesPlayerKey, carriesSquadAuth);
     bool encoded = true;
-    if (slotType == kSlotTypeParticipation && carriesPlayerKey) {
+    if (slotType == kSlotTypeSquad && carriesSquadAuth) {
+        encoded = write_squad_auth(writer, snapshot.squadAuth);
+    } else if (slotType == kSlotTypeParticipation && carriesPlayerKey) {
         encoded = write_participation(writer, snapshot);
     } else if (slotType == kSlotTypeLifetime) {
         encoded = write_lifetime(writer, snapshot);

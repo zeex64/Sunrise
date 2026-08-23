@@ -15,9 +15,9 @@
 
 #include "../../../../client/hooks/bootflow/bootflow_hook_lifecycle.h"
 #include "../../../../client/player/player_position.h"
+#include "../../../../client/world/native_current_world.h"
 #include "../../../../middleware/content/packages/tables/region_reader.h"
 #include "../../../../middleware/content/packages/tables/spawn_reader.h"
-#include "../../../../state/activity/membership/activity_membership_query.h"
 #include "../../../../state/activity/runtime.h"
 #include "../../../../state/build_data/runtime.h"
 #include "../overlay.h"
@@ -32,7 +32,7 @@ namespace tables = middleware::content::packages::tables;
 /** Room for the widest value line this overlay builds. */
 constexpr std::size_t kValueCapacity = 96;
 /** Widest label, which sets the value column for every row. */
-constexpr char kWidestLabel[] = "Closest spawn";
+constexpr char kWidestLabel[] = "Current region";
 /** Shown while no destination is loaded. */
 constexpr char kOutOfWorld[] = "not in world";
 /** Shown for a value the published State does not name. */
@@ -128,6 +128,10 @@ void build_region(std::int32_t region, std::uint32_t hash, Value& output) noexce
         assign(kUnknown, output);
         return;
     }
+    if (hash == 0) {
+        (void)std::snprintf(output.data(), output.size(), "%d", region);
+        return;
+    }
     state::build_data::hash_names::Name storage{};
     const std::string_view named = resolve_name(hash, storage);
     (void)std::snprintf(output.data(),
@@ -220,17 +224,17 @@ void build_spawn(std::string_view stem, Value& output) noexcept {
 /** @return Every line's text, read from published State in one pass. */
 [[nodiscard]] Status read_status() noexcept {
     Status status{};
-    activity::membership::WorldSnapshot world{};
-    const bool hasWorld = activity::membership::primary_world(world);
+    const client::world::native_current::Snapshot current = client::world::native_current::query();
     // The client's own step, published every frame. The world phase only moves on the spawn gate,
     // which stops being polled once the player is in, so it stays `arrived` in orbit.
-    status.inWorld = client::hooks::bootflow::in_world() && hasWorld;
+    status.inWorld = current.inWorld;
     if (!status.inWorld) {
         g_spawn = {};
         // The next destination has its own map, so a position from this one must not carry over.
         client::player::position::reset();
         return status;
     }
+    const activity::membership::WorldSnapshot& world = current.world;
     const std::string_view name = name_of(world.destination);
     assign(name.empty() ? std::string_view(kUnknown) : name, status.activity);
     build_region(world.region, world.regionHash, status.region);

@@ -6,12 +6,10 @@
 #include <detours.h>
 
 #include "../../../process/freeze/client_process_freeze.h"
+#include "../../detour.h"
 
 namespace sunrise::client::hooking::detour::transaction {
 namespace {
-
-/** 4 protected functions per hook bound the fixed range storage, so no heap is used. */
-constexpr std::size_t kProtectedCodeLimit = 64;
 
 /** Exact executable range described by one x64 unwind record. */
 struct CodeRange {

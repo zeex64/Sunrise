@@ -14,7 +14,9 @@ namespace sunrise::middleware::bap::activity_message::sensor_auth_update {
 inline constexpr std::uint32_t kMessageType = 5;
 /** The authority table is 64 usable bubbles plus one fallback slot. */
 inline constexpr std::size_t kAuthoritySlotCount = 65;
-/** Bubble 64 is in the table but the world controller cannot enter it, so it is never granted. */
+/** Bubble 64 is the activity-domain authority paired with every usable bubble grant. */
+inline constexpr std::uint8_t kDomainAuthorityBubble = 64;
+/** The world controller itself can enter only the first 64 bubble slots. */
 inline constexpr std::uint8_t kMaximumGrantBubble = 63;
 /** A grant token of zero equals the client's cleared mirror, so it grants nothing. */
 inline constexpr std::uint16_t kMinimumGrantToken = 1;
@@ -30,6 +32,8 @@ inline constexpr std::uint8_t kSlotAuthFlag = 2;
 inline constexpr std::uint32_t kMaximumSpawnSliceSet = 0x1FF;
 /** The unset spawn-set hash. An override carrying it disables the override it was meant to arm. */
 inline constexpr std::uint32_t kAbsentSpawnSetHash = 0x811C9DC5;
+/** Auth schema 0x80807EC9 accepts at most fifteen requested squad-member counts. */
+inline constexpr std::size_t kMaximumSquadMemberSlots = 15;
 
 /** One bubble handed to this client, as a change against its own per-bubble mirror. */
 struct Grant final {
@@ -55,11 +59,27 @@ struct Roster final {
     std::uint32_t playerKeyGroup{};
 };
 
+/** One package-authored type-1 squad Auth body. The package supplies its schema and spawn rule. */
+struct SquadAuth final {
+    std::array<std::int32_t, kMaximumSquadMemberSlots> requestedCounts{};
+    std::uint32_t registryKey{};
+    std::uint32_t generation{};
+    std::uint32_t nameHash{};
+    std::uint16_t slotIndex{};
+    std::uint8_t memberSlotCount{};
+    std::uint8_t mode{};
+    bool hasNameHash{};
+    bool present{};
+};
+
 /** Everything one `sensor_auth_update` carries. */
 struct Snapshot final {
     /** Message 52's payload, echoed exactly. A wrong epoch skips phase 2 and reports nothing. */
     patch_epoch::PatchEpoch patchEpoch{};
     Roster roster{};
+    SquadAuth squadAuth{};
+    /** Non-wire operator request correlated through roster staging and transport commit. */
+    std::uint64_t squadRequestId{};
     Grant grant{};
     /** Message 12's member record key. Zero leaves every type-13 block inert. */
     std::uint64_t playerKey{};
@@ -101,18 +121,18 @@ struct Snapshot final {
 /** Bits before the enable latch with no bubble block: 8 hardwipe, 128 epoch, 1 present, 64 token.
  */
 inline constexpr std::size_t kLatchBitWithoutGrant = 201;
-/** A bubble block adds the 65-bit authority mask, two head bits, three per element, and one token.
+/** Changed authority tokens use the schema's unsigned 16-bit field. */
+inline constexpr std::uint8_t kGrantTokenWidth = 16;
+/** A bubble block adds the 65-bit authority mask, two head bits, three per element, and two tokens.
  */
 inline constexpr std::size_t kBubbleBlockBits =
-    kAuthoritySlotCount + 2 + 3 * kAuthoritySlotCount + 16;
+    kAuthoritySlotCount + 2 + 3 * kAuthoritySlotCount + 2 * kGrantTokenWidth;
 /** Each patch-epoch element is an unsigned 64-bit wire value. */
 inline constexpr std::uint8_t kEpochWidth = 64;
 /** The unchecked hardwipe token is one byte, before the patch epoch. */
 inline constexpr std::uint8_t kHardwipeWidth = 8;
 /** The unchecked activity token follows the bubble block. */
 inline constexpr std::uint8_t kActivityTokenWidth = 64;
-/** Changed authority tokens use the schema's unsigned 16-bit field. */
-inline constexpr std::uint8_t kGrantTokenWidth = 16;
 /** Every presence bit and every loop continuation bit is one bit wide. */
 inline constexpr std::uint8_t kPresenceWidth = 1;
 /** Both roster delta counts use the same 9-bit field. */
@@ -180,8 +200,10 @@ inline constexpr std::uint32_t kStateByteBias = 0x80;
  * @param carriesPlayerKey True for the one type-13 block that binds the player.
  * @return Body bits, or zero for a seed-only block.
  */
-[[nodiscard]] std::size_t
-auth_body_bits(const Snapshot& snapshot, std::uint8_t slotType, bool carriesPlayerKey) noexcept;
+[[nodiscard]] std::size_t auth_body_bits(const Snapshot& snapshot,
+                                         std::uint8_t slotType,
+                                         bool carriesPlayerKey,
+                                         bool carriesSquadAuth) noexcept;
 
 /**
  * Writes one slot's auth body.
@@ -194,7 +216,8 @@ auth_body_bits(const Snapshot& snapshot, std::uint8_t slotType, bool carriesPlay
 [[nodiscard]] bool write_auth_body(encoding::bits::Writer& writer,
                                    const Snapshot& snapshot,
                                    std::uint8_t slotType,
-                                   bool carriesPlayerKey) noexcept;
+                                   bool carriesPlayerKey,
+                                   bool carriesSquadAuth) noexcept;
 
 /**
  * Writes one per-object state block.
@@ -215,6 +238,7 @@ auth_body_bits(const Snapshot& snapshot, std::uint8_t slotType, bool carriesPlay
                                       std::uint8_t slotType,
                                       std::uint16_t slotIndex,
                                       std::uint8_t flags,
-                                      bool carriesPlayerKey) noexcept;
+                                      bool carriesPlayerKey,
+                                      bool carriesSquadAuth) noexcept;
 
 } // namespace sunrise::middleware::bap::activity_message::sensor_auth_update

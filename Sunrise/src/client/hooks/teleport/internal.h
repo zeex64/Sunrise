@@ -22,8 +22,14 @@ inline constexpr std::uint32_t kInvalidHandle = 0xFFFFFFFF;
 
 /** Camera pose block stride, indexed by player. Its vectors are plain floats. */
 inline constexpr std::size_t kCameraBlockStride = 0xC50;
+/** Camera position candidate copied by the passive projection probe. */
+inline constexpr std::size_t kCameraProbePosition = 0x594;
 /** Camera forward vector. Its default is (1,0,0), so the basis is X forward, Z up. */
 inline constexpr std::size_t kCameraForwardX = 1468;
+/** Additional camera-block candidates copied without assigning them projection semantics. */
+inline constexpr std::size_t kCameraProbeVector5C8 = 0x5C8;
+inline constexpr std::size_t kCameraProbeVector998 = 0x998;
+inline constexpr std::size_t kCameraProbeVector9A4 = 0x9A4;
 
 /** Object handle the physics component drives, as a u16. */
 inline constexpr std::size_t kPhysicsComponentObjectHandle = 44;

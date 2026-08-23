@@ -39,6 +39,18 @@ struct EffectiveRegion final {
     bool publicBubble{true};
 };
 
+/** Exact root-publication route that may own a region-local authored roster group. */
+struct PublicationRoute final {
+    EffectiveRegion region{};
+    std::uint64_t activitySessionId{};
+    std::uint64_t groupSessionId{};
+    std::uint64_t hostSessionId{};
+    /** Root membership visit generation captured with the route. */
+    std::uint8_t transitionToken{};
+    /** Nonzero token armed by this group's bound replication view. */
+    std::uint16_t authorityToken{};
+};
+
 /** Resolves one region's authored PUB/PRV classification in a joined session's destination. */
 [[nodiscard]] bool region_is_public(std::uint64_t sessionId, std::int32_t region) noexcept;
 
@@ -49,6 +61,16 @@ struct EffectiveRegion final {
  * @return The published region index, its source, and the destination's arrival slice set.
  */
 [[nodiscard]] EffectiveRegion effective_region(std::uint64_t sessionId) noexcept;
+
+/**
+ * Resolves the exact ready route for one root activity's reported publication region.
+ * The advertised group must be admitted with a bound view and published activity host; that host
+ * must report the same region, and its authority-manager token must be nonzero.
+ * @param sessionId Root/primary activity session that owns message 5.
+ * @param output Cleared first, then receives every resolved identity and generation.
+ * @return True only when the complete route is coherent and ready.
+ */
+[[nodiscard]] bool publication_route(std::uint64_t sessionId, PublicationRoute& output) noexcept;
 
 /**
  * Resolves the region one prepared membership body publishes.

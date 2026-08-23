@@ -39,6 +39,14 @@ void clear() noexcept;
  */
 [[nodiscard]] bool group(std::size_t index, RosterGroup& group) noexcept;
 
+/**
+ * Finds one extracted roster group by its package object tag.
+ * @param objectTag Package object that owns the slot array.
+ * @param group Receives the unique matching group.
+ * @return True when exactly one row carries the tag.
+ */
+[[nodiscard]] bool find_group(std::uint32_t objectTag, RosterGroup& group) noexcept;
+
 /** @return Published roster group count. */
 [[nodiscard]] std::size_t group_count() noexcept;
 

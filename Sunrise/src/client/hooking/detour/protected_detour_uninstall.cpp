@@ -9,9 +9,6 @@
 namespace sunrise::client::hooking::detour {
 namespace {
 
-/** 64 hook slots bound each fixed-storage Detours transaction. */
-constexpr std::size_t kBatchLimit = 64;
-
 /** @param handles Detours handles. @return True when the protected batch is usable. */
 [[nodiscard]] bool valid_batch(std::span<const Handle> handles) noexcept {
     if (handles.empty() || handles.size() > kBatchLimit) {

@@ -9,6 +9,8 @@ namespace bits = encoding::bits;
 
 /** The type-13 slot type, which is the only one that may carry the player key. */
 constexpr std::uint8_t kSlotTypeParticipation = 13;
+/** Package-authored squad slot whose Auth body uses schema 0x80807EC9. */
+constexpr std::uint8_t kSlotTypeSquad = 1;
 /** The participation region rides a signed field, so this is the widest index it accepts. */
 constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
 
@@ -40,13 +42,30 @@ constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
     if (snapshot.roster.groupCount > kGroupCapacity) {
         return false;
     }
+    if (snapshot.squadAuth.present
+        && (snapshot.squadAuth.registryKey == 0 || snapshot.squadAuth.memberSlotCount == 0
+            || snapshot.squadAuth.memberSlotCount > kMaximumSquadMemberSlots
+            || snapshot.squadAuth.generation == 0 || snapshot.squadAuth.generation > 0x7FFFFFFFU
+            || (snapshot.squadAuth.mode != 0 && snapshot.squadAuth.mode != 2))) {
+        return false;
+    }
+    bool squadTargetFound = false;
     for (std::size_t group = 0; group < snapshot.roster.groupCount; ++group) {
         const Group& row = snapshot.roster.groups[group];
         if (row.slotTypes.size() != row.slotFlags.size() || row.slotTypes.empty()) {
             return false;
         }
+        if (snapshot.squadAuth.present && row.key == snapshot.squadAuth.registryKey
+            && snapshot.squadAuth.slotIndex < row.slotTypes.size()) {
+            const std::size_t slot = snapshot.squadAuth.slotIndex;
+            if (squadTargetFound || row.slotTypes[slot] != kSlotTypeSquad
+                || (row.slotFlags[slot] & kSlotAuthFlag) == 0) {
+                return false;
+            }
+            squadTargetFound = true;
+        }
     }
-    return true;
+    return !snapshot.squadAuth.present || squadTargetFound;
 }
 
 /**
@@ -71,6 +90,9 @@ constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
             const bool carriesPlayerKey = slotType == kSlotTypeParticipation
                                           && row.key == snapshot.roster.playerKeyGroup
                                           && firstOrEvery;
+            const bool carriesSquadAuth = snapshot.squadAuth.present
+                                          && row.key == snapshot.squadAuth.registryKey
+                                          && slot == snapshot.squadAuth.slotIndex;
             keyPlaced = keyPlaced || carriesPlayerKey;
             encoded = write_object_block(writer,
                                          snapshot,
@@ -78,7 +100,8 @@ constexpr std::uint32_t kMaximumRegion = 0x7FFFFFFF;
                                          slotType,
                                          static_cast<std::uint16_t>(slot),
                                          row.slotFlags[slot],
-                                         carriesPlayerKey);
+                                         carriesPlayerKey,
+                                         carriesSquadAuth);
         }
         encoded = encoded && writer.write(0, kPresenceWidth);
     }

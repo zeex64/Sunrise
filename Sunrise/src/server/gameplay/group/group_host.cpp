@@ -494,14 +494,16 @@ void publish_replication_view(Admitted& record) noexcept {
     signature.list = record.view.signature.bytes;
     signature.bound = false;
     peer::bind_view(record.sessionId, signature);
+    const std::uint16_t authorityToken = note_authority_manager_ready(record.sessionId);
     record.view.replicationPublished = true;
     report(core::log::Level::info,
            "ev=gameplay stage=view result=replication-ready local=%u remote=%u index=%d "
-           "token=0x%llX",
+           "token=0x%llX authority=%u",
            static_cast<unsigned>(record.view.localStage),
            static_cast<unsigned>(record.view.remoteStage),
            record.view.index,
-           static_cast<unsigned long long>(record.view.token));
+           static_cast<unsigned long long>(record.view.token),
+           static_cast<unsigned>(authorityToken));
 }
 
 /** Marks the peer bound only after both sides complete native stage five. */

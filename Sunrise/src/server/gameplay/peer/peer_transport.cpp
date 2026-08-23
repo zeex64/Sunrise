@@ -84,6 +84,8 @@ constexpr std::size_t kExternalProbeByteCapacity = 256;
  * sequences ahead of its window, so this host must not send faster than the peer does.
  */
 constexpr std::uint64_t kResendInterval = 250;
+/** Retains the synthetic kind-0 experiment for reversing without emitting any of its wire paths. */
+constexpr bool kSyntheticKind0InjectionEnabled = false;
 /** The first EDZ entity view owns thirteen native objects before a server-authored slot is safe. */
 constexpr std::uint32_t kFirstEntityBaselineOccupied = 13;
 /** A pristine slot's first native allocation advances object generation zero to two. */
@@ -764,7 +766,8 @@ post_handoff_probe_body_bits(const state::gameplay::SchedulerSignature& schedule
         || plan.entityView != kTwoViewProbeEntityView || plan.entityToken == 0 || plan.token == 0
         || plan.entityToken == plan.token || !entityCreate.present
         || plan.scheduler.views[plan.selectedView].key != plan.token || !entityCreate.combinedCreate
-        || entityCreate.updateOnly || entityCreate.updateBits != kFirstEntityUpdateBits
+        || entityCreate.updateOnly || entityCreate.updateBits == 0
+        || entityCreate.updateBits > entityCreate.updateWire.size() * kByteBits
         || entityCreate.token != plan.entityToken || entityCreate.viewIndex != plan.entityView
         || entityCreate.namespaceId < 0
         || entityCreate.schedulerKey != plan.scheduler.views[plan.entityView].key
@@ -1200,9 +1203,8 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         gate = EntityCreateGate::candidate;
         return false;
     }
-    if (capture.occupiedCount != kFirstEntityBaselineOccupied
-        || capture.occupiedLow != ((1U << kFirstEntityBaselineOccupied) - 1U)
-        || capture.slot != kFirstEntitySlot || capture.availableCount == 0) {
+    if (capture.occupiedCount < kFirstEntityBaselineOccupied || capture.slot >= 0x2000
+        || capture.availableCount == 0) {
         gate = EntityCreateGate::slot;
         return false;
     }
@@ -1235,10 +1237,9 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
 
     client::hooks::network::entity_slot_probe::SlotInspection currentSlot{};
     if (!client::hooks::network::entity_slot_probe::inspect_slot(
-            capture.manager, capture.namespaceId, kFirstEntitySlot, currentSlot)
-        || currentSlot.slot != kFirstEntitySlot || currentSlot.slot != capture.slot
-        || !currentSlot.available || !currentSlot.free || currentSlot.occupied
-        || !currentSlot.descriptorFree) {
+            capture.manager, capture.namespaceId, capture.slot, currentSlot)
+        || currentSlot.slot != capture.slot || !currentSlot.available || !currentSlot.free
+        || currentSlot.occupied || !currentSlot.descriptorFree) {
         gate = EntityCreateGate::slot;
         return false;
     }
@@ -1332,7 +1333,7 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
         client::hooks::network::sobject_update_probe::NearbyUpdateCapture update{};
         if (!client::hooks::network::sobject_update_probe::take_nearby_player_update(
                 state::gameplay::kFirstEntityRsat, update)
-            || update.bitCount != kFirstEntityUpdateBits) {
+            || update.bitCount == 0 || update.bitCount > output.updateWire.size() * kByteBits) {
             gate = EntityCreateGate::rsat;
             return false;
         }
@@ -1345,7 +1346,7 @@ prepare_entity_create_with_two_view_probe(const state::gameplay::PeerLink& peer,
     output.combinedCreate = true;
     output.targetPreseed = targetPreseed;
     output.present = true;
-    if (output.updateBits != kFirstEntityUpdateBits
+    if (output.updateBits == 0 || output.updateBits > output.updateWire.size() * kByteBits
         || (retained != nullptr && !same_entity_create_plan(output, *retained))) {
         gate = EntityCreateGate::rsat;
         return false;
@@ -3086,6 +3087,10 @@ void consume_established(const state::gameplay::Endpoint& from,
                                         const EntityCreatePlan& entityCreate,
                                         const TwoViewProbePlan& twoViewProbe,
                                         const PostHandoffProbePlan& postHandoffProbe) noexcept {
+    if (!kSyntheticKind0InjectionEnabled
+        && (entityCreate.present || twoViewProbe.present || postHandoffProbe.present)) {
+        return false;
+    }
     wire::AckState ack{};
     ack.outboundHead = peer.outboundHead;
     ack.outboundHeadPresent = peer.outboundHeadPresent;
@@ -3180,7 +3185,9 @@ void consume_established(const state::gameplay::Endpoint& from,
     // of scheduler data between bounded attempts; an actual retry carries the exact cached
     // one-view layout through entityCreate.present.
     const bool schedulerWanted =
-        entityCreate.present || (peer.entityCreateAttempts == 0 && !peer.twoViewProbeAttempted);
+        kSyntheticKind0InjectionEnabled
+        && (entityCreate.present
+            || (peer.entityCreateAttempts == 0 && !peer.twoViewProbeAttempted));
     const bool schedulerBodyPresent =
         !twoViewProbe.present && !postHandoffProbe.present && schedulerWanted && viewPresent
         && (oneViewScheduler || twoViewEntityScheduler || postHandoffEntityScheduler);
@@ -3572,12 +3579,14 @@ void service(std::uint64_t now) noexcept {
         EntityCreatePlan candidate{};
         const SelectedReplicationView selected = select_replication_view(peer);
         const SelectedReplicationView entitySelected = select_native_current_entity_view(peer);
-        const bool firstAttempt = peer.entityCreateAttempts == 0;
+        const bool firstAttempt = kSyntheticKind0InjectionEnabled && peer.entityCreateAttempts == 0;
         const bool targetPreseedLifecyclePending =
-            kTargetPreseedSendEnabled && peer.targetPreseedAttempts == 1
+            kSyntheticKind0InjectionEnabled && kTargetPreseedSendEnabled
+            && peer.targetPreseedAttempts == 1
             && (peer.targetPreseedAwaitingExplicitClear || peer.targetPreseedRetired
                 || peer.targetPreseedRearmPending);
-        if (!peer.entityCreateAccepted && entity_create_accepted(peer)) {
+        if (kSyntheticKind0InjectionEnabled && !peer.entityCreateAccepted
+            && entity_create_accepted(peer)) {
             peer.entityCreateAccepted = true;
             peer.entityCreateAcceptedSince = now;
         }
@@ -3688,7 +3697,8 @@ void service(std::uint64_t now) noexcept {
         const bool twoViewProbeDue = twoViewProbeReady && prepared;
         const bool postHandoffProbeDue = postHandoffProbeReady && controlQueueSettled;
         const auto gateValue = static_cast<std::uint8_t>(gate);
-        if (peer.entityCreateGate != gateValue && gateReportCount < gateReports.size()) {
+        if (kSyntheticKind0InjectionEnabled && peer.entityCreateGate != gateValue
+            && gateReportCount < gateReports.size()) {
             peer.entityCreateGate = gateValue;
             gateReports[gateReportCount++] =
                 capture_entity_create_gate(peer,
@@ -3702,21 +3712,23 @@ void service(std::uint64_t now) noexcept {
         // Every packet burns one sequence, so the resend is paced.
         const bool resendDue = peer.outbound.count != 0 && now - peer.lastSend >= kResendInterval;
         const bool entityRetryDue =
-            !peer.entityCreateAccepted && peer.entityCreateAttempts != 0
+            kSyntheticKind0InjectionEnabled && !peer.entityCreateAccepted
+            && peer.entityCreateAttempts != 0
             && peer.entityCreateAttempts < kEntityCreateAttemptLimit
             && peer.entityCreateScheduler.viewCount == kProvenSchedulerViewCount
             && now - peer.lastEntityCreate >= kEntityCreateRetryInterval;
         const bool entityFirstDue =
             firstAttempt && prepared && !twoViewProbeDue && !postHandoffProbeDue;
         const bool twoViewUpdateReady =
-            peer.entityCreateAttempts != 0
+            kSyntheticKind0InjectionEnabled && peer.entityCreateAttempts != 0
             && peer.entityCreateScheduler.viewCount == kTwoViewProbeViewCount
             && !peer.entityFollowupSent && controlQueueSettled
             && two_view_layout_ready(peer, selected);
         const bool entityFollowupReady =
-            twoViewUpdateReady
-            || (peer.entityCreateAccepted && !peer.entityFollowupSent && controlQueueSettled
-                && now - peer.entityCreateAcceptedSince >= kEntityFollowupReadyInterval);
+            kSyntheticKind0InjectionEnabled
+            && (twoViewUpdateReady
+                || (peer.entityCreateAccepted && !peer.entityFollowupSent && controlQueueSettled
+                    && now - peer.entityCreateAcceptedSince >= kEntityFollowupReadyInterval));
         const bool entityFollowupDue =
             entityFollowupReady
             && (twoViewUpdateReady ? prepare_entity_update_after_two_view(peer, selected, candidate)
@@ -3964,6 +3976,8 @@ void service(std::uint64_t now) noexcept {
             owed[index], entityCreates[index], twoViewProbes[index], postHandoffProbes[index]);
         if (twoViewProbes[index].present) {
             if (sent) {
+                const std::uint32_t bodyBits = kTwoViewProbeBodyBits - kFirstEntityUpdateBits
+                                               + entityCreates[index].updateBits;
                 report(core::log::Level::info,
                        "ev=gameplay stage=scheduler-two-view-probe result=sent "
                        "authority=0x%016llX/%u entity=0x%016llX/%u packet=%u "
@@ -3975,7 +3989,7 @@ void service(std::uint64_t now) noexcept {
                        static_cast<unsigned>(twoViewProbes[index].entityView),
                        static_cast<unsigned>(owed[index].outboundHead),
                        static_cast<unsigned>(twoViewProbes[index].scheduler.wireBits),
-                       static_cast<unsigned>(kTwoViewProbeBodyBits),
+                       static_cast<unsigned>(bodyBits),
                        static_cast<unsigned>(twoViewProbes[index].scheduler.viewCount),
                        static_cast<unsigned>(twoViewProbes[index].remoteViews),
                        static_cast<unsigned long long>(twoViewProbes[index].scheduler.views[0].key),

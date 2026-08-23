@@ -8,6 +8,7 @@
 #include "../../../../../core/logging/log.h"
 #include "../../../../../state/activity/definition.h"
 #include "../../../../../state/activity/membership/activity_membership_query.h"
+#include "../../../../../state/activity/squads/activity_squad_control.h"
 #include "../../../../../state/runtime/runtime.h"
 #include "../../../../gameplay/gameplay_advertisement.h"
 #include "../../../../gameplay/group/group_host.h"
@@ -32,6 +33,14 @@ constexpr std::uint64_t kKeepaliveIntervalMs = 5'000;
  * rides the keepalive.
  */
 constexpr std::uint64_t kRosterBurstIntervalMs = 1'000;
+/**
+ * A foreign activity host is joined only milliseconds before initial slice instantiation. Retry
+ * its authority-only delta on the inbound activity cadence instead of waiting five seconds for the
+ * first keepalive. One delivered grant ends the burst.
+ */
+constexpr std::uint64_t kAuthorityBurstIntervalMs = 5;
+/** A malformed or incomplete join cannot turn the early authority retry into a permanent poll. */
+constexpr std::uint8_t kAuthorityBurstAttemptLimit = 24;
 /** -1 asks for the membership snapshot without naming a bubble. */
 constexpr std::int32_t kNoBubble = -1;
 /** A refresh re-send carries the current revision instead of asking for an older one. */
@@ -87,7 +96,20 @@ bool consume_activity_keepalive(Session& session,
     const bool burstDue = !session.activityJoinedForeignSession
                           && now < session.activityTransitionUntilTick
                           && now >= session.activityRosterDueTick;
+    const bool authorityBurstDue =
+        session.activityJoinedForeignSession && !session.activityAuthorityBurstDelivered
+        && session.activityAuthorityBurstAttempts < kAuthorityBurstAttemptLimit
+        && now < session.activityTransitionUntilTick
+        && now >= session.activityAuthorityBurstDueTick;
     const bool keepaliveDue = now >= session.activityKeepaliveDueTick;
+    state::activity::squads::DebugSnapshot squadDebug{};
+    state::activity::squads::snapshot_debug(squadDebug);
+    const bool squadSessionOwned =
+        squadDebug.requestActive && session.activityJoinedForeignSession
+        && squadDebug.request.currentHostSessionId == session.activitySessionId;
+    const bool squadRequestDue =
+        squadSessionOwned && squadDebug.lifecycle == state::activity::squads::Lifecycle::requested
+        && now >= session.activityRosterDueTick;
     // A region change cannot wait for the keepalive. The client claims the next region almost at
     // once. Only the reported field is read here, because this runs on every pump.
     const std::int32_t reportedRegion =
@@ -163,7 +185,8 @@ bool consume_activity_keepalive(Session& session,
                                       && advertisedGroupPublished && !advertisedGroupSettled
                                       && retirementReady;
     if (session.activitySessionId == 0
-        || (!burstDue && !keepaliveDue && !actionableRegionPublication && !citizenRetirementDue)) {
+        || (!burstDue && !authorityBurstDue && !keepaliveDue && !squadRequestDue
+            && !actionableRegionPublication && !citizenRetirementDue)) {
         return false;
     }
     touchesScratch = true;
@@ -174,12 +197,68 @@ bool consume_activity_keepalive(Session& session,
     bool published = false;
     // Lifecycle markers are staged on the session and committed only after caller delivery.
     std::uint64_t stagedReflectedGroupSession = 0;
+    if (squadRequestDue) {
+        // A new topology must be the only activity message in its first frame. This advances the
+        // foreign link's group fold exactly once and cannot be confused with an empty burst delta.
+        session.activityRosterDueTick = now + kRosterBurstIntervalMs;
+        const CurrentSquadOutcome squad = append_current_squad_notification(
+            session, scratch, key, nextSendNonce, scratch.framed, framedSize);
+        const bool squadPublished = squad == CurrentSquadOutcome::appended;
+        const bool delivered = publish_frame(
+            session, scratch, response, written, framedSize, nextSendNonce, squadPublished);
+        if (delivered && squadPublished) {
+            session.activityAuthorityBurstDelivered = true;
+            session.activityKeepaliveDueTick = now + kKeepaliveIntervalMs;
+        }
+        return delivered;
+    }
+    if (authorityBurstDue && !keepaliveDue && !actionableRegionPublication
+        && !citizenRetirementDue) {
+        session.activityAuthorityBurstDueTick = now + kAuthorityBurstIntervalMs;
+        ++session.activityAuthorityBurstAttempts;
+        const CurrentSquadOutcome squad = append_current_squad_notification(
+            session, scratch, key, nextSendNonce, scratch.framed, framedSize);
+        const bool squadPublished = squad == CurrentSquadOutcome::appended;
+        const bool authorityPublished =
+            squad == CurrentSquadOutcome::notOwned
+            && append_authority_notification(
+                session, scratch, key, nextSendNonce, scratch.framed, framedSize);
+        const bool type5Published = squadPublished || authorityPublished;
+        const bool delivered = publish_frame(
+            session, scratch, response, written, framedSize, nextSendNonce, type5Published);
+        if (delivered && type5Published) {
+            session.activityAuthorityBurstDelivered = true;
+        }
+        std::array<char, core::log::kLineCapacity> line{};
+        const int count = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=activity stage=foreign-authority-burst result=%s attempt=%u delivered=%u squad=%u",
+            type5Published ? (delivered ? "ok" : "discarded") : "held",
+            static_cast<unsigned>(session.activityAuthorityBurstAttempts),
+            static_cast<unsigned>(session.activityAuthorityBurstDelivered),
+            static_cast<unsigned>(squadPublished));
+        if (count > 0) {
+            core::log::write(core::log::Channel::server,
+                             delivered ? core::log::Level::info : core::log::Level::debug,
+                             {line.data(), static_cast<std::size_t>(count)});
+        }
+        return delivered;
+    }
     // The burst is what step 36 waits on. When both timers fire together the roster goes out last,
     // because the type-13 key binds to the player message 12 creates.
     if (!keepaliveDue && !actionableRegionPublication && !citizenRetirementDue) {
         session.activityRosterDueTick = now + kRosterBurstIntervalMs;
-        published = append_roster_notification(
-            session, scratch, key, nextSendNonce, scratch.framed, framedSize, true);
+        // A squad request changes the roster topology. Even when it coincides with the ordinary
+        // transition burst, advance and latch the group fold once instead of publishing the new
+        // group under the previous state sequence.
+        published = append_roster_notification(session,
+                                               scratch,
+                                               key,
+                                               nextSendNonce,
+                                               scratch.framed,
+                                               framedSize,
+                                               burstDue && !squadRequestDue);
         return publish_frame(
             session, scratch, response, written, framedSize, nextSendNonce, published);
     }
@@ -303,25 +382,43 @@ bool consume_activity_keepalive(Session& session,
     SecureZeroMemory(&refresh, sizeof refresh);
     if (session.activityJoinedForeignSession) {
         // This session is already the destination advertised by its parent. Membership creates
-        // the native slot; another citizen advertisement or roster would recursively transition.
+        // the native slot; another citizen advertisement or populated roster would recursively
+        // transition. Its own manager still needs the authority delta addressed to this session.
+        const CurrentSquadOutcome squad = append_current_squad_notification(
+            session, scratch, key, nextSendNonce, scratch.framed, framedSize);
+        const bool squadPublished = squad == CurrentSquadOutcome::appended;
+        const bool authorityPublished =
+            squad == CurrentSquadOutcome::notOwned
+            && append_authority_notification(
+                session, scratch, key, nextSendNonce, scratch.framed, framedSize);
+        published = squadPublished || authorityPublished || published;
         std::array<char, core::log::kLineCapacity> line{};
-        const int count = std::snprintf(line.data(),
-                                        line.size(),
-                                        "ev=activity stage=keepalive result=%s foreign=1 bytes=%zu "
-                                        "membership=%u key=0x%llX token=%u revision=%u",
-                                        published ? "ok" : "fail",
-                                        framedSize,
-                                        hasMembership ? 1U : 0U,
-                                        static_cast<unsigned long long>(session.activityMemberKey),
-                                        static_cast<unsigned>(reportedToken),
-                                        reportedRevision);
+        const int count =
+            std::snprintf(line.data(),
+                          line.size(),
+                          "ev=activity stage=keepalive result=%s foreign=1 bytes=%zu "
+                          "membership=%u authority=%u squad=%u held=%u key=0x%llX token=%u "
+                          "revision=%u",
+                          published ? "ok" : "fail",
+                          framedSize,
+                          hasMembership ? 1U : 0U,
+                          authorityPublished ? 1U : 0U,
+                          squadPublished ? 1U : 0U,
+                          squad == CurrentSquadOutcome::held ? 1U : 0U,
+                          static_cast<unsigned long long>(session.activityMemberKey),
+                          static_cast<unsigned>(reportedToken),
+                          reportedRevision);
         if (count > 0) {
             core::log::write(core::log::Channel::server,
                              core::log::Level::debug,
                              {line.data(), static_cast<std::size_t>(count)});
         }
-        return publish_frame(
+        const bool delivered = publish_frame(
             session, scratch, response, written, framedSize, nextSendNonce, published);
+        if (delivered && (authorityPublished || squadPublished)) {
+            session.activityAuthorityBurstDelivered = true;
+        }
+        return delivered;
     }
     // The keepalive always carries the roster, in or out of a transition.
     session.activityRosterDueTick = now + kRosterBurstIntervalMs;

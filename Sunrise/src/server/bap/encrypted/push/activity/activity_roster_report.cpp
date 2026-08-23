@@ -8,8 +8,8 @@ namespace sunrise::server::bap::encrypted::push::activity {
 namespace {
 
 /** Log names for each outcome, in the enum's own order. */
-constexpr std::array<const char*, 5> kOutcomeNames = {
-    "ok", "no_epoch", "no_layout", "no_groups", "encode"};
+constexpr std::array<const char*, 6> kOutcomeNames = {
+    "ok", "no_epoch", "no_layout", "no_groups", "squad_held", "encode"};
 
 } // namespace
 
@@ -36,8 +36,9 @@ void report_roster_push(Session& session,
         std::snprintf(line.data(),
                       line.size(),
                       "ev=activity stage=roster result=%s soid=0x%llX foreign=%u dest=%.*s "
-                      "groups=%zu objects=%zu bytes=%zu state=%u keygroup=0x%X grant=%d "
-                      "region=%u slice=%u spawn=0x%X join=0x%llX player=0x%llX",
+                      "groups=%zu objects=%zu bytes=%zu state=%u keygroup=0x%X grant=%d/%u "
+                      "region=%u slice=%u spawn=0x%X squad=%u/0x%X/%u/%u join=0x%llX "
+                      "player=0x%llX",
                       kOutcomeNames[static_cast<std::size_t>(outcome)],
                       static_cast<unsigned long long>(session.activitySessionId),
                       session.activityJoinedForeignSession ? 1U : 0U,
@@ -49,9 +50,14 @@ void report_roster_push(Session& session,
                       session.activityRosterState,
                       roster.playerKeyGroup,
                       grant,
+                      snapshot.hasGrant ? static_cast<unsigned>(snapshot.grant.token) : 0U,
                       snapshot.region,
                       snapshot.spawnSliceSet,
                       snapshot.spawnSetHash,
+                      snapshot.squadAuth.present ? 1U : 0U,
+                      snapshot.squadAuth.registryKey,
+                      static_cast<unsigned>(snapshot.squadAuth.slotIndex),
+                      snapshot.squadAuth.generation,
                       static_cast<unsigned long long>(session.activityCharacterSoid),
                       static_cast<unsigned long long>(snapshot.playerKey));
     if (written > 0) {

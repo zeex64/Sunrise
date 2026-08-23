@@ -134,4 +134,30 @@ bool primary_world(WorldSnapshot& output) noexcept {
     return oldest != kAbsentSessionId;
 }
 
+/** Reads one exact joined activity session's destination and reported region. */
+bool session_world(std::uint64_t sessionId, WorldSnapshot& output) noexcept {
+    output = {};
+    output.region = kAbsentRegionIndex;
+    if (sessionId == kAbsentSessionId) {
+        return false;
+    }
+    bool found = false;
+    AcquireSRWLockShared(&runtime::storage::g_stateLock);
+    const ActivityState& state = runtime::storage::g_state.activity;
+    const std::size_t target = activity::transactions::find_session(state, sessionId);
+    if (target != kInvalidSessionSlot) {
+        const SessionRecord& record = state.sessions[target];
+        if (record.joined && record.membership.region.index > kAbsentRegionIndex) {
+            output.destination = record.destination;
+            output.teleport = record.membership.teleport;
+            output.sessionId = record.sessionId;
+            output.regionHash = record.membership.region.hash;
+            output.region = record.membership.region.index;
+            found = true;
+        }
+    }
+    ReleaseSRWLockShared(&runtime::storage::g_stateLock);
+    return found;
+}
+
 } // namespace sunrise::state::activity::membership

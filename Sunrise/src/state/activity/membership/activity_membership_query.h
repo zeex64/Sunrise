@@ -159,6 +159,17 @@ struct PendingMutation final {
 [[nodiscard]] bool primary_world(WorldSnapshot& output) noexcept;
 
 /**
+ * Reads one exact joined activity session's destination and reported region.
+ * Unlike `primary_world`, this does not require the session identity to belong to the signed-in
+ * account. Public-current activity-host sessions use their own identity, so their region must be
+ * selected by the native manager token before this query is used.
+ * @param sessionId Joined activity session selected by its native token.
+ * @param output Cleared first, then receives fields copied under one State read lock.
+ * @return True when the requested joined session has reported a region.
+ */
+[[nodiscard]] bool session_world(std::uint64_t sessionId, WorldSnapshot& output) noexcept;
+
+/**
  * Prepares an acknowledgement mark for the current membership revision.
  * @param sessionId Existing joined activity session id.
  * @param revision Revision the client applied; stale and future values are valid no-ops.

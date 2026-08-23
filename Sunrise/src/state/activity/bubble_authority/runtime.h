@@ -8,8 +8,9 @@ namespace sunrise::state::activity::bubble_authority {
 
 /**
  * Picks the bubble to hand this session, if one is owed.
- * A bubble is granted once. The token is a change against the client's own mirror, so re-sending
- * the same token for a bubble already granted does nothing, rather than being an error.
+ * The current bubble token is repeated because the client can replace its native authority manager
+ * after the first roster arrives. Gameplay view readiness advances it; an unchanged repeat is inert
+ * in the manager that already applied it.
  * @param sessionId Joined activity session.
  * @param sliceSetIndex Slice set the client is in, or the destination's own.
  * @param grant Gets the bubble and its token.
@@ -19,7 +20,7 @@ namespace sunrise::state::activity::bubble_authority {
 select_grant(std::uint64_t sessionId, std::int32_t sliceSetIndex, Grant& grant) noexcept;
 
 /**
- * Records a bubble as granted so it is not granted twice.
+ * Records the token mirrored for the usable bubble and its paired domain slot.
  * @param sessionId Joined activity session.
  * @param grant Bubble and token that went out.
  */

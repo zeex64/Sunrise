@@ -1,15 +1,16 @@
 # Server Entity Spawning / Native View Reverse-Engineering Notes
 
-Last updated: 2026-08-20
+Last updated: 2026-08-22
 
 ## Goal
 
 Make a Sunrise-hosted Destiny 2 activity create the native per-peer replication view required for
 server-authored enemies and other entities to appear on the client.
 
-The immediate milestone is completing message 40's five-stage view handshake. Native view
-creation and token lookup are now proven; the next layer is the replication scheduler and its
-entity-create lane.
+Message 40, native view creation, scheduler framing, and the synthetic kind-0 construction path are
+now proven. The immediate milestone is a controlled stationary test of package-authored Squad Auth
+on the exact foreign ActivityClient that owns native `CURRENT`, without publishing the squad on the
+root or target-only session.
 
 ## Latest ownership proof and UI diagnostics
 
@@ -3535,3 +3536,269 @@ namespace, spatial-cell table, or slice-set state. It is useful for validating p
 and approximate transforms, but it cannot supply an enemy baseline or override the lifecycle proof
 above. Its build also differs from the target runtime, so hashes and coordinates are corroborating
 evidence rather than a wire-format oracle.
+
+### Client-authored squad spawning
+
+The executable contains a complete client-authored squad path distinct from physics-host entity
+mirroring. Runtime class `0x8080670A` owns a six-state controller. Its initializer
+`FUN_141029330(context, transform, sourceList)` copies a non-empty authored source list into the
+controller at `+0x1F0/+0x1F8` and enters state 1. State 3 invokes `FUN_14102A920`, which expands the
+source rules into at most 32 scheduled descriptors at `+0x280`, stride `0x50`. The normal expansion
+uses `FUN_1404E56C0`; squad descriptors receive class `0x80809A3B`. The state service
+`FUN_14102D8D0` later drains those descriptors through materializer `FUN_141022890`.
+
+The squad branch in that materializer is exact. It resolves the descriptor resource at `+0x1C`
+and relative pointer at `+0x20`, copies the authored placement and request fields, obtains a
+game-owned owner context, and calls native squad creation `FUN_1404FF620`. A completed request
+returns and associates the created native handle with the activity object; a pending request enters
+the game's retry path. A raw call to the low-level constructor is therefore inappropriate: its
+owner/request/member structures are game-owned and substantially larger than a tag plus transform.
+
+Two safer high-level helpers already perform that setup:
+
+- `FUN_140C7B000(mode, transform, sourceList)` selects/expands an authored rule for a 0x20-byte
+  world placement, creates the squad, and consumes the source row on success;
+- `FUN_140C7B4D0(mode, nativeObject, sourceList)` performs the sibling operation anchored to an
+  existing native object.
+
+All recovered native callers pass mode 3. Both helpers are called by higher activity-script state
+machines, validate live source/resource handles, construct owner and member requests, and handle
+pending native creation. This is the best eventual invocation boundary: reuse a live, validated
+activity source list on its owning game thread, rather than fabricating the low-level physics
+request. A successful squad spawn should create the complete actor set (model, collision, local
+lifecycle, squad/AI relationships) and then let the existing outbound probes observe what it
+publishes to physics replication. That directly addresses the audio-only limitation of the current
+transform-only kind-0 mirror.
+
+The EDZ archive corroborates the content graph. Activity resource `0x80B2F02A` contains trigger
+`0x80B2E99F`, spawn rule `0x80B2E997`, fallback rule `0x80B2E99A`, and squad definition
+`0x80B2E9A2` (class `0x80809A3B`). The archive's trigger-to-rule/squad edges are name-cluster
+evidence rather than decoded runtime opcodes, so those tags are not injected or called directly.
+They serve as known EDZ exemplars to compare with captured live source/descriptor rows.
+
+The prior deployed run attached only the final materializer probe and produced no materializer
+sample, so it did not prove that the activity ever initialized a spawn source. The new passive build
+hooks, without invoking or mutating gameplay:
+
+- controller initialization and its input/source counts;
+- state transitions and the first source row;
+- queue construction and its first descriptor/class/resource;
+- final object materialization;
+- both high-level squad helpers, including mode, source-list consumption, placement/object anchor,
+  and result.
+
+All probes call the original exactly once, use bounded SEH snapshots and fixed log budgets, retain no
+game pointer, and reset with the normal network-hook lifecycle. The two new high-level entry
+signatures are unique at `0x140C7B000` and `0x140C7B4D0`; initializer and queue signatures are unique
+at `0x141029330` and `0x14102A920`. Release and deployed DLL SHA-256:
+`54d980c8a24343c767725dad70296a96f7f002e9bf43b21e2c1613fc2d52983a`; size 15,247,360 bytes.
+
+### Physics-host authority boundary and Destiny 1 comparison
+
+The completed `54d980c8...` run attached the controller initializer, state service, queue builder,
+materializer, and both high-level squad helpers successfully. None of those six bodies ran. In the
+same process the two-view physics-replication test still decoded, promoted, constructed, registered,
+and bound the synthetic kind-0 Vandal in native current. The result separates the paths cleanly:
+physics replication is live, while no local authored squad controller/source was admitted.
+
+The supplied `/home/zeex64/Downloads/destiny1.bin` is a 29,148,264-byte FreeBSD x86-64 Destiny 1
+client image, SHA-256 `7271fcb926401df8defb126cb8eb2b247134138b81e401bbacb2ab60791b7954`.
+Its retained RTTI/status/message names include the AI spawn system, squad sensor authority-change
+observer, simulation squad entity, current-bubble authority, authority over the current slice set
+and domain, entity-slot allocation/claim/reset/query/abdication, and replication epoch changes.
+This is direct architectural evidence that the client can contain physics-host simulation while AH
+still assigns authority and transports control state.
+
+The Destiny 2 target retains the same final authority predicates. `FUN_1416FC7A0` obtains the live
+activity authority manager and tests the current map bubble through `FUN_1403CC390`.
+`FUN_1403CC390` returns true only when the corresponding bit is set at manager `+0x10EB8` and clear
+at `+0x10EC4`. `FUN_1416FC7F0` uses the same test with reserved index `0x40`, which is reported by
+the executable as domain authority. The retail status code names the first result
+`authority-over-current-bubble` and prints its current map slice-set/bubble context.
+
+Sunrise already sends the type-5 per-bubble grant block and the latest run decoded/forced its first
+grant for bubble 51. That proves the wire block reached the native decoder, but it does not prove the
+authority manager's final current-bubble bit was true afterward. The built passive correction hooks
+both exact predicates, preserves each result, and logs only the first false and true observation for
+each. The two patterns are unique at `0x1416FC7A0` and `0x1416FC7F0`. Release SHA-256:
+`407f682878a79756620bd869d013ab93d0f7525f56437aa52d8c0cc3ffe2148d`, size 15,248,896 bytes.
+Its first boot resolved the game targets but rejected the entire game-network hook group before
+attachment: the two authority hooks increased the atomic batch from 64 to 66 while the detour
+layer's fixed install/uninstall capacity remained 64. This explains the single startup problem and
+the complete list of `result=fail` attachment lines; it is not a signature or ABI failure.
+
+The detour batch capacity is now one public constant of 96, safe-removal range storage is 98 entries
+to include the two coordinator bodies, and the network hook table has compile-time capacity checks.
+The corrected Release build linked cleanly and is deployed byte-for-byte, SHA-256
+`ebcb818dc3876cc0de88719f6c069ce406f3bcdc0f9db9b1abe6c2dee9043028`, size 15,248,896 bytes.
+
+Interpretation is now bounded. An AH packet should not directly command an ordinary peer to spawn a
+squad. The physics host runs the authored squad/controller path, creates the kind-1 squad and kind-0
+members, and publishes their native replication. If the next run reports current-bubble authority
+false, Sunrise's authority assignment is the first missing boundary. If it reports true while all
+six squad hooks remain silent, authority is present and the missing boundary is the authored
+activity script/roster/source input that would initialize the controller. Neither outcome justifies
+forcing the predicate or calling the low-level squad constructor with fabricated storage.
+
+#### Corrected authority timing sample
+
+The completed `ebcb818d...` run attached all 66 network hooks successfully and remained healthy to
+normal shutdown. Its only natural authority observations were domain false at `t=48283` and
+current-bubble false at `t=48316`. The first type-5 authority message granting bubble 51 was not
+sent until `t=49550` and decoded/forced at `t=49616..49617`. Consequently those two false results
+preceded the first usable grant by about 1.2 seconds and cannot establish the post-grant manager
+state. Later grants for bubbles 3, 4, 10, and 12 also arrived without another natural predicate
+call. All authored-controller and squad-helper probes remained silent. Independently, the existing
+physics-replication path again sent the transform-only Vandal into native CURRENT namespace 1,
+cell 145, and reached promotion, type-2 construction, native registration, glue bind, and kind-0
+success.
+
+The next diagnostic therefore samples rather than forces. Each natural predicate hook now includes
+the native caller RVA in its first-false/first-true record. After a successful type-5 decoder call,
+the decoder invokes each predicate's original trampoline once and emits bounded
+`source=roster` results. This distinguishes three cases directly: current true/domain false means
+the bubble grant works but the reserved domain bit remains absent; both false means the decoded
+block still did not publish final authority; current true with a silent authored path moves the
+boundary to activity script/source initialization. The sample is read-only, calls each original
+exactly once, and uses the normal nested network-call lease. Release and deployed DLL SHA-256:
+`00cf50fa72772cddba26551a78fbf0d0bfd02b0b5c05777b2b4f56ffdf240ac5`, size 15,249,408 bytes.
+
+### Activity message 5 authored-squad result
+
+The later package and wire proof narrows the earlier conclusion that an AH packet cannot directly
+spawn a squad. AH does not invoke the low-level squad constructor and does not replicate a
+fabricated kind-1 or kind-0 object. It sends activity message 5 (`sensor_auth_update`) to update an
+exact package-authored type-1 squad slot. The stock client then resolves the slot's class
+`0x80809A3B` descriptor, authored member candidates, type-66 spawn rule, and world anchor and runs
+the native physics-host/controller path locally. This is still physics-host simulation, but its
+authoritative package-state input is delivered through AH.
+
+Message 5 is an MSB-first bitstream. The relevant object target is only:
+
+```text
+registry key
+slot type = 1
+source slot index
+```
+
+The selected slot's package descriptor supplies the Auth schema. The proved Squad Auth body carries
+requested member counters, a positive 31-bit spawn generation, active state, mode, and an optional
+name hash. It contains no enemy class, type-66 rule tag or slot, map-table tag, anchor ordinal,
+transform, coordinate, region override, or native object record. Phase 1 registers a complete
+authored group; phase 2 emits each slot and applies Auth to the selected type-1 `ClientRef`.
+Committed Auth must be repeated because the client's later phase-2 processing resets that state.
+
+#### `41cc...` root-publication negative proof
+
+The first EDZ implementation published the target-region source through the root ActivityClient.
+At `t=92802`, root session `0x9EAA300100200001` emitted
+`groups=2 objects=35 bytes=625 state=4`, grant `3/3`, and
+`squad=1/0xE0DD0E60/0/1`; equivalent committed bodies repeated on later keepalives. This proves the
+complete 14-slot parking group and generation-1 Squad Auth reached the root message-5 encoder and
+transport. The same diagnostic reported `region=24 slice=408`.
+
+Native `CURRENT` was still region 408 and belonged to a different foreign ActivityClient. The run
+produced zero controller initialization, queue expansion, materialization, high-level squad-helper,
+or client controller events after the root commit. Message-5 roster/Auth state is per
+ActivityClient session: publishing a target-region group on the root container does not register
+that group in the foreign host container whose native manager is active. This explains the clean
+no-spawn result without changing the proved group or Auth encoding.
+
+#### Final foreign-native-current route
+
+The replacement architecture separates request ownership from transport:
+
+1. The player's primary/root activity owns the operator request, lifecycle, request id, and spawn
+   generation. Its normal message-5 stream is guarded as base-roster-only and rejects any accidental
+   squad-bearing snapshot.
+2. A value-only native-current resolver scans live public host rows and accepts exactly one whose
+   host session owns the active native manager. It rejects unavailable or ambiguous selections.
+3. The corresponding gameplay group must be advertised for the native-current region, admitted,
+   view-bound, and activity-host-published. Its group-to-host and host-to-group mappings, held region,
+   host membership region, nonzero authority token, admission generation, and native-manager owner
+   must agree. The complete tuple is read twice before it can authorize a send.
+4. The request captures root activity session, current group session, foreign host session,
+   admission generation, scenario, exact native-current region, candidate object tag, exact type-1
+   source slot, requested count, and authority token. UI selection is discarded whenever that tuple
+   changes.
+5. Only the joined foreign session whose id equals the request's current host may encode the custom
+   body. That session must have its own patch epoch, no already-staged body, and the exact route must
+   pass again before and after encoding.
+6. The body contains exactly one complete, byte-validated catalog group in package slot order. It
+   sets no player-key group, participation binding, player object, region, teleport, synthetic spawn,
+   or root group. The type-1 source receives the proved Auth with mode 0 and the optional name hash
+   absent; the exact native-current bubble grant uses the captured authority token.
+7. The foreign session owns its own roster-group fold and state sequence. Adding the group advances
+   topology once; committed repeats keep that sequence stable. The first topology body is isolated
+   in its own activity frame. When an owned request is temporarily held, the foreign keepalive does
+   not substitute an empty authority-only message 5.
+8. Nonce, roster fold/state, grant, and request lifecycle are staged and committed only after frame
+   delivery. A failed append restores them and marks the root-owned request discarded or refused as
+   appropriate. A successful foreign send records prepare/commit against the root owner.
+9. One committed identity stays latched for repeat keepalives and prevents a second simultaneous
+   placement. Exact root or foreign-host teardown/rebind retires it; a transient handoff mismatch
+   merely holds it and emits nothing on the wrong route.
+
+The sender's decisive diagnostic is `ev=activity stage=current-squad`. A successful stationary run
+must report `result=ok` with `transport` equal to the captured foreign host, while `root` remains the
+primary activity and the logged group/region/bubble/token match the request.
+
+#### Authored location addressability
+
+Only a distinct type-1 `ClientRef` source is independently selectable on this wire. Type-66 rules
+and their anchors are package-internal evidence. The normalized static EDZ catalog contains 33
+whole-roster `Group` records and 95 type-1 `Source` records across native regions 24 and 408. Those
+sources resolve to 77 distinct authored coordinates; sources that share coordinates remain separate
+wire identities rather than being collapsed. Each group stores its scenario, region, object,
+registry key, and complete ordered type/flag arrays once. Each source refers to a group plus an
+exact source slot and records the source hash/config, source-specific rule and anchor evidence,
+classification/confidence, and Auth metadata. Lookup and request identity are therefore the exact
+tuple `{scenario, region, object tag, source slot}`, and the sender copies the complete group from
+the catalog rather than relying on the earlier two-object build-data exceptions.
+
+All retained type-1 descriptors use Auth schema `0x80807EC9`. Six matching package arrays establish
+the logical member-slot width (one or two for the retained sources), but they do not yet establish
+the semantics or complete signed values of each source's `requestedCount[]` vector. A scalar seen in
+the package is not treated as a proved default. Consequently only the two previously live-proved
+sources are `authResolved=true` and selectable:
+
+| Region | Type-1 source identity | Rule/anchor evidence | Addressability |
+| --- | --- | --- | --- |
+| 408 / bubble 51 | object `0x80BE950D`, registry `0xC984DDDE`, slot 0 | rule `0x80BE9303` at slot 3; map `0x80BE6452`, ordinal 6; `(541.2949, 92.5164, 92.3618)` | One proved rule, so source selection uniquely resolves this location |
+| 24 / bubble 3 | object `0x80BE23FF`, registry `0xE0DD0E60`, slot 0 | source-specific rule `0x80BE37A8` at slot 11; map `0x80BE22E5`, ordinal 0; `(149.8069, -109.1274, 18.3942)` | Retained source location |
+
+The generic rule `0x80BE37A5` at slot 6 and map anchor `0x80BE20F8`, ordinal 2,
+`(140.0529, -61.2941, 39.0264)` is retained separately as passive location evidence for the same
+region. It is not the source-specific location for `0x80BE23FF` slot 0 and cannot be independently
+addressed by message 5. The other 93 normalized sources remain visible for current-region browsing
+and diagnostics but are display-only; both the panel and request API reject them until every member
+of the signed requested-count vector is proved. The required native evidence is a passive
+schema-`0x80807EC9` construction/decode capture containing key, type, source slot, vector length,
+every requested count, generation, active state, and mode.
+
+#### Passive camera-projection checkpoint
+
+The passive camera probe identifies a stable camera position at camera-block offset `+0x594` and a
+forward vector at `+0x5BC`. The observed consumer only builds a position/direction-style object. No
+right/up basis, field of view, projection coefficients, near plane, viewport transform, or finalized
+view-projection matrix is published yet. Actual in-world 3D authored-anchor boxes therefore remain
+pending a controlled capture that changes player movement, camera rotation, and ADS state; no
+guessed projection is enabled.
+
+#### Current built artifact and pending validation
+
+The normalized catalog, exact source-slot routing, route/request guards, teardown lifecycle,
+diagnostics, authored-location UI, and passive camera projection probe are built and deployed:
+
+```text
+SHA-256 36d294a5d790cc55d85ac85f3e4e084f132ec07bb598f7cadb5271cfe2a69261
+Size    15,301,632 bytes
+State   built / deployed
+```
+
+Runtime validation of this exact artifact is pending. The controlled test should remain stationary
+in one exact supported EDZ region, place one of the two
+Auth-resolved sources, and verify the foreign
+`current-squad` commit, base-only root roster, repeated foreign Auth, and downstream native
+controller/squad/actor activity. Until then, the route is implementation- and build-complete but a
+visible, collidable, reactive enemy is not yet claimed.

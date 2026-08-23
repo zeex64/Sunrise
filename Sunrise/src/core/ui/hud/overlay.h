@@ -12,8 +12,6 @@ enum class Overlay : std::uint8_t {
     currentStatus,
     /** The instances of the session the player is in. */
     session,
-    /** The server-authored test entity and every observed client lifecycle stage. */
-    entity,
     count,
 };
 

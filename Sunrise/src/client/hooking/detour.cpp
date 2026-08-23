@@ -10,9 +10,6 @@
 namespace sunrise::client::hooking::detour {
 namespace {
 
-/** 64 hook slots bound each fixed-storage Detours transaction. */
-constexpr std::size_t kBatchLimit = 64;
-
 /**
  * Checks every detour description and output slot before transaction setup.
  * @param specs Target and replacement pairs in stable slot order.

@@ -6,6 +6,7 @@
 #include <limits>
 
 #include "../../core/logging/log.h"
+#include "../../state/activity/squads/activity_squad_control.h"
 #include "../../state/matchmaking/matchmaking_state.h"
 #include "internal.h"
 #include "runtime.h"
@@ -62,6 +63,21 @@ void publish_account_mutation(Session& origin) noexcept {
 
 /** @param session Its secrets and identity are wiped. */
 void clear_session(Session& session) noexcept {
+    state::activity::squads::DebugSnapshot squad{};
+    state::activity::squads::snapshot_debug(squad);
+    if (squad.requestActive && session.activitySessionId != 0
+        && squad.request.activitySessionId == session.activitySessionId) {
+        (void)state::activity::squads::retire(
+            squad.request.requestId,
+            session.activitySessionId,
+            state::activity::squads::RefusalReason::activitySessionChanged);
+    } else if (squad.requestActive && session.activitySessionId != 0
+               && squad.request.currentHostSessionId == session.activitySessionId) {
+        (void)state::activity::squads::retire(
+            squad.request.requestId,
+            squad.request.activitySessionId,
+            state::activity::squads::RefusalReason::currentHostChanged);
+    }
     SecureZeroMemory(&session, sizeof session);
     // This sentinel cannot come from the member initializer because sessions are securely wiped.
     // Region zero is valid, so leaving the field zero would suppress its first advertisement.

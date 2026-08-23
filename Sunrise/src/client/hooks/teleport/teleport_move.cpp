@@ -8,9 +8,11 @@
 
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
 
 #include "../../../core/logging/log.h"
 #include "../../../core/ui/runtime/ui_visibility_runtime.h"
@@ -63,6 +65,59 @@ CameraSingleton g_cameraSingleton{};
 /** Written by the camera hook and read by the physics hook. Both run on the same thread. */
 std::array<float, kVectorLanes> g_forward{};
 
+/** Four raw lanes copied from one camera-block offset. No projection meaning is assumed. */
+using ProbeVector = std::array<float, 4>;
+static_assert(kCameraProbeVector9A4 + sizeof(ProbeVector) <= kCameraBlockStride);
+
+/** One coherent, pointer-free camera-block observation made after the native transform. */
+struct CameraProbeSample {
+    std::uint64_t id{};
+    std::uint32_t playerIndex{};
+    ProbeVector position594{};
+    ProbeVector vector5BC{};
+    ProbeVector vector5C8{};
+    ProbeVector vector998{};
+    ProbeVector vector9A4{};
+};
+
+/** Camera calls between probe reads. Forward capture itself still runs every call. */
+constexpr std::uint64_t kProbeCallStride = 12;
+/** Hard process-lifetime cap; the probe can never turn ordinary play into an unbounded log. */
+constexpr std::uint32_t kProbeReportLimit = 32;
+/** A malformed block cannot publish infinities, NaNs, or implausibly large scalar values. */
+constexpr float kProbeAbsoluteLaneLimit = 1'000'000.0F;
+/** Change thresholds deliberately describe raw values, not guessed camera semantics. */
+constexpr float kProbePositionChange = 0.25F;
+constexpr float kProbeDirectionChange = 0.01F;
+constexpr float kProbeCandidateChange = 0.005F;
+/** Fewer than two reports per second at an ordinary 60 Hz camera cadence. */
+constexpr std::uint64_t kProbeMinimumSampleGap = 3;
+
+constexpr std::uint32_t kProbeChangePosition = 1U << 0U;
+constexpr std::uint32_t kProbeChange5BC = 1U << 1U;
+constexpr std::uint32_t kProbeChange5C8 = 1U << 2U;
+constexpr std::uint32_t kProbeChange998 = 1U << 3U;
+constexpr std::uint32_t kProbeChange9A4 = 1U << 4U;
+
+/** Per-family caps preserve room for movement, rotation, aim, and zoom in the same run. */
+constexpr std::uint32_t kProbePositionReportLimit = 6;
+constexpr std::uint32_t kProbeDirectionReportLimit = 12;
+constexpr std::uint32_t kProbeCandidateReportLimit = 16;
+
+std::atomic_uint64_t g_probeCalls{0};
+std::atomic_uint64_t g_probeSampleId{0};
+CameraProbeSample g_previousProbe{};
+bool g_previousProbeValid{false};
+std::uint64_t g_lastProbeReportId{};
+std::uint32_t g_probeReports{};
+std::uint32_t g_probePositionReports{};
+std::uint32_t g_probeDirectionReports{};
+std::uint32_t g_probeCandidateReports{};
+std::uint32_t g_probeInvalidReports{};
+
+/** Invalid reads are useful once, but repeated load-screen failures are not. */
+constexpr std::uint32_t kProbeInvalidReportLimit = 2;
+
 /**
  * Reads one value out of game memory without faulting on a torn pointer.
  * @param address Source address.
@@ -76,6 +131,221 @@ template <typename T> [[nodiscard]] bool read_at(const std::byte* address, T& va
     SIZE_T read = 0;
     return ReadProcessMemory(GetCurrentProcess(), address, &value, sizeof value, &read) != FALSE
            && read == sizeof value;
+}
+
+/** @return True when every raw probe lane is finite and inside the diagnostic safety bound. */
+[[nodiscard]] bool valid_probe_vector(const ProbeVector& vector) noexcept {
+    for (const float lane : vector) {
+        if (!std::isfinite(lane) || std::fabs(lane) > kProbeAbsoluteLaneLimit) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/** @return True when any lane moved farther than the field's raw-value threshold. */
+[[nodiscard]] bool probe_vector_changed(const ProbeVector& before,
+                                        const ProbeVector& after,
+                                        float threshold) noexcept {
+    for (std::size_t lane = 0; lane < before.size(); ++lane) {
+        if (std::fabs(after[lane] - before[lane]) >= threshold) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Resolves one player camera block without overflowing integer address arithmetic.
+ * ReadProcessMemory remains the final readable-page proof for every copied field.
+ */
+[[nodiscard]] const std::byte* camera_block(const std::byte* camera,
+                                            std::uint32_t playerIndex) noexcept {
+    constexpr std::size_t kLargestProbeEnd = kCameraProbeVector9A4 + sizeof(ProbeVector);
+    const std::size_t index = static_cast<std::size_t>(playerIndex);
+    if (index > (std::numeric_limits<std::size_t>::max() - kLargestProbeEnd) / kCameraBlockStride) {
+        return nullptr;
+    }
+    const std::size_t offset = index * kCameraBlockStride;
+    const std::uintptr_t base = reinterpret_cast<std::uintptr_t>(camera);
+    constexpr std::uintptr_t kAddressMaximum = std::numeric_limits<std::uintptr_t>::max();
+    if (offset > kAddressMaximum || base > kAddressMaximum - offset) {
+        return nullptr;
+    }
+    const std::uintptr_t block = base + static_cast<std::uintptr_t>(offset);
+    if (block > kAddressMaximum - kLargestProbeEnd) {
+        return nullptr;
+    }
+    return reinterpret_cast<const std::byte*>(block);
+}
+
+/** Emits one bounded failure without leaking a native address. */
+void report_probe_invalid(std::uint32_t playerIndex, const char* reason) noexcept {
+    if (g_probeInvalidReports >= kProbeInvalidReportLimit) {
+        return;
+    }
+    ++g_probeInvalidReports;
+    std::array<char, 128> line{};
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=camera_probe stage=projection_candidates result=skip "
+                                      "player=%u reason=%s",
+                                      static_cast<unsigned>(playerIndex),
+                                      reason);
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
+/** @return Raw-field change mask against the last reported sample. */
+[[nodiscard]] std::uint32_t probe_change_mask(const CameraProbeSample& before,
+                                              const CameraProbeSample& after) noexcept {
+    std::uint32_t mask = 0;
+    if (probe_vector_changed(before.position594, after.position594, kProbePositionChange)) {
+        mask |= kProbeChangePosition;
+    }
+    if (probe_vector_changed(before.vector5BC, after.vector5BC, kProbeDirectionChange)) {
+        mask |= kProbeChange5BC;
+    }
+    if (probe_vector_changed(before.vector5C8, after.vector5C8, kProbeDirectionChange)) {
+        mask |= kProbeChange5C8;
+    }
+    if (probe_vector_changed(before.vector998, after.vector998, kProbeCandidateChange)) {
+        mask |= kProbeChange998;
+    }
+    if (probe_vector_changed(before.vector9A4, after.vector9A4, kProbeCandidateChange)) {
+        mask |= kProbeChange9A4;
+    }
+    return mask;
+}
+
+/** Keeps exhausted movement/rotation families from consuming the whole bounded report budget. */
+[[nodiscard]] std::uint32_t admitted_probe_changes(std::uint32_t mask) noexcept {
+    std::uint32_t admitted = mask;
+    if (g_probePositionReports >= kProbePositionReportLimit) {
+        admitted &= ~kProbeChangePosition;
+    }
+    if (g_probeDirectionReports >= kProbeDirectionReportLimit) {
+        admitted &= ~(kProbeChange5BC | kProbeChange5C8);
+    }
+    if (g_probeCandidateReports >= kProbeCandidateReportLimit) {
+        admitted &= ~(kProbeChange998 | kProbeChange9A4);
+    }
+    return admitted;
+}
+
+/** Accounts each family once even when both of its raw vectors changed. */
+void account_probe_changes(std::uint32_t mask) noexcept {
+    if ((mask & kProbeChangePosition) != 0U) {
+        ++g_probePositionReports;
+    }
+    if ((mask & (kProbeChange5BC | kProbeChange5C8)) != 0U) {
+        ++g_probeDirectionReports;
+    }
+    if ((mask & (kProbeChange998 | kProbeChange9A4)) != 0U) {
+        ++g_probeCandidateReports;
+    }
+}
+
+/** Writes the five value-only vectors as one parseable event. */
+void report_probe(const CameraProbeSample& sample, std::uint32_t changes) noexcept {
+    std::array<char, core::log::kLineCapacity> line{};
+    const auto& p = sample.position594;
+    const auto& a = sample.vector5BC;
+    const auto& b = sample.vector5C8;
+    const auto& c = sample.vector998;
+    const auto& d = sample.vector9A4;
+    const int written = std::snprintf(line.data(),
+                                      line.size(),
+                                      "ev=camera_probe stage=projection_candidates result=sample "
+                                      "id=%llu player=%u changes=0x%02X "
+                                      "v594=%.6g,%.6g,%.6g,%.6g v5bc=%.6g,%.6g,%.6g,%.6g "
+                                      "v5c8=%.6g,%.6g,%.6g,%.6g v998=%.6g,%.6g,%.6g,%.6g "
+                                      "v9a4=%.6g,%.6g,%.6g,%.6g",
+                                      static_cast<unsigned long long>(sample.id),
+                                      static_cast<unsigned>(sample.playerIndex),
+                                      static_cast<unsigned>(changes),
+                                      static_cast<double>(p[0]),
+                                      static_cast<double>(p[1]),
+                                      static_cast<double>(p[2]),
+                                      static_cast<double>(p[3]),
+                                      static_cast<double>(a[0]),
+                                      static_cast<double>(a[1]),
+                                      static_cast<double>(a[2]),
+                                      static_cast<double>(a[3]),
+                                      static_cast<double>(b[0]),
+                                      static_cast<double>(b[1]),
+                                      static_cast<double>(b[2]),
+                                      static_cast<double>(b[3]),
+                                      static_cast<double>(c[0]),
+                                      static_cast<double>(c[1]),
+                                      static_cast<double>(c[2]),
+                                      static_cast<double>(c[3]),
+                                      static_cast<double>(d[0]),
+                                      static_cast<double>(d[1]),
+                                      static_cast<double>(d[2]),
+                                      static_cast<double>(d[3]));
+    if (written > 0) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+}
+
+/**
+ * Copies candidate projection fields on the camera thread. This is an observation probe only:
+ * it publishes no native address and assigns no basis or projection semantics to the fields.
+ */
+void capture_projection_probe(const std::byte* block, std::uint32_t playerIndex) noexcept {
+    if (!core::log::accepts(core::log::Channel::client, core::log::Level::info)
+        || g_probeReports >= kProbeReportLimit) {
+        return;
+    }
+    const std::uint64_t call = g_probeCalls.fetch_add(1, std::memory_order_relaxed) + 1U;
+    if (call != 1U && call % kProbeCallStride != 0U) {
+        return;
+    }
+    if (block == nullptr) {
+        report_probe_invalid(playerIndex, "address_range");
+        return;
+    }
+
+    CameraProbeSample sample{};
+    sample.playerIndex = playerIndex;
+    if (!read_at(block + kCameraProbePosition, sample.position594)
+        || !read_at(block + kCameraForwardX, sample.vector5BC)
+        || !read_at(block + kCameraProbeVector5C8, sample.vector5C8)
+        || !read_at(block + kCameraProbeVector998, sample.vector998)
+        || !read_at(block + kCameraProbeVector9A4, sample.vector9A4)) {
+        report_probe_invalid(playerIndex, "read");
+        return;
+    }
+    if (!valid_probe_vector(sample.position594) || !valid_probe_vector(sample.vector5BC)
+        || !valid_probe_vector(sample.vector5C8) || !valid_probe_vector(sample.vector998)
+        || !valid_probe_vector(sample.vector9A4)) {
+        report_probe_invalid(playerIndex, "nonfinite_or_range");
+        return;
+    }
+    sample.id = g_probeSampleId.fetch_add(1, std::memory_order_relaxed) + 1U;
+
+    std::uint32_t changes = 0;
+    if (g_previousProbeValid && g_previousProbe.playerIndex == sample.playerIndex) {
+        if (sample.id - g_lastProbeReportId < kProbeMinimumSampleGap) {
+            return;
+        }
+        changes = admitted_probe_changes(probe_change_mask(g_previousProbe, sample));
+        if (changes == 0U) {
+            return;
+        }
+    }
+    report_probe(sample, changes);
+    account_probe_changes(changes);
+    ++g_probeReports;
+    g_lastProbeReportId = sample.id;
+    g_previousProbe = sample;
+    g_previousProbeValid = true;
 }
 
 /**
@@ -354,12 +624,17 @@ void capture_forward(std::uint32_t playerIndex) noexcept {
     if (camera == nullptr) {
         return;
     }
+    const std::byte* const block = camera_block(camera, playerIndex);
+    if (block == nullptr) {
+        return;
+    }
     std::array<float, kVectorLanes> forward{};
-    if (!read_at(camera + kCameraBlockStride * playerIndex + kCameraForwardX, forward)) {
+    if (!read_at(block + kCameraForwardX, forward)) {
         return;
     }
     g_forward = forward;
     g_forwardValid.store(true, std::memory_order_release);
+    capture_projection_probe(block, playerIndex);
 }
 
 /** Latches one teleport request if the bound key went down this frame. */

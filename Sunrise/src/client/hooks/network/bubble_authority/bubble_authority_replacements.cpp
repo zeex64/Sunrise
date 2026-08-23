@@ -5,6 +5,7 @@
 #include <cstdio>
 
 #include "../../../../core/logging/log.h"
+#include "../authored_spawn_probe.h"
 #include "../coordinator/network_call_coordinator.h"
 #include "../platform.h"
 #include "scope/bubble_authority_scope.h"
@@ -43,9 +44,8 @@ using ContentUntracked = bool(__fastcall*)();
  * @param event Native activity message storage borrowed for this call.
  * @return The native decoder result, or false when there is no original to call.
  */
-__declspec(noinline) bool __fastcall decoder_body(void* roster,
-                                                  void* bitStream,
-                                                  void* event) noexcept {
+__declspec(noinline) bool __fastcall
+decoder_body(void* roster, void* bitStream, void* event) noexcept {
     coordinator::CallLease lease{};
     coordinator::g_callIngress(
         lease, HookSlot::bubbleAuthorityDecoder, coordinator::ConsumerKind::none);
@@ -61,6 +61,9 @@ __declspec(noinline) bool __fastcall decoder_body(void* roster,
     __try {
         if (call != nullptr) {
             result = call(roster, bitStream, event);
+        }
+        if (scoped && result) {
+            authored_spawn_probe::sample_authority_after_roster();
         }
     } __finally {
         if (scoped) {

@@ -32,6 +32,14 @@ constexpr std::size_t kSobjectGlueTableBaseInstructionEndOffset = 0x76;
 constexpr std::size_t kSobjectObjectTableDisplacementOffset = 0x5B;
 /** The dirty row processor's first table lea ends after this signed rel32. */
 constexpr std::size_t kSobjectObjectTableInstructionEndOffset = 0x5F;
+/** The component-map encoder's mov loads the global tag-page table through this rel32. */
+constexpr std::size_t kSobjectResourceTableDisplacementOffset = 0x37;
+/** The component-map encoder's table-base load ends after this signed rel32. */
+constexpr std::size_t kSobjectResourceTableInstructionEndOffset = 0x3B;
+/** The native-object iterator's first mov names the global datum-table descriptor. */
+constexpr std::size_t kSobjectNativeObjectTableDisplacementOffset = 0x1D;
+/** The datum-table load ends after its signed rel32. */
+constexpr std::size_t kSobjectNativeObjectTableInstructionEndOffset = 0x21;
 
 } // namespace
 
@@ -80,6 +88,60 @@ bool derive(std::span<const patterns::ImageRange> image,
         matches[index(patterns::game::Id::schedulerEntityCollectorGate)].address;
     resolved.schedulerEntityCollector =
         matches[index(patterns::game::Id::schedulerEntityCollector)].address;
+    resolved.sobjectComponentMapEncoder =
+        matches[index(patterns::game::Id::sobjectComponentMapEncoder)].address;
+    if (!relative::resolve(resolved.sobjectComponentMapEncoder,
+                           kSobjectResourceTableDisplacementOffset,
+                           kSobjectResourceTableInstructionEndOffset,
+                           resolved.sobjectResourceTableBaseSlot)) {
+        return false;
+    }
+    resolved.sobjectCurrentObjectLookup =
+        matches[index(patterns::game::Id::sobjectCurrentObjectLookup)].address;
+    resolved.sobjectInboundUpdateApply =
+        matches[index(patterns::game::Id::sobjectInboundUpdateApply)].address;
+    resolved.sobjectLifecycleState =
+        matches[index(patterns::game::Id::sobjectLifecycleState)].address;
+    resolved.sobjectComponentState =
+        matches[index(patterns::game::Id::sobjectComponentState)].address;
+    resolved.sobjectCurrentEntityResolver =
+        matches[index(patterns::game::Id::sobjectCurrentEntityResolver)].address;
+    resolved.sobjectCurrentDefinitionResolver =
+        matches[index(patterns::game::Id::sobjectCurrentDefinitionResolver)].address;
+    resolved.sobjectObjectTransform =
+        matches[index(patterns::game::Id::sobjectObjectTransform)].address;
+    resolved.authoredObjectMaterialize =
+        matches[index(patterns::game::Id::authoredObjectMaterialize)].address;
+    resolved.authoredSpawnState = matches[index(patterns::game::Id::authoredSpawnState)].address;
+    resolved.authoredSpawnInitialize =
+        matches[index(patterns::game::Id::authoredSpawnInitialize)].address;
+    resolved.authoredSpawnQueueBuilder =
+        matches[index(patterns::game::Id::authoredSpawnQueueBuilder)].address;
+    resolved.authoredSquadSpawnTransform =
+        matches[index(patterns::game::Id::authoredSquadSpawnTransform)].address;
+    resolved.authoredSquadSpawnObject =
+        matches[index(patterns::game::Id::authoredSquadSpawnObject)].address;
+    resolved.currentBubbleAuthority =
+        matches[index(patterns::game::Id::currentBubbleAuthority)].address;
+    resolved.domainAuthority = matches[index(patterns::game::Id::domainAuthority)].address;
+    resolved.authorityStateTest = matches[index(patterns::game::Id::authorityStateTest)].address;
+    resolved.bubbleAuthorityApply =
+        matches[index(patterns::game::Id::bubbleAuthorityApply)].address;
+    resolved.authoredSpawnReset = matches[index(patterns::game::Id::authoredSpawnReset)].address;
+    resolved.authoredCallbackResolver =
+        matches[index(patterns::game::Id::authoredCallbackResolver)].address;
+    resolved.authoredCallbackLink =
+        matches[index(patterns::game::Id::authoredCallbackLink)].address;
+    resolved.authoredCallbackTableLink =
+        matches[index(patterns::game::Id::authoredCallbackTableLink)].address;
+    std::byte* const sobjectNativeObjectTableLoad =
+        matches[index(patterns::game::Id::sobjectNativeObjectTableLoad)].address;
+    if (!relative::resolve(sobjectNativeObjectTableLoad,
+                           kSobjectNativeObjectTableDisplacementOffset,
+                           kSobjectNativeObjectTableInstructionEndOffset,
+                           resolved.sobjectNativeObjectTable)) {
+        return false;
+    }
     resolved.sobjectCreateEncoder =
         matches[index(patterns::game::Id::sobjectCreateEncoder)].address;
     resolved.sobjectUpdateEncoder =

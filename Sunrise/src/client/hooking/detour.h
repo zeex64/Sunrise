@@ -1,8 +1,15 @@
 #pragma once
 
+#include <cstddef>
 #include <span>
 
 namespace sunrise::client::hooking::detour {
+
+/** Maximum hooks attached or detached in one fixed-storage transaction. */
+inline constexpr std::size_t kBatchLimit = 96;
+
+/** Hook replacements plus caller-owned coordinator entries checked during safe removal. */
+inline constexpr std::size_t kProtectedCodeLimit = kBatchLimit + 2;
 
 /** Describes one target-to-replacement attachment. */
 struct Spec {

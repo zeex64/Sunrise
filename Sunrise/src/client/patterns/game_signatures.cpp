@@ -496,6 +496,202 @@ constexpr std::string_view kSchedulerEntityCollectorText =
 constexpr auto kSchedulerEntityCollector =
     signature<signature_length(kSchedulerEntityCollectorText)>(kSchedulerEntityCollectorText);
 
+// Matches the RSAT-defined component-map encoder. Its tag normalization and saved dirty-mask
+// arguments are unique; the rip-relative table-base load is also used by the passive map reader.
+constexpr std::string_view kSobjectComponentMapEncoderText =
+    "4C 89 4C 24 20 41 54 41 55 41 57 48 83 EC 40 8B C1 45 8B E0 C1 F8 0D "
+    "81 E1 FF 1F 00 00 44 8B D0 4C 8B FA";
+/** Compiled pattern bytes of the component-map encoder signature above. */
+constexpr auto kSobjectComponentMapEncoder =
+    signature<signature_length(kSobjectComponentMapEncoderText)>(kSobjectComponentMapEncoderText);
+
+// Matches the current native-object lookup used inside each kind-0 update/lifecycle callback.
+// The call displacement is wildcarded; the following normalization makes this entry unique.
+constexpr std::string_view kSobjectCurrentObjectLookupText =
+    "40 53 48 83 EC 20 48 8B D9 C7 01 FF FF FF FF 8B CA E8 ? ? ? ? 83 F8 FF 74 48 "
+    "8B D0 25 FF 1F 00 00 C1 FA 0D 0F B7 CA";
+/** Compiled pattern bytes of the current-object lookup signature above. */
+constexpr auto kSobjectCurrentObjectLookup =
+    signature<signature_length(kSobjectCurrentObjectLookupText)>(kSobjectCurrentObjectLookupText);
+
+// Matches kind 0's inbound update-apply callback at vtable +0xB8.
+constexpr std::string_view kSobjectInboundUpdateApplyText =
+    "48 89 5C 24 08 57 48 83 EC 50 48 8D 4C 24 40 41 8B D9 49 8B F8";
+/** Compiled pattern bytes of the inbound update-apply signature above. */
+constexpr auto kSobjectInboundUpdateApply =
+    signature<signature_length(kSobjectInboundUpdateApplyText)>(kSobjectInboundUpdateApplyText);
+
+// Matches kind 0's native lifecycle-state callback at vtable +0xC8.
+constexpr std::string_view kSobjectLifecycleStateText =
+    "48 89 5C 24 08 57 48 83 EC 30 48 8D 4C 24 58 41 8B F8 8B DA";
+/** Compiled pattern bytes of the lifecycle-state signature above. */
+constexpr auto kSobjectLifecycleState =
+    signature<signature_length(kSobjectLifecycleStateText)>(kSobjectLifecycleStateText);
+
+// Matches kind 0's component lifecycle-state callback at vtable +0xD0.
+constexpr std::string_view kSobjectComponentStateText =
+    "48 89 5C 24 08 48 89 74 24 10 55 57 41 54 41 56 41 57 48 8D 6C 24 C9 "
+    "48 81 EC A0 00 00 00";
+/** Compiled pattern bytes of the component-state signature above. */
+constexpr auto kSobjectComponentState =
+    signature<signature_length(kSobjectComponentStateText)>(kSobjectComponentStateText);
+
+// Matches the nested current-object to replicated-entity resolver used by inbound update apply.
+constexpr std::string_view kSobjectCurrentEntityResolverText =
+    "48 8B 05 ? ? ? ? 4C 8B D9 44 8B CA 81 E2 FF 1F 00 00 41 C1 F9 0D 45 8B C1 4C 8B 10";
+/** Compiled pattern bytes of the current-entity resolver signature above. */
+constexpr auto kSobjectCurrentEntityResolver =
+    signature<signature_length(kSobjectCurrentEntityResolverText)>(
+        kSobjectCurrentEntityResolverText);
+
+// Matches the nested current-object to object-definition resolver used by both state callbacks.
+constexpr std::string_view kSobjectCurrentDefinitionResolverText =
+    "48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 8B DA 48 8B F1 E8 ? ? ? ? "
+    "8B CB C7 06 FF FF FF FF";
+/** Compiled pattern bytes of the current-definition resolver signature above. */
+constexpr auto kSobjectCurrentDefinitionResolver =
+    signature<signature_length(kSobjectCurrentDefinitionResolverText)>(
+        kSobjectCurrentDefinitionResolverText);
+
+// Matches the native object's full transform propagation routine used after client-side factory
+// creation. The stack-cookie displacement is wildcarded; the transform loads and +0xA0 store make
+// this entry unique in the current image.
+constexpr std::string_view kSobjectObjectTransformText =
+    "48 89 5C 24 10 57 48 83 EC 70 0F 29 74 24 60 48 8B 05 ? ? ? ? 48 33 C4 "
+    "48 89 44 24 50 0F 10 02 48 8B F9 0F 11 81 A0 00 00 00";
+/** Compiled pattern bytes of the native object-transform signature above. */
+constexpr auto kSobjectObjectTransform =
+    signature<signature_length(kSobjectObjectTransformText)>(kSobjectObjectTransformText);
+
+// Matches the activity-authored scheduled-object materializer. The unusually large stack frame and
+// saved-register sequence make this entry unique in the current image.
+constexpr std::string_view kAuthoredObjectMaterializeText =
+    "40 55 56 41 54 41 55 41 56 48 8D AC 24 C0 F6 FF FF 48 81 EC 40 0A 00 00 "
+    "48 8B 05 ? ? ? ?";
+/** Compiled pattern bytes of the authored-object materializer signature above. */
+constexpr auto kAuthoredObjectMaterialize =
+    signature<signature_length(kAuthoredObjectMaterializeText)>(kAuthoredObjectMaterializeText);
+
+// Matches the activity-authored spawn state machine that advances into the scheduled-object queue.
+// The image-base LEA displacement is wildcarded; the state-byte load makes this entry unique.
+constexpr std::string_view kAuthoredSpawnStateText =
+    "40 53 56 57 48 83 EC 20 48 8B F9 48 8D 35 ? ? ? ? 48 0F BE 87 E0 01 00 00 8B D8";
+/** Compiled pattern bytes of the authored-spawn state-machine signature above. */
+constexpr auto kAuthoredSpawnState =
+    signature<signature_length(kAuthoredSpawnStateText)>(kAuthoredSpawnStateText);
+
+// Matches the authored spawn-controller initializer. Its state byte, third-argument move, and
+// controller teardown branch make this entry unique in the current image.
+constexpr std::string_view kAuthoredSpawnInitializeText =
+    "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 "
+    "80 B9 E0 01 00 00 00 49 8B E8 48 8B F2 48 8B D9 74 05";
+/** Compiled pattern bytes of the authored-spawn initializer signature above. */
+constexpr auto kAuthoredSpawnInitialize =
+    signature<signature_length(kAuthoredSpawnInitializeText)>(kAuthoredSpawnInitializeText);
+
+// Matches the authored queue builder that expands source rules into at most 32 scheduled object
+// descriptors. The 0x730-byte frame and saved-register sequence are unique in this image.
+constexpr std::string_view kAuthoredSpawnQueueBuilderText =
+    "48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 55 41 54 41 55 41 56 41 57 "
+    "48 8D AC 24 D0 F9 FF FF 48 81 EC 30 07 00 00";
+/** Compiled pattern bytes of the authored squad-descriptor queue-builder signature above. */
+constexpr auto kAuthoredSpawnQueueBuilder =
+    signature<signature_length(kAuthoredSpawnQueueBuilderText)>(kAuthoredSpawnQueueBuilderText);
+
+// Matches the high-level authored squad helper which chooses a spawn rule for a 0x20-byte world
+// transform and performs the complete native squad request/retry sequence.
+constexpr std::string_view kAuthoredSquadSpawnTransformText =
+    "48 89 5C 24 20 55 56 57 41 54 41 55 41 56 41 57 "
+    "48 8D AC 24 F0 F1 FF FF 48 81 EC 10 0F 00 00";
+/** Compiled pattern bytes of the authored transform-squad helper signature above. */
+constexpr auto kAuthoredSquadSpawnTransform =
+    signature<signature_length(kAuthoredSquadSpawnTransformText)>(kAuthoredSquadSpawnTransformText);
+
+// Matches the sibling authored squad helper which anchors the request to an existing native object.
+constexpr std::string_view kAuthoredSquadSpawnObjectText =
+    "48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57 "
+    "48 8D AC 24 D0 F1 FF FF 48 81 EC 30 0F 00 00";
+/** Compiled pattern bytes of the authored object-squad helper signature above. */
+constexpr auto kAuthoredSquadSpawnObject =
+    signature<signature_length(kAuthoredSquadSpawnObjectText)>(kAuthoredSquadSpawnObjectText);
+
+// Matches the native current-bubble authority predicate. The saved-register prologue and both
+// internal calls make this entry unique in the current image.
+constexpr std::string_view kCurrentBubbleAuthorityText =
+    "48 89 5C 24 10 57 48 83 EC 20 E8 91 6B 52 FF 48 8B D8 40 32 FF E8 46 47 FC FF";
+/** Compiled pattern bytes of the current-bubble authority signature above. */
+constexpr auto kCurrentBubbleAuthority =
+    signature<signature_length(kCurrentBubbleAuthorityText)>(kCurrentBubbleAuthorityText);
+
+// Matches the sibling domain-authority predicate, which tests authority slot 0x40.
+constexpr std::string_view kDomainAuthorityText =
+    "40 53 48 83 EC 20 32 DB E8 43 6B 52 FF 48 8D 54 24 30 C6 44 24 30 40";
+/** Compiled pattern bytes of the domain-authority signature above. */
+constexpr auto kDomainAuthority =
+    signature<signature_length(kDomainAuthorityText)>(kDomainAuthorityText);
+
+// Matches the leaf authority-state tester shared by the current-bubble and domain predicates. It
+// returns granted[index] && !pending[index] from the two adjacent native bitsets.
+constexpr std::string_view kAuthorityStateTestText =
+    "44 0F B6 02 4C 8B C9 41 8B C0 BA 01 00 00 00 83 E0 1F 49 C1 E8 05 "
+    "0F B6 C8 D3 E2 43 85 94 81 B8 0E 01 00 74 0D 43 85 94 81 C4 0E 01 00 "
+    "75 03 B0 01 C3 32 C0 C3";
+/** Compiled pattern bytes of the authority-state tester signature above. */
+constexpr auto kAuthorityStateTest =
+    signature<signature_length(kAuthorityStateTestText)>(kAuthorityStateTestText);
+
+// Matches the per-lane bubble-authority apply routine. The opening mask test, long forward branch,
+// saved-register sequence, and stack frame are unique in the current image.
+constexpr std::string_view kBubbleAuthorityApplyText =
+    "45 84 C0 0F 84 6A 01 00 00 48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 20 57 48 83 EC 20";
+/** Compiled pattern bytes of the bubble-authority apply signature above. */
+constexpr auto kBubbleAuthorityApply =
+    signature<signature_length(kBubbleAuthorityApplyText)>(kBubbleAuthorityApplyText);
+
+// Matches the authored spawn-controller reset callback. The state byte and controller pointer
+// move make this entry unique in the current image.
+constexpr std::string_view kAuthoredSpawnResetText =
+    "40 53 48 83 EC 20 80 B9 E0 01 00 00 00 48 8B D9 74 60";
+/** Compiled pattern bytes of the authored spawn-controller reset signature above. */
+constexpr auto kAuthoredSpawnReset =
+    signature<signature_length(kAuthoredSpawnResetText)>(kAuthoredSpawnResetText);
+
+// Matches the generic runtime callback resolver. The wildcarded call resolves the schema record;
+// the surrounding request reads and ordinal setup make this entry unique in the current image.
+constexpr std::string_view kAuthoredCallbackResolverText =
+    "40 53 48 83 EC 20 8B 11 48 8B D9 48 8D 4C 24 30 E8 ? ? ? ? 8B 44 24 30 8B D0";
+/** Compiled pattern bytes of the generic callback-resolver signature above. */
+constexpr auto kAuthoredCallbackResolver =
+    signature<signature_length(kAuthoredCallbackResolverText)>(kAuthoredCallbackResolverText);
+
+// Matches the resource post-load callback linker. Its kind==4 branch resolves the callback
+// references nested in one resource tag; the complete fixed prologue is unique in this image.
+constexpr std::string_view kAuthoredCallbackLinkText =
+    "40 53 48 83 EC 20 48 8B D9 83 FA 04 75 5A 41 8B C0";
+/** Compiled pattern bytes of the resource callback-link signature above. */
+constexpr auto kAuthoredCallbackLink =
+    signature<signature_length(kAuthoredCallbackLinkText)>(kAuthoredCallbackLinkText);
+
+// Matches the decoded callback-table linker. It walks one relative 0x18-byte callback array and
+// resolves each entry; the complete fixed entry sequence is unique in this image.
+constexpr std::string_view kAuthoredCallbackTableLinkText =
+    "48 89 6C 24 18 48 89 7C 24 20 41 56 48 83 EC 20 45 33 F6 48 8B E9 41 8B FE "
+    "48 39 79 10 0F 8E 85 00 00 00";
+/** Compiled pattern bytes of the decoded callback-table linker signature above. */
+constexpr auto kAuthoredCallbackTableLink =
+    signature<signature_length(kAuthoredCallbackTableLinkText)>(kAuthoredCallbackTableLinkText);
+
+// Matches a native-object iterator whose first RIP-relative load names the global datum table.
+// Both displacements are wildcarded; the surrounding saved-register/prologue sequence and paired
+// MOV/LEA make this entry unique in the current image.
+constexpr std::string_view kSobjectNativeObjectTableLoadText =
+    "48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 "
+    "48 8B 05 ? ? ? ? 48 8D 2D ? ? ? ?";
+/** Compiled pattern bytes of the native-object table load signature above. */
+constexpr auto kSobjectNativeObjectTableLoad =
+    signature<signature_length(kSobjectNativeObjectTableLoadText)>(
+        kSobjectNativeObjectTableLoadText);
+
 // Matches the 6-slot object resolver whose first instruction names the schema tables.
 constexpr std::string_view kQueuezObjectResolverText =
     "4C 8B 1D ? ? ? ? 45 33 C9 48 63 C2 45 8B D0 48 05 1A 25 00 00 48 8D 14 40 48 C1 E2 05";
@@ -595,6 +791,29 @@ constexpr std::array kDefinitions{
     patterns::Pattern{"scheduler_entity_finalizer", kSchedulerEntityFinalizer},
     patterns::Pattern{"scheduler_entity_collector_gate", kSchedulerEntityCollectorGate},
     patterns::Pattern{"scheduler_entity_collector", kSchedulerEntityCollector},
+    patterns::Pattern{"sobject_component_map_encoder", kSobjectComponentMapEncoder},
+    patterns::Pattern{"sobject_current_object_lookup", kSobjectCurrentObjectLookup},
+    patterns::Pattern{"sobject_inbound_update_apply", kSobjectInboundUpdateApply},
+    patterns::Pattern{"sobject_lifecycle_state", kSobjectLifecycleState},
+    patterns::Pattern{"sobject_component_state", kSobjectComponentState},
+    patterns::Pattern{"sobject_current_entity_resolver", kSobjectCurrentEntityResolver},
+    patterns::Pattern{"sobject_current_definition_resolver", kSobjectCurrentDefinitionResolver},
+    patterns::Pattern{"sobject_object_transform", kSobjectObjectTransform},
+    patterns::Pattern{"authored_object_materialize", kAuthoredObjectMaterialize},
+    patterns::Pattern{"authored_spawn_state", kAuthoredSpawnState},
+    patterns::Pattern{"authored_spawn_initialize", kAuthoredSpawnInitialize},
+    patterns::Pattern{"authored_spawn_queue_builder", kAuthoredSpawnQueueBuilder},
+    patterns::Pattern{"authored_squad_spawn_transform", kAuthoredSquadSpawnTransform},
+    patterns::Pattern{"authored_squad_spawn_object", kAuthoredSquadSpawnObject},
+    patterns::Pattern{"current_bubble_authority", kCurrentBubbleAuthority},
+    patterns::Pattern{"domain_authority", kDomainAuthority},
+    patterns::Pattern{"authority_state_test", kAuthorityStateTest},
+    patterns::Pattern{"bubble_authority_apply", kBubbleAuthorityApply},
+    patterns::Pattern{"authored_spawn_reset", kAuthoredSpawnReset},
+    patterns::Pattern{"authored_callback_resolver", kAuthoredCallbackResolver},
+    patterns::Pattern{"authored_callback_link", kAuthoredCallbackLink},
+    patterns::Pattern{"authored_callback_table_link", kAuthoredCallbackTableLink},
+    patterns::Pattern{"sobject_native_object_table_load", kSobjectNativeObjectTableLoad},
     patterns::Pattern{"content_id_token_load", kContentIdTokenLoad},
     patterns::Pattern{"queuez_object_resolver", kQueuezObjectResolver},
     patterns::Pattern{"queuez_family5_subscribe", kQueuezFamily5Subscribe},

@@ -45,6 +45,10 @@ struct RosterPublication {
     bool hasGrant{};
     /** Set while a roster body is staged and its outcome is undecided. */
     bool staged{};
+    /** Non-wire authored-squad request carried by this exact staged roster body. */
+    std::uint64_t squadRequestId{};
+    /** Root activity owner used to settle the request transported on a foreign host session. */
+    std::uint64_t squadActivitySessionId{};
 };
 
 /** Mutable transport state owned by one BAP connection. */
@@ -69,6 +73,8 @@ struct Session {
     std::uint64_t activityCharacterSoid{};
     /** Tick count after which the activity link owes its next roster update. */
     std::uint64_t activityRosterDueTick{};
+    /** Earliest tick at which a newly joined foreign host may retry its authority-only grant. */
+    std::uint64_t activityAuthorityBurstDueTick{};
     /**
      * Tick count until which the client is loading, so the roster runs at its faster cadence.
      * A join and a transition-token change are the only two things that open it.
@@ -80,6 +86,8 @@ struct Session {
     std::uint32_t activityRosterGroups{};
     /** Roster updates sent on this connection, capped once the warm-up bumps are spent. */
     std::uint8_t activityRosterSends{};
+    /** Bounded authority-only attempts made while a foreign activity host is coming online. */
+    std::uint8_t activityAuthorityBurstAttempts{};
     /** Per-entry state byte the last roster update carried. */
     std::uint8_t activityRosterState{};
     /** Set once message 52 has arrived, which is what makes a roster update sendable. */
@@ -89,6 +97,8 @@ struct Session {
      * Such a link carries the keepalive alone. A roster or membership push on it stalls the load.
      */
     bool activityJoinedForeignSession{};
+    /** Set only after the early authority-only grant reaches the caller. */
+    bool activityAuthorityBurstDelivered{};
     /**
      * Last region whose citizen descriptor reached the client. -1 until then. Group-keyed state
      * is authoritative when a gameplay group exists; this remains a diagnostic and a fallback for

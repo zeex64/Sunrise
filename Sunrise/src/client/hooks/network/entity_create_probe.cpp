@@ -72,6 +72,7 @@ capture_exact(const WriterSnapshot& before,
 /** Emits one exact, bounded actor record as a metadata line followed by two or fewer hex chunks. */
 void report_exact(std::uint32_t entity,
                   std::uint8_t flags,
+                  std::uint32_t anchor,
                   std::uint32_t rsat,
                   const WriterSnapshot& before,
                   const WriterSnapshot& after) noexcept {
@@ -96,12 +97,14 @@ void report_exact(std::uint32_t entity,
         std::snprintf(header.data(),
                       header.size(),
                       "ev=gameplay stage=entity-record-capture result=ok rsat=0x%08X entity=0x%08X "
-                      "flags=0x%02X bits=%d raw_bytes=%zu prefix_bits=%u prefix_accum=0x%016llX "
+                      "flags=0x%02X anchor=0x%08X bits=%d raw_bytes=%zu prefix_bits=%u "
+                      "prefix_accum=0x%016llX "
                       "suffix_bits=%u suffix_accum=0x%016llX before_total=%d before_flushed=%d "
                       "after_total=%d after_flushed=%d",
                       rsat,
                       entity,
                       static_cast<unsigned>(flags),
+                      anchor,
                       bitDelta,
                       capturedSize,
                       static_cast<unsigned>(before.pendingBits),
@@ -189,6 +192,7 @@ capture_flushed(const WriterSnapshot& before,
 [[nodiscard]] bool inspect(const void* record,
                            const void* writerAddress,
                            std::uint8_t& flags,
+                           std::uint32_t& anchor,
                            WriterSnapshot& writer) noexcept {
     if (record == nullptr || writerAddress == nullptr) {
         return false;
@@ -196,6 +200,7 @@ capture_flushed(const WriterSnapshot& before,
     __try {
         const auto* const recordBytes = static_cast<const std::byte*>(record);
         flags = std::to_integer<std::uint8_t>(recordBytes[0x38]);
+        std::memcpy(&anchor, recordBytes + 0x0C, sizeof anchor);
         const auto* const writerBytes = static_cast<const std::byte*>(writerAddress);
         std::memcpy(&writer.begin, writerBytes, sizeof writer.begin);
         std::memcpy(&writer.end, writerBytes + 0x08, sizeof writer.end);
@@ -248,9 +253,10 @@ __declspec(noinline) std::uint8_t __fastcall encode_body(void* manager,
         lease, HookSlot::entityCreateEncoder, coordinator::ConsumerKind::none);
     const auto call = reinterpret_cast<Encoder>(lease.original);
     std::uint8_t flags = 0;
+    std::uint32_t anchor = 0xFFFFFFFF;
     WriterSnapshot before{};
     WriterSnapshot after{};
-    const bool beforeReadable = inspect(record, writerAddress, flags, before);
+    const bool beforeReadable = inspect(record, writerAddress, flags, anchor, before);
     const bool recordRoot = g_recordDepth++ == 0;
     if (recordRoot) {
         g_recordRsat = 0;
@@ -261,10 +267,11 @@ __declspec(noinline) std::uint8_t __fastcall encode_body(void* manager,
             result = call(manager, writerAddress, entity, record, updateContext, auxiliary);
         }
         std::uint8_t ignoredFlags = 0;
+        std::uint32_t ignoredAnchor = 0xFFFFFFFF;
         const bool afterReadable =
-            lease.accepting && inspect(record, writerAddress, ignoredFlags, after);
+            lease.accepting && inspect(record, writerAddress, ignoredFlags, ignoredAnchor, after);
         if (result != 0 && recordRoot && beforeReadable && afterReadable) {
-            report_exact(entity, flags, g_recordRsat, before, after);
+            report_exact(entity, flags, anchor, g_recordRsat, before, after);
         }
         if (result != 0 && beforeReadable && afterReadable && (flags & 1U) != 0
             && record_once(entity)) {
@@ -286,13 +293,15 @@ __declspec(noinline) std::uint8_t __fastcall encode_body(void* manager,
             const int written =
                 std::snprintf(line.data(),
                               line.size(),
-                              "ev=gameplay stage=entity-create entity=0x%08X flags=0x%02X bits=%d "
+                              "ev=gameplay stage=entity-create entity=0x%08X flags=0x%02X "
+                              "anchor=0x%08X bits=%d "
                               "context=0x%016llX auxiliary=0x%08X "
                               "before[total=%d flushed=%d pending=%u accum=0x%016llX cursor=%p] "
                               "after[total=%d flushed=%d pending=%u accum=0x%016llX cursor=%p] "
                               "flushed_bytes=%zu flushed_hex=%s scalar=%u append=0x%016llX",
                               entity,
                               static_cast<unsigned>(flags),
+                              anchor,
                               bitDelta,
                               static_cast<unsigned long long>(updateContext),
                               auxiliary,

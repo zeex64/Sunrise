@@ -1,3 +1,6 @@
+#include <array>
+#include <span>
+
 #include "../../../middleware/content/packages/tables/roster_intersection.h"
 #include "../../../middleware/content/packages/tables/scenario_reader.h"
 #include "../../../middleware/content/packages/tables/slot_descriptor_reader.h"
@@ -10,6 +13,70 @@ namespace tables = middleware::content::packages::tables;
 
 /** How many hops the chain from a handle to a descriptor blob may take. */
 constexpr std::size_t kChainDepthLimit = 8;
+/** Small authored combat groups selected for the first EDZ message-5 placements. */
+constexpr std::uint32_t kTrostlandSquadObject = 0x80BE950D;
+constexpr std::uint32_t kOutskirtsSquadObject = 0x80BE23FF;
+
+/** @return True when this object is one of the exact slice-local EDZ squad groups below. */
+[[nodiscard]] bool is_edz_squad_object(std::uint32_t objectTag) noexcept {
+    return objectTag == kTrostlandSquadObject || objectTag == kOutskirtsSquadObject;
+}
+
+/**
+ * Fills the exact schema-presence flags authored by the selected EDZ squad object.
+ * The group's handles use the package's split descriptor form, rather than the combined placed
+ * descriptor parsed by the general roster extractor, so its six measured slots are checked here.
+ * @param group Exact object whose slot types have already been read.
+ * @return True when every declared type belongs to the measured package layout.
+ */
+[[nodiscard]] bool fill_edz_squad_flags(std::uint32_t objectTag,
+                                        layouts::RosterGroup& group) noexcept {
+    constexpr std::array<std::uint8_t, 6> kTrostlandTypes = {1, 70, 42, 66, 60, 61};
+    constexpr std::array<std::uint8_t, 6> kTrostlandFlags = {
+        layouts::kSlotSenseFlag | layouts::kSlotAuthFlag,
+        layouts::kSlotSenseFlag | layouts::kSlotAuthFlag,
+        layouts::kSlotAuthFlag,
+        0,
+        0,
+        0,
+    };
+    constexpr std::array<std::uint8_t, 14> kOutskirtsTypes = {
+        1, 3, 70, 30, 45, 45, 66, 44, 44, 44, 60, 66, 61, 46};
+    constexpr std::array<std::uint8_t, 14> kOutskirtsFlags = {
+        layouts::kSlotSenseFlag | layouts::kSlotAuthFlag,
+        layouts::kSlotSenseFlag | layouts::kSlotAuthFlag,
+        layouts::kSlotSenseFlag | layouts::kSlotAuthFlag,
+        layouts::kSlotSenseFlag | layouts::kSlotAuthFlag,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    };
+    const std::span<const std::uint8_t> types =
+        objectTag == kTrostlandSquadObject   ? std::span<const std::uint8_t>(kTrostlandTypes)
+        : objectTag == kOutskirtsSquadObject ? std::span<const std::uint8_t>(kOutskirtsTypes)
+                                             : std::span<const std::uint8_t>();
+    const std::span<const std::uint8_t> flags =
+        objectTag == kTrostlandSquadObject   ? std::span<const std::uint8_t>(kTrostlandFlags)
+        : objectTag == kOutskirtsSquadObject ? std::span<const std::uint8_t>(kOutskirtsFlags)
+                                             : std::span<const std::uint8_t>();
+    if (types.empty() || group.slotCount != types.size() || flags.size() != types.size()) {
+        return false;
+    }
+    for (std::size_t slot = 0; slot < types.size(); ++slot) {
+        if (group.slotTypes[slot] != types[slot]) {
+            return false;
+        }
+        group.slotFlags[slot] = flags[slot];
+    }
+    return true;
+}
 
 /**
  * Records one descriptor's schemas against its slot type.
@@ -179,7 +246,7 @@ bool resolve_object(const reader::Source& source,
     storage.memo[slot].group = kNotARosterGroup;
     ++storage.reads;
     if (!reader::read_tag(source, scratch, objectTag, storage.object)
-        || !tables::carries_roster_slot(storage.object)) {
+        || (!tables::carries_roster_slot(storage.object) && !is_edz_squad_object(objectTag))) {
         return true;
     }
 
@@ -189,15 +256,22 @@ bool resolve_object(const reader::Source& source,
         return true;
     }
     candidate.objectTag = objectTag;
-    resolve_flags(source, scratch, storage, storage.object, candidate);
-    if (!flags_complete(storage, candidate)) {
-        // A slot whose flags are unknown would be encoded with the wrong reset bits, and phase 2
-        // has no resync point, so the whole group is dropped instead.
-        ++storage.unresolvedGroups;
-        return true;
-    }
-    for (std::size_t index = 0; index < candidate.slotCount; ++index) {
-        candidate.slotFlags[index] = storage.slotFlags[candidate.slotTypes[index]];
+    if (is_edz_squad_object(objectTag)) {
+        if (!fill_edz_squad_flags(objectTag, candidate)) {
+            ++storage.unresolvedGroups;
+            return true;
+        }
+    } else {
+        resolve_flags(source, scratch, storage, storage.object, candidate);
+        if (!flags_complete(storage, candidate)) {
+            // A slot whose flags are unknown would be encoded with the wrong reset bits, and phase
+            // 2 has no resync point, so the whole group is dropped instead.
+            ++storage.unresolvedGroups;
+            return true;
+        }
+        for (std::size_t index = 0; index < candidate.slotCount; ++index) {
+            candidate.slotFlags[index] = storage.slotFlags[candidate.slotTypes[index]];
+        }
     }
     // One key may carry different layouts in different activities, so only exact layouts reuse.
     for (std::size_t index = 0; index < storage.groupCount; ++index) {

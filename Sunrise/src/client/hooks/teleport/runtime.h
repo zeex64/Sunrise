@@ -39,7 +39,8 @@ void clear_targets() noexcept;
 void uninstall() noexcept;
 
 /**
- * Publishes the camera forward vector for the physics tick that follows.
+ * Publishes the camera forward vector for the physics tick that follows and takes one bounded,
+ * value-only projection-probe sample when its cadence permits.
  * @param playerIndex Player the camera pose block belongs to.
  */
 void capture_forward(std::uint32_t playerIndex) noexcept;

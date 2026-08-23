@@ -12,6 +12,7 @@
 #include "../../core/logging/log.h"
 #include "../../core/settings/settings.h"
 #include "../activity/defaults/activity_defaults_validation.h"
+#include "../activity/squads/activity_squad_control.h"
 #include "../build_data/runtime.h"
 #include "equipment/configured_equipment_identity.h"
 #include "runtime.h"
@@ -261,6 +262,7 @@ bool initialize(void* module,
 
 /** Securely erases State, including activity destinations and matchmaking descriptors. */
 void shutdown() noexcept {
+    activity::squads::reset();
     AcquireSRWLockExclusive(&runtime::storage::g_stateLock);
     SecureZeroMemory(&runtime::storage::g_state, sizeof runtime::storage::g_state);
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);

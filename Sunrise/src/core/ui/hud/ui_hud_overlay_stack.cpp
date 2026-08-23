@@ -9,7 +9,6 @@
 
 #include "../scaling/dpi/ui_dpi_scaling.h"
 #include "overlay.h"
-#include "overlays/ui_hud_entity_overlay.h"
 #include "overlays/ui_hud_logo_overlay.h"
 #include "overlays/ui_hud_session_overlay.h"
 #include "overlays/ui_hud_status_overlay.h"
@@ -51,7 +50,6 @@ constexpr std::array<Entry, kOverlayCount> kOverlays{
     Entry{
         "Current Status", "current_status", "##sunrise_hud_status", &overlays::status::draw, false},
     Entry{"Session", "session", "##sunrise_hud_session", &overlays::session::draw, false},
-    Entry{"Entity Debug", "entity_debug", "##sunrise_hud_entity", &overlays::entity::draw, true},
 };
 
 /** One status line's identity and starting switch state. */
@@ -65,8 +63,8 @@ struct LineEntry {
 /** Every status line, in StatusLine order. The overlay draws them in it. */
 constexpr std::array<LineEntry, kStatusLineCount> kStatusLines{
     LineEntry{"Activity", "status_activity", true},
-    LineEntry{"Region", "status_region", true},
-    LineEntry{"Bubble", "status_bubble", true},
+    LineEntry{"Current region", "status_region", true},
+    LineEntry{"Current bubble", "status_bubble", true},
     LineEntry{"Teleport slice", "status_slice_set", true},
     LineEntry{"Closest spawn", "status_closest_spawn", true},
 };

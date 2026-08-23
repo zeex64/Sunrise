@@ -12,6 +12,9 @@ using GameProtectedEntries = std::array<hooking::detour::ProtectedCodeEntry, kGa
 using PlatformProtectedEntries =
     std::array<hooking::detour::ProtectedCodeEntry, kPlatformSlots.size() + 2>;
 
+static_assert(kGameSlots.size() <= hooking::detour::kBatchLimit);
+static_assert(GameProtectedEntries{}.size() <= hooking::detour::kProtectedCodeLimit);
+
 /** @return Game target and body pairs, in slot order. */
 [[nodiscard]] GameSpecs game_specs() noexcept;
 

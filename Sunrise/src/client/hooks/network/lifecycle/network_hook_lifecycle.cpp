@@ -3,6 +3,7 @@
 #include "../activity_host_probe.h"
 #include "../activity_mode_probe.h"
 #include "../activity_route_probe.h"
+#include "../authored_spawn_probe.h"
 #include "../content_config/runtime.h"
 #include "../coordinator/network_call_coordinator.h"
 #include "../entity_create_probe.h"
@@ -18,6 +19,7 @@
 #include "../sobject_apply_probe.h"
 #include "../sobject_bind_probe.h"
 #include "../sobject_create_probe.h"
+#include "../sobject_lifecycle_probe.h"
 #include "../sobject_native_probe.h"
 #include "../sobject_rsat_probe.h"
 #include "../sobject_update_probe.h"
@@ -151,6 +153,7 @@ bool uninstall() noexcept {
     const bool removed = lifecycle::uninstall_group(lifecycle::kGameSlots, gameProtectedEntries);
     if (removed) {
         account_soid_probe::reset();
+        authored_spawn_probe::reset();
         entity_create_probe::reset();
         entity_slot_probe::reset();
         membership_update_probe::reset();
@@ -161,6 +164,7 @@ bool uninstall() noexcept {
         sobject_apply_probe::reset();
         sobject_bind_probe::reset();
         sobject_create_probe::reset();
+        sobject_lifecycle_probe::reset();
         sobject_native_probe::reset();
         sobject_rsat_probe::reset();
         sobject_update_probe::reset();

@@ -6,7 +6,7 @@
 
 namespace sunrise::state::activity::bubble_authority {
 
-/** Picks the bubble to hand this session, if one is owed. */
+/** Picks the bubble token to repeat for this session's current native manager. */
 bool select_grant(std::uint64_t sessionId, std::int32_t sliceSetIndex, Grant& grant) noexcept {
     grant = {};
     if (sessionId == kAbsentSessionId || sliceSetIndex < 0
@@ -14,21 +14,21 @@ bool select_grant(std::uint64_t sessionId, std::int32_t sliceSetIndex, Grant& gr
         return false;
     }
     const auto bubble = static_cast<std::uint8_t>(sliceSetIndex >> kSliceSetToBubbleShift);
-    bool owed = false;
+    bool selected = false;
     AcquireSRWLockShared(&runtime::storage::g_stateLock);
     const ActivityState& state = runtime::storage::g_state.activity;
     const std::size_t target = activity::transactions::find_session(state, sessionId);
-    if (target != kInvalidSessionSlot && bubble < kFallbackBubble
-        && state.sessions[target].bubbleAuthority.grantTokens[bubble] == 0) {
+    if (target != kInvalidSessionSlot && bubble < kFallbackBubble) {
+        const std::uint16_t recorded = state.sessions[target].bubbleAuthority.grantTokens[bubble];
         grant.bubble = bubble;
-        grant.token = kInitialGrantToken;
-        owed = true;
+        grant.token = recorded == 0 ? kInitialGrantToken : recorded;
+        selected = true;
     }
     ReleaseSRWLockShared(&runtime::storage::g_stateLock);
-    return owed;
+    return selected;
 }
 
-/** Records a bubble as granted so it is not granted twice. */
+/** Records the token last sent for the usable bubble and its paired domain slot. */
 void record_grant(std::uint64_t sessionId, const Grant& grant) noexcept {
     if (sessionId == kAbsentSessionId || grant.bubble >= kAuthoritySlotCount || grant.token == 0) {
         return;
@@ -38,6 +38,9 @@ void record_grant(std::uint64_t sessionId, const Grant& grant) noexcept {
     const std::size_t target = activity::transactions::find_session(state, sessionId);
     if (target != kInvalidSessionSlot) {
         state.sessions[target].bubbleAuthority.grantTokens[grant.bubble] = grant.token;
+        if (grant.bubble < kFallbackBubble) {
+            state.sessions[target].bubbleAuthority.grantTokens[kFallbackBubble] = grant.token;
+        }
     }
     ReleaseSRWLockExclusive(&runtime::storage::g_stateLock);
 }

@@ -14,6 +14,7 @@
 
 #include "../../../core/logging/log.h"
 #include "../../player/player_position.h"
+#include "../../targets/game.h"
 #include "coordinator/network_call_coordinator.h"
 #include "platform.h"
 
@@ -34,12 +35,39 @@ constexpr std::size_t kSyntheticWireCapacity = 0x100;
 constexpr std::size_t kSyntheticContextSize = 0x60;
 /** The decoded transform stores its second float4 immediately after the quaternion. */
 constexpr std::size_t kTransformSecondFloat4Offset = 0x10;
+constexpr std::size_t kStreamSourceOffset = 0x70;
+constexpr std::size_t kStreamSourceSize = 0x20;
+constexpr std::uint32_t kSharedVandalRsat = 0x815B204B;
+constexpr std::uint32_t kNaturalPlayerRsat = 0x80EF143E;
+/** The disk RSAT has 53 descriptors; its loaded wire map contains only 20 compiled rows. */
+constexpr std::size_t kVandalComponentCount = 20;
+constexpr std::uint32_t kVandalActiveComponentCount = 20;
+constexpr std::size_t kVandalNestedCaptureCapacity = 128;
+constexpr std::size_t kNestedValueCaptureSize = 16;
 
 std::array<std::atomic_uint64_t, kSeenCapacity> g_seen{};
 std::atomic_bool g_decodedRecordProbed{};
 std::atomic_bool g_preloadAttempted{};
+std::atomic_bool g_vandalComponentMapReported{};
+std::atomic_bool g_vandalComponentMapFailureReported{};
 SRWLOCK g_nearbyUpdateLock{SRWLOCK_INIT};
 NearbyUpdateCapture g_nearbyUpdate{};
+
+struct NearbyTransformCapture {
+    std::array<float, 8> transform{};
+    std::uint32_t rsat{};
+    bool present{};
+};
+
+NearbyTransformCapture g_nearbyTransform{};
+
+struct StreamSourceCapture {
+    std::array<std::byte, kStreamSourceSize> bytes{};
+    bool present{};
+};
+
+SRWLOCK g_streamSourceLock{SRWLOCK_INIT};
+StreamSourceCapture g_streamSource{};
 
 using Encoder = std::uint64_t(__fastcall*)(void*, const void*);
 
@@ -86,6 +114,274 @@ struct UpdateSnapshot {
     std::array<std::byte, kMaskCaptureSize> sentBytes{};
     WriterSnapshot writer{};
 };
+
+/** One runtime-built top-level RSAT component descriptor. */
+struct ComponentDescriptorSample {
+    std::uint32_t componentClass{};
+    std::uint32_t schemaTag{};
+    std::uint32_t key{};
+    std::uint32_t nestedCount{};
+    std::int32_t decision{-1};
+    bool active{};
+};
+
+/** One runtime-built nested codec record owned by an active component descriptor. */
+struct NestedDescriptorSample {
+    std::uint32_t componentIndex{};
+    std::uint32_t nestedIndex{};
+    std::uint32_t codecTag{};
+    std::int32_t scratchOffset{};
+    std::int32_t dataOffset{};
+    std::int32_t dirtyBit{};
+    std::int32_t repeatCount{};
+    std::int32_t scratchStride{};
+    std::int32_t bitStride{};
+    bool dirty{};
+    bool sent{};
+    bool valueReadable{};
+    std::array<std::byte, kNestedValueCaptureSize> value{};
+};
+
+/** Fixed-capacity one-shot snapshot of the shared-Vandal's runtime descriptor map. */
+struct ComponentMapSnapshot {
+    const void* tableSlot{};
+    const void* tableWrapper{};
+    const void* table{};
+    const void* page{};
+    const void* entries{};
+    const void* resource{};
+    std::uint32_t pageIndex{};
+    std::int32_t stride{};
+    std::int32_t adjustmentMask{};
+    std::uint64_t encodedAdjustment{};
+    std::uint64_t resourceCount{};
+    std::int64_t listRelative{};
+    std::uint32_t activeCount{};
+    std::uint32_t nestedTotal{};
+    std::uint32_t nestedCaptured{};
+    std::int32_t dirtyBase{};
+    bool nestedTruncated{};
+    std::array<ComponentDescriptorSample, kVandalComponentCount> components{};
+    std::array<NestedDescriptorSample, kVandalNestedCaptureCapacity> nested{};
+};
+
+enum class ComponentMapStatus : std::uint8_t {
+    complete,
+    activeMismatch,
+    resourceUnavailable,
+    headerMismatch,
+    fault,
+};
+
+/** @return Stable diagnostic name for one component-map snapshot outcome. */
+[[nodiscard]] const char* component_map_status_name(ComponentMapStatus status) noexcept {
+    switch (status) {
+    case ComponentMapStatus::complete:
+        return "complete";
+    case ComponentMapStatus::activeMismatch:
+        return "active-mismatch";
+    case ComponentMapStatus::resourceUnavailable:
+        return "resource-unavailable";
+    case ComponentMapStatus::headerMismatch:
+        return "header-mismatch";
+    case ComponentMapStatus::fault:
+        return "fault";
+    default:
+        return "unknown";
+    }
+}
+
+/** Sign-extends the low `width` bits without relying on implementation-defined shifts. */
+[[nodiscard]] constexpr std::int32_t sign_extend(std::uint32_t value,
+                                                 std::uint32_t width) noexcept {
+    const std::uint32_t sign = 1U << (width - 1U);
+    const std::uint32_t mask = (1U << width) - 1U;
+    value &= mask;
+    return static_cast<std::int32_t>((value ^ sign) - sign);
+}
+
+/** Reads one native dirty-mask bit using the same inline/sparse layout as FUN_140A00AA0. */
+[[nodiscard]] bool mask_bit(const void* maskAddress, std::int32_t bit) noexcept {
+    if (maskAddress == nullptr || bit < 0) {
+        return false;
+    }
+    __try {
+        const auto* const words = static_cast<const std::uint32_t*>(maskAddress);
+        const std::uint32_t metadata = words[2];
+        const std::int32_t baseWord = sign_extend(metadata, 14);
+        const std::uint32_t wordIndex = static_cast<std::uint32_t>(bit) >> 5U;
+        const std::uint32_t bitMask = 1U << (static_cast<std::uint32_t>(bit) & 31U);
+        if (baseWord == -1 || baseWord == -2) {
+            const std::int32_t bitCount = sign_extend(metadata >> 14U, 14);
+            const std::int32_t wordCount = bitCount > 0 ? (bitCount + 31) / 32 : 0;
+            const std::uint32_t* sparse{};
+            std::memcpy(&sparse, maskAddress, sizeof sparse);
+            return sparse != nullptr && wordIndex < static_cast<std::uint32_t>(wordCount)
+                   && (sparse[wordIndex] & bitMask) != 0;
+        }
+        return baseWord >= 0 && wordIndex == static_cast<std::uint32_t>(baseWord)
+               && (words[0] & bitMask) != 0;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+/** Resolves a loaded tag through the exact page-table arithmetic used by the native encoder. */
+[[nodiscard]] bool resolve_runtime_resource(std::uint32_t tag,
+                                            ComponentMapSnapshot& snapshot) noexcept {
+    snapshot.tableSlot = nullptr;
+    snapshot.tableWrapper = nullptr;
+    snapshot.table = nullptr;
+    snapshot.page = nullptr;
+    snapshot.entries = nullptr;
+    snapshot.resource = nullptr;
+    const targets::game::network::Targets& resolved = targets::game::network::get();
+    snapshot.tableSlot = resolved.sobjectResourceTableBaseSlot;
+    if (resolved.sobjectResourceTableBaseSlot == nullptr) {
+        return false;
+    }
+    __try {
+        const auto signedPage = static_cast<std::int32_t>(tag) >> 13;
+        const std::uint64_t pageIndex =
+            ((static_cast<std::uint64_t>(static_cast<std::uint32_t>(signedPage)) | 0x0FFC0000ULL)
+             >> 18U)
+            & static_cast<std::uint16_t>(signedPage);
+        snapshot.pageIndex = static_cast<std::uint32_t>(pageIndex);
+        const std::byte* tableWrapper{};
+        std::memcpy(&tableWrapper, resolved.sobjectResourceTableBaseSlot, sizeof tableWrapper);
+        snapshot.tableWrapper = tableWrapper;
+        if (tableWrapper == nullptr || pageIndex > 0xFFFF) {
+            return false;
+        }
+        const std::byte* table{};
+        std::memcpy(&table, tableWrapper, sizeof table);
+        snapshot.table = table;
+        if (table == nullptr) {
+            return false;
+        }
+        const std::byte* const page = table + pageIndex * 0x40;
+        snapshot.page = page;
+        const std::byte* entries{};
+        std::int32_t stride{};
+        std::int32_t adjustmentMask{};
+        std::memcpy(&entries, page + 0x08, sizeof entries);
+        std::memcpy(&stride, page + 0x30, sizeof stride);
+        std::memcpy(&adjustmentMask, page + 0x34, sizeof adjustmentMask);
+        snapshot.entries = entries;
+        snapshot.stride = stride;
+        snapshot.adjustmentMask = adjustmentMask;
+        if (entries == nullptr || stride <= 0) {
+            return false;
+        }
+        const std::uint32_t rowOffset = (tag & 0x1FFFU) * static_cast<std::uint32_t>(stride);
+        const std::byte* const row = entries + rowOffset;
+        std::uint64_t encodedAdjustment{};
+        std::memcpy(&encodedAdjustment, row + 0x08, sizeof encodedAdjustment);
+        snapshot.encodedAdjustment = encodedAdjustment;
+        const std::uint64_t adjustment =
+            static_cast<std::uint64_t>(static_cast<std::int64_t>(adjustmentMask))
+            & encodedAdjustment;
+        const std::uintptr_t rowAddress = reinterpret_cast<std::uintptr_t>(row);
+        // The native table stores a signed relative displacement behind an all-ones mask.
+        // Its SUB deliberately wraps in uintptr_t space when the encoded value is negative.
+        snapshot.resource = reinterpret_cast<const std::byte*>(rowAddress - adjustment);
+        return snapshot.resource != nullptr;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        snapshot.resource = nullptr;
+        return false;
+    }
+}
+
+/** Builds a bounded read-only snapshot of the loaded shared-Vandal component map. */
+[[nodiscard]] ComponentMapStatus inspect_component_map(const void* dirty,
+                                                       const void* sent,
+                                                       std::int32_t dirtyBase,
+                                                       const void* componentBase,
+                                                       std::size_t componentSize,
+                                                       ComponentMapSnapshot& output) noexcept {
+    output = {};
+    if (!resolve_runtime_resource(kSharedVandalRsat, output)) {
+        return ComponentMapStatus::resourceUnavailable;
+    }
+    const auto* const resource = static_cast<const std::byte*>(output.resource);
+    output.dirtyBase = dirtyBase;
+    __try {
+        std::uint64_t count{};
+        std::int64_t listRelative{};
+        std::memcpy(&count, resource + 0x30, sizeof count);
+        std::memcpy(&listRelative, resource + 0x38, sizeof listRelative);
+        output.resourceCount = count;
+        output.listRelative = listRelative;
+        if (count != kVandalComponentCount || listRelative < -0x100000 || listRelative > 0x100000) {
+            return ComponentMapStatus::headerMismatch;
+        }
+        const std::byte* const container = resource + 0x38 + listRelative;
+        std::int32_t decision = 3;
+        for (std::size_t index = 0; index < output.components.size(); ++index) {
+            const std::byte* const row = container + 0x10 + index * 0x20;
+            ComponentDescriptorSample& component = output.components[index];
+            std::uint64_t nestedCount{};
+            std::int64_t nestedRelative{};
+            std::memcpy(&component.componentClass, row + 0x00, sizeof component.componentClass);
+            std::memcpy(&component.schemaTag, row + 0x04, sizeof component.schemaTag);
+            std::memcpy(&nestedCount, row + 0x08, sizeof nestedCount);
+            std::memcpy(&nestedRelative, row + 0x10, sizeof nestedRelative);
+            std::memcpy(&component.key, row + 0x18, sizeof component.key);
+            component.nestedCount =
+                nestedCount > UINT32_MAX ? UINT32_MAX : static_cast<std::uint32_t>(nestedCount);
+            if (nestedCount == 0 || nestedRelative < -0x1000000 || nestedRelative > 0x1000000) {
+                continue;
+            }
+            const std::byte* const nestedBase = row + 0x10 + nestedRelative;
+            std::uint32_t firstCodec{};
+            std::memcpy(&firstCodec, nestedBase + 0x10, sizeof firstCodec);
+            component.active = firstCodec != 0xFFFFFFFF;
+            if (!component.active) {
+                continue;
+            }
+            component.decision = decision++;
+            ++output.activeCount;
+            output.nestedTotal += component.nestedCount;
+            const std::uint64_t boundedCount =
+                nestedCount < 64 ? nestedCount : static_cast<std::uint64_t>(64);
+            output.nestedTruncated = output.nestedTruncated || nestedCount > boundedCount;
+            for (std::uint64_t nestedIndex = 0; nestedIndex < boundedCount; ++nestedIndex) {
+                if (output.nestedCaptured >= output.nested.size()) {
+                    output.nestedTruncated = true;
+                    break;
+                }
+                const std::byte* const record = nestedBase + nestedIndex * 0x28;
+                NestedDescriptorSample& nested = output.nested[output.nestedCaptured++];
+                nested.componentIndex = static_cast<std::uint32_t>(index);
+                nested.nestedIndex = static_cast<std::uint32_t>(nestedIndex);
+                std::memcpy(&nested.codecTag, record + 0x10, sizeof nested.codecTag);
+                std::memcpy(&nested.scratchOffset, record + 0x1C, sizeof nested.scratchOffset);
+                std::memcpy(&nested.dataOffset, record + 0x20, sizeof nested.dataOffset);
+                std::memcpy(&nested.dirtyBit, record + 0x24, sizeof nested.dirtyBit);
+                std::memcpy(&nested.repeatCount, record + 0x28, sizeof nested.repeatCount);
+                std::memcpy(&nested.scratchStride, record + 0x30, sizeof nested.scratchStride);
+                std::memcpy(&nested.bitStride, record + 0x34, sizeof nested.bitStride);
+                const std::int32_t absoluteDirty = dirtyBase + nested.dirtyBit;
+                nested.dirty = mask_bit(dirty, absoluteDirty);
+                nested.sent = mask_bit(sent, absoluteDirty);
+                const auto scratchOffset = static_cast<std::size_t>(nested.scratchOffset);
+                if (componentBase != nullptr && nested.scratchOffset >= 0
+                    && scratchOffset <= componentSize
+                    && nested.value.size() <= componentSize - scratchOffset) {
+                    const auto* const value =
+                        static_cast<const std::byte*>(componentBase) + scratchOffset;
+                    std::memcpy(nested.value.data(), value, nested.value.size());
+                    nested.valueReadable = true;
+                }
+            }
+        }
+        return output.activeCount == kVandalActiveComponentCount
+                   ? ComponentMapStatus::complete
+                   : ComponentMapStatus::activeMismatch;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return ComponentMapStatus::fault;
+    }
+}
 
 /** Reads only the bit-writer fields used by the probe. */
 [[nodiscard]] bool inspect_writer(const void* writerAddress, WriterSnapshot& output) noexcept {
@@ -182,6 +478,117 @@ void hex(std::span<const std::byte> input, std::span<char> output) noexcept {
     output[count * 2] = '\0';
 }
 
+/** Emits one bounded runtime descriptor map after a complete snapshot was obtained. */
+void report_component_map(const char* source,
+                          ComponentMapStatus status,
+                          const ComponentMapSnapshot& map) noexcept {
+    const bool complete =
+        status == ComponentMapStatus::complete || status == ComponentMapStatus::activeMismatch;
+    if (complete) {
+        if (g_vandalComponentMapReported.exchange(true, std::memory_order_acq_rel)) {
+            return;
+        }
+    } else if (g_vandalComponentMapFailureReported.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    std::array<char, core::log::kLineCapacity> line{};
+    int written = std::snprintf(
+        line.data(),
+        line.size(),
+        "ev=gameplay stage=vandal-component-map status=%s source=%s rsat=0x%08X "
+        "slot=%p wrapper=%p table=%p page_index=0x%X page=%p entries=%p stride=%d "
+        "adjust_mask=0x%08X encoded_adjust=0x%016llX resource=%p "
+        "resource_count=%llu list_relative=%lld rows=%zu active=%u "
+        "expected_active=%u decisions=%u nested_total=%u nested_captured=%u dirty_base=%d "
+        "truncated=%u",
+        component_map_status_name(status),
+        source,
+        kSharedVandalRsat,
+        map.tableSlot,
+        map.tableWrapper,
+        map.table,
+        map.pageIndex,
+        map.page,
+        map.entries,
+        map.stride,
+        static_cast<std::uint32_t>(map.adjustmentMask),
+        static_cast<unsigned long long>(map.encodedAdjustment),
+        map.resource,
+        static_cast<unsigned long long>(map.resourceCount),
+        static_cast<long long>(map.listRelative),
+        map.components.size(),
+        map.activeCount,
+        kVandalActiveComponentCount,
+        map.activeCount + 3,
+        map.nestedTotal,
+        map.nestedCaptured,
+        map.dirtyBase,
+        map.nestedTruncated ? 1U : 0U);
+    if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+        core::log::write(core::log::Channel::client,
+                         core::log::Level::info,
+                         {line.data(), static_cast<std::size_t>(written)});
+    }
+    if (!complete) {
+        return;
+    }
+
+    for (std::size_t index = 0; index < map.components.size(); ++index) {
+        const ComponentDescriptorSample& component = map.components[index];
+        written = std::snprintf(line.data(),
+                                line.size(),
+                                "ev=gameplay stage=vandal-component-row index=%zu "
+                                "class=0x%08X schema=0x%08X key=0x%08X nested=%u active=%u "
+                                "decision=%d",
+                                index,
+                                component.componentClass,
+                                component.schemaTag,
+                                component.key,
+                                component.nestedCount,
+                                component.active ? 1U : 0U,
+                                component.decision);
+        if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(written)});
+        }
+    }
+
+    for (std::size_t index = 0; index < map.nestedCaptured; ++index) {
+        const NestedDescriptorSample& nested = map.nested[index];
+        std::array<char, kNestedValueCaptureSize * 2 + 1> valueHex{};
+        if (nested.valueReadable) {
+            hex(nested.value, valueHex);
+        } else {
+            std::memcpy(valueHex.data(), "unreadable", sizeof "unreadable");
+        }
+        written = std::snprintf(
+            line.data(),
+            line.size(),
+            "ev=gameplay stage=vandal-component-nested row=%u nested=%u codec=0x%08X "
+            "scratch=%d data=%d dirty_bit=%d repeat=%d scratch_stride=%d bit_stride=%d "
+            "dirty=%u sent=%u value=%s",
+            nested.componentIndex,
+            nested.nestedIndex,
+            nested.codecTag,
+            nested.scratchOffset,
+            nested.dataOffset,
+            nested.dirtyBit,
+            nested.repeatCount,
+            nested.scratchStride,
+            nested.bitStride,
+            nested.dirty ? 1U : 0U,
+            nested.sent ? 1U : 0U,
+            valueHex.data());
+        if (written > 0 && static_cast<std::size_t>(written) < line.size()) {
+            core::log::write(core::log::Channel::client,
+                             core::log::Level::info,
+                             {line.data(), static_cast<std::size_t>(written)});
+        }
+    }
+}
+
 /** Writes one pointer into the known native update-context layout. */
 void set_context_pointer(std::span<std::byte> context,
                          std::size_t offset,
@@ -209,7 +616,8 @@ void encode_synthetic_variant(const char* variant,
                               std::span<const std::byte> component,
                               std::span<const std::byte, kMaskCaptureSize> mask,
                               std::int32_t dirtyBit,
-                              bool publishNearby = false) noexcept {
+                              bool publishNearby = false,
+                              std::int32_t secondDirtyBit = -1) noexcept {
     alignas(16) std::array<std::byte, kSyntheticWireCapacity> wire{};
     alignas(16) std::array<std::byte, kMaskCaptureSize> dirty{};
     alignas(16) std::array<std::byte, kMaskCaptureSize> sent{};
@@ -222,6 +630,10 @@ void encode_synthetic_variant(const char* variant,
     if (dirtyBit >= 0 && dirtyBit < 64) {
         const auto bit = static_cast<std::uint32_t>(dirtyBit);
         dirty[bit / 8] = static_cast<std::byte>(1U << (bit % 8));
+    }
+    if (secondDirtyBit >= 0 && secondDirtyBit < 64) {
+        const auto bit = static_cast<std::uint32_t>(secondDirtyBit);
+        dirty[bit / 8] |= static_cast<std::byte>(1U << (bit % 8));
     }
 
     NativeWriter writer{};
@@ -277,6 +689,22 @@ void encode_synthetic_variant(const char* variant,
     std::memcpy(&metadata, mask.data() + sizeof(std::uint64_t), sizeof metadata);
     std::uint32_t rsat = 0;
     std::memcpy(&rsat, create.data(), sizeof rsat);
+    const bool spatial = (std::to_integer<unsigned>(create[4]) & 1U) != 0;
+    if (rsat == kSharedVandalRsat
+        && !g_vandalComponentMapReported.load(std::memory_order_acquire)) {
+        const std::size_t componentOffset = spatial ? kNamedComponentRsatOffset : 0;
+        ComponentMapSnapshot componentMap{};
+        if (componentOffset <= component.size()) {
+            const ComponentMapStatus status =
+                inspect_component_map(dirty.data(),
+                                      sent.data(),
+                                      spatial ? 3 : 0,
+                                      component.data() + componentOffset,
+                                      component.size() - componentOffset,
+                                      componentMap);
+            report_component_map("private-native-encode", status, componentMap);
+        }
+    }
     if (publishNearby && !faulted && result != 0 && writer.totalBits > 0
         && writer.totalBits <= static_cast<std::int32_t>(kNearbyUpdateCapacity * 8)
         && completeSize <= kNearbyUpdateCapacity) {
@@ -285,11 +713,23 @@ void encode_synthetic_variant(const char* variant,
         capture.rsat = rsat;
         capture.bitCount = static_cast<std::uint16_t>(writer.totalBits);
         capture.present = true;
+        NearbyTransformCapture transformCapture{};
+        if (component.size() >= sizeof transformCapture.transform) {
+            std::memcpy(transformCapture.transform.data(),
+                        component.data(),
+                        sizeof transformCapture.transform);
+            transformCapture.present =
+                std::all_of(transformCapture.transform.begin(),
+                            transformCapture.transform.end(),
+                            [](float value) noexcept { return std::isfinite(value); });
+            transformCapture.rsat = rsat;
+        }
         AcquireSRWLockExclusive(&g_nearbyUpdateLock);
         g_nearbyUpdate = capture;
+        g_nearbyTransform = transformCapture;
         ReleaseSRWLockExclusive(&g_nearbyUpdateLock);
     }
-    const unsigned trailing = std::to_integer<unsigned>(create[4]) & 1U;
+    const unsigned trailing = spatial ? 1U : 0U;
     std::array<char, 65> componentHex{};
     hex(component.first(component.size() < 32 ? component.size() : 32), componentHex);
 
@@ -298,7 +738,7 @@ void encode_synthetic_variant(const char* variant,
         line.data(),
         line.size(),
         "ev=gameplay stage=sobject-native-update-probe variant=%s result=%llu fault=%u "
-        "rsat=0x%08X flag=%u dirty_bit=%d mask_meta=0x%08X bits=%d flushed=%d pending=%u "
+        "rsat=0x%08X flag=%u dirty_bit=%d/%d mask_meta=0x%08X bits=%d flushed=%d pending=%u "
         "accum=0x%016llX bytes=%zu hex=%s full_bytes=%zu full_hex=%s component0=%s",
         variant,
         static_cast<unsigned long long>(result),
@@ -306,6 +746,7 @@ void encode_synthetic_variant(const char* variant,
         rsat,
         trailing,
         static_cast<int>(dirtyBit),
+        static_cast<int>(secondDirtyBit),
         metadata,
         writer.totalBits,
         writer.flushedBits,
@@ -321,6 +762,38 @@ void encode_synthetic_variant(const char* variant,
                          faulted ? core::log::Level::warn : core::log::Level::info,
                          {line.data(), static_cast<std::size_t>(written)});
     }
+}
+
+/** Copies the natural local actor's live stream-residency context while its scratch is valid. */
+void capture_stream_source(const UpdateSnapshot& update) noexcept {
+    std::uint32_t rsat{};
+    std::memcpy(&rsat, update.create.data(), sizeof rsat);
+    if (rsat != kNaturalPlayerRsat || (std::to_integer<unsigned>(update.create[4]) & 1U) == 0
+        || update.componentBase == 0) {
+        return;
+    }
+    AcquireSRWLockShared(&g_streamSourceLock);
+    const bool alreadyPresent = g_streamSource.present;
+    ReleaseSRWLockShared(&g_streamSourceLock);
+    if (alreadyPresent) {
+        return;
+    }
+    StreamSourceCapture capture{};
+    __try {
+        const auto* const component = reinterpret_cast<const std::byte*>(update.componentBase);
+        std::memcpy(capture.bytes.data(), component + kStreamSourceOffset, capture.bytes.size());
+        capture.present = true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        capture = {};
+    }
+    if (!capture.present) {
+        return;
+    }
+    AcquireSRWLockExclusive(&g_streamSourceLock);
+    if (!g_streamSource.present) {
+        g_streamSource = capture;
+    }
+    ReleaseSRWLockExclusive(&g_streamSourceLock);
 }
 
 /** Copies bytes flushed by the update call when its cursor movement is bounded and readable. */
@@ -353,6 +826,9 @@ __declspec(noinline) std::uint64_t __fastcall encode_body(void* codec,
     const auto call = reinterpret_cast<Encoder>(lease.original);
     UpdateSnapshot before{};
     const bool beforeReadable = inspect_update(contextAddress, before);
+    if (beforeReadable) {
+        capture_stream_source(before);
+    }
     std::uint64_t result{};
     __try {
         if (call != nullptr) {
@@ -547,15 +1023,15 @@ void probe_decoded_record(std::span<const std::byte> create,
 /** @return True when the requested retained native update is already available. */
 [[nodiscard]] bool nearby_update_present(std::uint32_t rsat) noexcept {
     AcquireSRWLockShared(&g_nearbyUpdateLock);
-    const bool present =
-        g_nearbyUpdate.present && g_nearbyUpdate.rsat == rsat && g_nearbyUpdate.bitCount == 130;
+    const bool present = g_nearbyUpdate.present && g_nearbyUpdate.rsat == rsat
+                         && g_nearbyUpdate.bitCount != 0
+                         && g_nearbyUpdate.bitCount <= kNearbyUpdateCapacity * 8;
     ReleaseSRWLockShared(&g_nearbyUpdateLock);
     return present;
 }
 
 bool prime_first_entity_update(std::uint32_t rsat) noexcept {
     constexpr std::uint32_t kSharedVandalRsat = 0x815B204B;
-    constexpr std::uint16_t kSharedVandalUpdateBits = 130;
     if (rsat != kSharedVandalRsat) {
         return false;
     }
@@ -606,14 +1082,25 @@ bool prime_first_entity_update(std::uint32_t rsat) noexcept {
         return false;
     }
 
-    encode_synthetic_variant(
-        "spatial-transform-player-x3-preload", kCreate, component, mask, 0, true);
-    return nearby_update_present(rsat) && [&]() noexcept {
-        AcquireSRWLockShared(&g_nearbyUpdateLock);
-        const bool exact = g_nearbyUpdate.bitCount == kSharedVandalUpdateBits;
-        ReleaseSRWLockShared(&g_nearbyUpdateLock);
-        return exact;
-    }();
+    StreamSourceCapture streamSource{};
+    AcquireSRWLockShared(&g_streamSourceLock);
+    streamSource = g_streamSource;
+    ReleaseSRWLockShared(&g_streamSourceLock);
+    if (streamSource.present) {
+        std::copy(streamSource.bytes.begin(),
+                  streamSource.bytes.end(),
+                  component.begin() + kStreamSourceOffset);
+    }
+
+    encode_synthetic_variant(streamSource.present ? "spatial-transform-stream-player-x3-preload"
+                                                  : "spatial-transform-player-x3-preload",
+                             kCreate,
+                             component,
+                             mask,
+                             0,
+                             true,
+                             streamSource.present ? 2 : -1);
+    return nearby_update_present(rsat);
 }
 
 bool take_nearby_player_update(std::uint32_t rsat, NearbyUpdateCapture& output) noexcept {
@@ -628,15 +1115,32 @@ bool take_nearby_player_update(std::uint32_t rsat, NearbyUpdateCapture& output) 
     return present;
 }
 
+bool nearby_player_transform(std::uint32_t rsat, std::array<float, 8>& output) noexcept {
+    output = {};
+    AcquireSRWLockShared(&g_nearbyUpdateLock);
+    const bool present = g_nearbyTransform.present && g_nearbyTransform.rsat == rsat;
+    if (present) {
+        output = g_nearbyTransform.transform;
+    }
+    ReleaseSRWLockShared(&g_nearbyUpdateLock);
+    return present;
+}
+
 void reset() noexcept {
     for (std::atomic_uint64_t& seen : g_seen) {
         seen.store(0, std::memory_order_relaxed);
     }
     g_decodedRecordProbed.store(false, std::memory_order_relaxed);
     g_preloadAttempted.store(false, std::memory_order_relaxed);
+    g_vandalComponentMapReported.store(false, std::memory_order_relaxed);
+    g_vandalComponentMapFailureReported.store(false, std::memory_order_relaxed);
     AcquireSRWLockExclusive(&g_nearbyUpdateLock);
     g_nearbyUpdate = {};
+    g_nearbyTransform = {};
     ReleaseSRWLockExclusive(&g_nearbyUpdateLock);
+    AcquireSRWLockExclusive(&g_streamSourceLock);
+    g_streamSource = {};
+    ReleaseSRWLockExclusive(&g_streamSourceLock);
 }
 
 } // namespace sunrise::client::hooks::network::sobject_update_probe

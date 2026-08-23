@@ -339,6 +339,15 @@ publish_scenario_layouts(std::span<const scenarios::Definition> definitions,
  */
 [[nodiscard]] bool find_roster_group(std::size_t index, scenarios::RosterGroup& group) noexcept;
 
+/**
+ * Finds one extracted state-local roster group by its package object tag.
+ * @param objectTag Package object that owns the slot array.
+ * @param group Receives the unique matching group.
+ * @return True when the scenario domain is ready and exactly one row carries the tag.
+ */
+[[nodiscard]] bool find_roster_group_by_object(std::uint32_t objectTag,
+                                               scenarios::RosterGroup& group) noexcept;
+
 /** @return Number of published destination layouts, read under the lock. */
 [[nodiscard]] std::size_t scenario_layout_count() noexcept;
 

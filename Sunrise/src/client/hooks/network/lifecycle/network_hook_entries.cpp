@@ -6,6 +6,7 @@
 #include "../activity_host_probe.h"
 #include "../activity_mode_probe.h"
 #include "../activity_route_probe.h"
+#include "../authored_spawn_probe.h"
 #include "../bubble_authority/bubble_authority_replacements.h"
 #include "../coordinator/network_call_coordinator.h"
 #include "../entity_create_probe.h"
@@ -18,6 +19,7 @@
 #include "../sobject_apply_probe.h"
 #include "../sobject_bind_probe.h"
 #include "../sobject_create_probe.h"
+#include "../sobject_lifecycle_probe.h"
 #include "../sobject_native_probe.h"
 #include "../sobject_update_probe.h"
 #include "../view_creation_probe.h"
@@ -84,6 +86,27 @@ namespace {
         scheduler_output_probe::entity_finalizer_entry_point(),
         scheduler_entity_collector_probe::gate_entry_point(),
         scheduler_entity_collector_probe::collector_entry_point(),
+        sobject_lifecycle_probe::current_object_lookup_entry_point(),
+        sobject_lifecycle_probe::inbound_update_apply_entry_point(),
+        sobject_lifecycle_probe::lifecycle_state_entry_point(),
+        sobject_lifecycle_probe::component_state_entry_point(),
+        sobject_lifecycle_probe::current_entity_resolver_entry_point(),
+        sobject_lifecycle_probe::current_definition_resolver_entry_point(),
+        sobject_lifecycle_probe::object_transform_entry_point(),
+        authored_spawn_probe::materialize_entry_point(),
+        authored_spawn_probe::state_entry_point(),
+        authored_spawn_probe::initialize_entry_point(),
+        authored_spawn_probe::queue_builder_entry_point(),
+        authored_spawn_probe::squad_transform_entry_point(),
+        authored_spawn_probe::squad_object_entry_point(),
+        authored_spawn_probe::current_bubble_authority_entry_point(),
+        authored_spawn_probe::domain_authority_entry_point(),
+        authored_spawn_probe::authority_state_test_entry_point(),
+        authored_spawn_probe::bubble_authority_apply_entry_point(),
+        authored_spawn_probe::reset_entry_point(),
+        authored_spawn_probe::callback_resolver_entry_point(),
+        authored_spawn_probe::callback_link_entry_point(),
+        authored_spawn_probe::callback_table_link_entry_point(),
     };
 }
 
@@ -153,6 +176,27 @@ GameSpecs game_specs() noexcept {
         hooking::detour::Spec{resolved.schedulerEntityFinalizer, replacements[48]},
         hooking::detour::Spec{resolved.schedulerEntityCollectorGate, replacements[49]},
         hooking::detour::Spec{resolved.schedulerEntityCollector, replacements[50]},
+        hooking::detour::Spec{resolved.sobjectCurrentObjectLookup, replacements[51]},
+        hooking::detour::Spec{resolved.sobjectInboundUpdateApply, replacements[52]},
+        hooking::detour::Spec{resolved.sobjectLifecycleState, replacements[53]},
+        hooking::detour::Spec{resolved.sobjectComponentState, replacements[54]},
+        hooking::detour::Spec{resolved.sobjectCurrentEntityResolver, replacements[55]},
+        hooking::detour::Spec{resolved.sobjectCurrentDefinitionResolver, replacements[56]},
+        hooking::detour::Spec{resolved.sobjectObjectTransform, replacements[57]},
+        hooking::detour::Spec{resolved.authoredObjectMaterialize, replacements[58]},
+        hooking::detour::Spec{resolved.authoredSpawnState, replacements[59]},
+        hooking::detour::Spec{resolved.authoredSpawnInitialize, replacements[60]},
+        hooking::detour::Spec{resolved.authoredSpawnQueueBuilder, replacements[61]},
+        hooking::detour::Spec{resolved.authoredSquadSpawnTransform, replacements[62]},
+        hooking::detour::Spec{resolved.authoredSquadSpawnObject, replacements[63]},
+        hooking::detour::Spec{resolved.currentBubbleAuthority, replacements[64]},
+        hooking::detour::Spec{resolved.domainAuthority, replacements[65]},
+        hooking::detour::Spec{resolved.authorityStateTest, replacements[66]},
+        hooking::detour::Spec{resolved.bubbleAuthorityApply, replacements[67]},
+        hooking::detour::Spec{resolved.authoredSpawnReset, replacements[68]},
+        hooking::detour::Spec{resolved.authoredCallbackResolver, replacements[69]},
+        hooking::detour::Spec{resolved.authoredCallbackLink, replacements[70]},
+        hooking::detour::Spec{resolved.authoredCallbackTableLink, replacements[71]},
     };
 }
 

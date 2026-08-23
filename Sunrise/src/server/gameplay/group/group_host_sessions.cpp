@@ -21,6 +21,8 @@ struct HostSession {
     std::int32_t regionIndex{};
     /** Rises for every accepted join and survives release of the temporary admitted row. */
     std::uint64_t admissionGeneration{};
+    /** Latest token armed only after this region's native replication view reaches stage four. */
+    std::uint16_t authorityToken{};
     bool occupied{};
 };
 
@@ -35,6 +37,8 @@ SRWLOCK g_hostSessionLock{SRWLOCK_INIT};
 std::array<HostSession, kHostSessionCapacity> g_hostSessions{};
 /** Rises on every lookup, so the least recently named region is the one an eviction takes. */
 std::uint64_t g_useStamp = 0;
+/** Process-wide nonzero token source, so revisiting or evicting a region still creates a change. */
+std::uint16_t g_authorityToken = 1;
 /** Sessions an eviction took the slot from. The service slice frees them. */
 std::array<std::uint64_t, kHostSessionCapacity> g_evicted{};
 std::size_t g_evictedCount = 0;
@@ -67,6 +71,7 @@ claim_locked(std::uint64_t groupSessionId, std::int32_t regionIndex, std::uint64
                      ++g_useStamp,
                      regionIndex,
                      0,
+                     0,
                      true};
             return true;
         }
@@ -87,7 +92,7 @@ claim_locked(std::uint64_t groupSessionId, std::int32_t regionIndex, std::uint64
         ++g_evictedCount;
     }
     g_hostSessions[oldest] = {
-        groupSessionId, state::activity::kAbsentSessionId, ++g_useStamp, regionIndex, 0, true};
+        groupSessionId, state::activity::kAbsentSessionId, ++g_useStamp, regionIndex, 0, 0, true};
     return true;
 }
 
@@ -209,6 +214,43 @@ std::uint64_t session_admission_generation(std::uint64_t groupSessionId) noexcep
     return generation;
 }
 
+/** Arms a changed authority token after the native replication view becomes usable. */
+std::uint16_t note_authority_manager_ready(std::uint64_t groupSessionId) noexcept {
+    if (groupSessionId == 0) {
+        return 0;
+    }
+    std::uint16_t token = 0;
+    AcquireSRWLockExclusive(&g_hostSessionLock);
+    for (HostSession& entry : g_hostSessions) {
+        if (!entry.occupied || entry.groupSessionId != groupSessionId) {
+            continue;
+        }
+        ++g_authorityToken;
+        if (g_authorityToken == 0) {
+            g_authorityToken = 1;
+        }
+        entry.authorityToken = g_authorityToken;
+        token = entry.authorityToken;
+        break;
+    }
+    ReleaseSRWLockExclusive(&g_hostSessionLock);
+    return token;
+}
+
+/** Reads the token armed for one advertised group's live native view. */
+std::uint16_t authority_manager_token(std::uint64_t groupSessionId) noexcept {
+    std::uint16_t token = 0;
+    AcquireSRWLockShared(&g_hostSessionLock);
+    for (const HostSession& entry : g_hostSessions) {
+        if (entry.occupied && entry.groupSessionId == groupSessionId) {
+            token = entry.authorityToken;
+            break;
+        }
+    }
+    ReleaseSRWLockShared(&g_hostSessionLock);
+    return token;
+}
+
 /** Copies every occupied host-session row. */
 void snapshot_host_sessions(std::span<HostSessionRow> output, std::size_t& count) noexcept {
     count = 0;
@@ -320,6 +362,7 @@ void reset_host_sessions() noexcept {
         }
     }
     g_hostSessions = {};
+    g_authorityToken = 1;
     ReleaseSRWLockExclusive(&g_hostSessionLock);
     for (std::size_t index = 0; index < count; ++index) {
         static_cast<void>(state::activity::release_session(held[index]));

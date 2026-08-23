@@ -2,6 +2,8 @@
 
 #include <Windows.h>
 
+#include "../../../state/activity/squads/activity_squad_control.h"
+
 namespace sunrise::server::bap::encrypted {
 namespace {
 
@@ -44,6 +46,24 @@ void publish_connection_fields(Session& session,
                                const transactions::Publication& publication,
                                const ConnectionFields& fields) noexcept {
     if (publication.hasActivitySessionBinding) {
+        if (session.activitySessionId != 0
+            && session.activitySessionId != publication.activitySessionId) {
+            state::activity::squads::DebugSnapshot squad{};
+            state::activity::squads::snapshot_debug(squad);
+            if (squad.requestActive
+                && squad.request.activitySessionId == session.activitySessionId) {
+                (void)state::activity::squads::retire(
+                    squad.request.requestId,
+                    squad.request.activitySessionId,
+                    state::activity::squads::RefusalReason::activitySessionChanged);
+            } else if (squad.requestActive
+                       && squad.request.currentHostSessionId == session.activitySessionId) {
+                (void)state::activity::squads::retire(
+                    squad.request.requestId,
+                    squad.request.activitySessionId,
+                    state::activity::squads::RefusalReason::currentHostChanged);
+            }
+        }
         // Only the first binding decides the link's kind. A link that allocated its own session
         // also joins later, and that join must not reclassify it.
         if (session.activitySessionId == 0 && publication.activitySessionFromJoin) {
@@ -68,8 +88,12 @@ void publish_connection_fields(Session& session,
     // state-byte moves make the client deactivate and rebuild every roster-owned object, and the
     // player object binds to the published membership only on that rebuild.
     if (fields.joinsActivity) {
+        const std::uint64_t now = GetTickCount64();
         session.activityRosterSends = 0;
         session.activityRosterGroups = 0;
+        session.activityAuthorityBurstDueTick = now;
+        session.activityAuthorityBurstAttempts = 0;
+        session.activityAuthorityBurstDelivered = false;
     }
 }
 

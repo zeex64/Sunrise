@@ -221,6 +221,7 @@
     <ClCompile Include="src\client\ui\player\player_panel.cpp" />
     <ClCompile Include="src\client\player\player_position.cpp" />
     <ClCompile Include="src\client\player\player_settings_store.cpp" />
+    <ClCompile Include="src\client\world\native_current_world.cpp" />
     <ClCompile Include="src\client\hooks\noclip\horizontal_noclip.cpp" />
     <ClCompile Include="src\client\hooks\sword_skate\sword_skate.cpp" />
     <ClCompile Include="src\client\hooks\fly\fly.cpp" />
@@ -384,6 +385,7 @@
     <ClCompile Include="src\state\activity\activity_session_lookup.cpp" />
     <ClCompile Include="src\state\activity\activity_world_arrival.cpp" />
     <ClCompile Include="src\state\activity\membership\activity_membership_query.cpp" />
+    <ClCompile Include="src\state\activity\squads\activity_squad_control.cpp" />
     <ClCompile Include="src\state\unlocks\unlocks_runtime.cpp" />
     <ClCompile Include="src\state\entitlements\entitlement_defaults.cpp" />
     <ClCompile Include="src\state\entitlements\entitlement_runtime.cpp" />
@@ -495,6 +497,7 @@
     <ClCompile Include="src\server\ui\runtime\server_ui_module_runtime.cpp" />
     <ClCompile Include="src\server\ui\activity_override\activity_override_panel.cpp" />
     <ClCompile Include="src\server\ui\activity_override\activity_override_lists.cpp" />
+    <ClCompile Include="src\server\ui\squads\squad_panel.cpp" />
     <ClCompile Include="src\server\transport\bap_listener.cpp" />
     <ClCompile Include="src\server\bap\bap_route.cpp" />
     <ClCompile Include="src\server\bap\plaintext.cpp" />
@@ -799,6 +802,7 @@
     <ClInclude Include="src\client\ui\player\player_panel.h" />
     <ClInclude Include="src\client\player\player_position.h" />
     <ClInclude Include="src\client\player\player_settings_store.h" />
+    <ClInclude Include="src\client\world\native_current_world.h" />
     <ClInclude Include="src\client\hooks\noclip\runtime.h" />
     <ClInclude Include="src\client\hooks\sword_skate\sword_skate.h" />
     <ClInclude Include="src\client\hooks\fly\fly.h" />
@@ -923,6 +927,8 @@
     <ClInclude Include="src\state\activity\membership\definition.h" />
     <ClInclude Include="src\state\activity\membership\activity_membership_query.h" />
     <ClInclude Include="src\state\activity\membership\transactions\internal.h" />
+    <ClInclude Include="src\state\activity\squads\activity_squad_control.h" />
+    <ClInclude Include="src\state\activity\squads\definition.h" />
     <ClInclude Include="src\state\activity\runtime.h" />
     <ClInclude Include="src\state\activity\transactions\internal.h" />
     <ClInclude Include="src\state\matchmaking\definition.h" />
@@ -991,6 +997,7 @@
     <ClInclude Include="src\server\ui\runtime\server_ui_module_runtime.h" />
     <ClInclude Include="src\server\ui\activity_override\activity_override_panel.h" />
     <ClInclude Include="src\server\ui\activity_override\activity_override_lists.h" />
+    <ClInclude Include="src\server\ui\squads\squad_panel.h" />
     <ClInclude Include="src\server\bap\runtime.h" />
     <ClInclude Include="src\server\bap\internal.h" />
     <ClInclude Include="src\server\bap\encrypted\internal.h" />

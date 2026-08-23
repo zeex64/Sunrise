@@ -36,6 +36,7 @@ enum class RosterOutcome : std::uint8_t {
     noEpoch,
     noLayout,
     noGroups,
+    squadHeld,
     encodeFailed,
 };
 
@@ -64,7 +65,7 @@ enum class RosterOutcome : std::uint8_t {
  * @param snapshot Body input, carrying the region, arrival and spawn set.
  * @param destination Destination name the push found; may be empty.
  * @param bytes Encoded body size, or zero when nothing was staged.
- * @param grant Bubble granted with this body, or -1.
+ * @param grant Bubble granted with this body, or -1. The snapshot carries its token.
  * @param outcome What the push produced.
  */
 void report_roster_push(Session& session,

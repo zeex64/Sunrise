@@ -148,6 +148,28 @@ bool group(std::size_t index, RosterGroup& group) noexcept {
     return present;
 }
 
+/** Finds one extracted roster group by its package object tag. */
+bool find_group(std::uint32_t objectTag, RosterGroup& group) noexcept {
+    group = {};
+    if (objectTag == 0) {
+        return false;
+    }
+    const Lock::Shared guard(g_lock);
+    bool found = false;
+    for (const RosterGroup& row : g_groups.rows()) {
+        if (row.objectTag != objectTag) {
+            continue;
+        }
+        if (found) {
+            group = {};
+            return false;
+        }
+        group = row;
+        found = true;
+    }
+    return found;
+}
+
 /** @return Published roster group count. */
 std::size_t group_count() noexcept {
     const Lock::Shared guard(g_lock);
